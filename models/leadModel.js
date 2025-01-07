@@ -4,10 +4,6 @@ const leadSchema = new mongoose.Schema({
     source: {
         type: String,
         required: true,
-        enum: {
-            values: ['SML', 'Freo'],
-            message: 'Source was not found in the SecurityContext'
-          }
     },
     fullName: {
         type: String,
