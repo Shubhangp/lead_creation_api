@@ -5,7 +5,7 @@ const apiKeyAuth = require('../middlewares/apiKeyAuth');
 
 router.route('/').post(apiKeyAuth, createLead);
 
-router.route('rate_cut/get/request/for/all/data').get(getLeads);
+router.route('rate_cut/get/request/for/all/data/get').get(getLeads);
 
 router.route('rate_cut/get/by/id/request/:id').get(getLeadById);
 
