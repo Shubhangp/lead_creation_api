@@ -88,6 +88,8 @@ exports.createLead = async (req, res) => {
       consent,
     });
 
+
+    
     const savedLead = await lead.save();
 
     // If source is not "SML", send lead to external API
