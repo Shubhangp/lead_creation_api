@@ -141,7 +141,7 @@ exports.createLead = async (req, res) => {
     }
 
     // If source is not "Freo", send lead to external API
-    if (source !== 'Freo') {
+    if (source !== 'FREO') {
       const baseUrl = process.env.DEV_URL;
       const accessToken = await getAccessToken();
 
