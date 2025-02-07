@@ -263,7 +263,7 @@ exports.createLead = async (req, res) => {
           });
 
           await ovlyLeadLog.save();
-        }
+        } 
       } catch (error) {
         console.error('Error in OVLY API integration:', error.response?.data || error.message);
         await ovlyResponseLog.create({
