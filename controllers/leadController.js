@@ -257,7 +257,7 @@ exports.createLead = async (req, res) => {
           // Save lead response in DB
           const ovlyLeadLog = new ovlyResponseLog({
             leadId: savedLead._id,
-            requestPayload: payload,
+            requestPayload: createLeadPayload,
             responseStatus: leadResponse.data.status,
             responseBody: leadResponse.data,
           });
@@ -268,7 +268,7 @@ exports.createLead = async (req, res) => {
         console.error('Error in OVLY API integration:', error.response?.data || error.message);
         await ovlyResponseLog.create({
           leadId: savedLead._id,
-          requestPayload: createLeadPayload,
+          requestPayload: dedupPayload,
           responseStatus: error.response?.status || 500,
           responseBody: error.response?.data || { message: 'Unknown error' },
         });
