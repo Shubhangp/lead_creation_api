@@ -8,8 +8,8 @@ router.route('/').post(apiKeyAuth, createLead);
 
 router.route('/UAT').post(apiKeyUATAuth, createUATLead);
 
-router.route('rate_cut/get/request/for/all/data').get(getLeads);
+router.route('/rate_cut/get/request/for/all/data').get(getLeads);
 
-router.route('rate_cut/get/by/id/request/:id').get(getLeadById);
+router.route('/rate_cut/get/by/id/request/:id').get(getLeadById);
 
 module.exports = router;
