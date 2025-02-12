@@ -204,8 +204,8 @@ exports.createLead = async (req, res) => {
     // If source is not "OVLY", send lead to external API
     if (source !== 'OVLY') {
       console.log("CALL OVLY");      
-      const dedupApiUrl = 'https://lead-admin-stage.rebase.in/lead/dedup';
-      const createLeadApiUrl = 'https://lead-admin-stage.rebase.in/lead/create';
+      const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
+      const createLeadApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/create';
       const clientId = process.env.OVLY_CLIENT_ID;
       const clientKey = process.env.OVLY_CLIENT_KEY;
 
@@ -263,7 +263,31 @@ exports.createLead = async (req, res) => {
           });
 
           await ovlyLeadLog.save();
-        } 
+          
+        } else if(dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
+          const createLeadPayload = {
+            phone_number: phone,
+            pan: panNumber,
+            email,
+            employement_type: finalJobType,
+            net_monthly_income: `${finalSalary}`,
+            mode_of_salary: 'ONLINE',
+            bank_name: 'HDFC',
+            name_as_per_pan: fullName,
+            current_residence_pin_code: pincode,
+            date_of_birth: dateOfBirth,
+            gender,
+          };
+
+          const ovlyLeadLog = new ovlyResponseLog({
+            leadId: savedLead._id,
+            requestPayload: createLeadPayload,
+            responseStatus: leadResponse.data.status,
+            responseBody: leadResponse.data,
+          });
+
+          await ovlyLeadLog.save();
+        }
       } catch (error) {
         console.error('Error in OVLY API integration:', error.response?.data || error.message);
         await ovlyResponseLog.create({
