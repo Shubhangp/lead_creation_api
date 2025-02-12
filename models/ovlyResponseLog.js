@@ -11,7 +11,7 @@ const ovlyResponseLogSchema = new mongoose.Schema({
     required: true,
   },
   responseStatus: {
-    type: Number,
+    type: Number || String,
     required: true,
   },
   responseBody: {
