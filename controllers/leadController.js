@@ -292,7 +292,7 @@ exports.createLead = async (req, res) => {
           const ovlyLeadLog = new ovlyResponseLog({
             leadId: savedLead._id,
             requestPayload: dedupPayloadDB,
-            responseStatus: 409,
+            responseStatus: 'duplicate',
             responseBody: dedupData,
           });
 
@@ -303,7 +303,7 @@ exports.createLead = async (req, res) => {
         await ovlyResponseLog.create({
           leadId: savedLead._id,
           requestPayload: dedupPayload,
-          responseStatus: error.response?.status || 500,
+          responseStatus: error.response?.status,
           responseBody: error.response?.data || { message: 'Unknown error' },
         });
       }
