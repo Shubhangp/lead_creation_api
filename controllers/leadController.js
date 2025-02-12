@@ -422,8 +422,9 @@ exports.getLeadById = async (req, res) => {
 };
 
 
-exports.sendLeadToOvly = async (leadId) => {
+exports.sendLeadToOvly = async (req, res) => {
   try {
+    const {leadId} = req.body;
     const lead = await Lead.findById(leadId);
 
     if (!lead) {
