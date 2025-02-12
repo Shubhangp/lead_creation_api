@@ -218,6 +218,15 @@ exports.createLead = async (req, res) => {
         name_as_per_pan: fullName,
       });
 
+      const dedupPayloadDB = {
+        phone_number: phone,
+        pan: panNumber,
+        date_of_birth: dateOfBirth,
+        employement_type: finalJobType,
+        net_monthly_income: `${finalSalary}`,
+        name_as_per_pan: fullName,
+      };
+
       try {
         const dedupResponse = await axios.post(dedupApiUrl, dedupPayload, {
           headers: {
@@ -245,27 +254,7 @@ exports.createLead = async (req, res) => {
             gender,
           });
 
-          const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
-            headers: {
-              'admin-api-client-id': clientId,
-              'admin-api-client-key': clientKey,
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-          });
-
-          console.log('Lead successfully pushed:', leadResponse.data);
-          // Save lead response in DB
-          const ovlyLeadLog = new ovlyResponseLog({
-            leadId: savedLead._id,
-            requestPayload: createLeadPayload,
-            responseStatus: leadResponse.data.status,
-            responseBody: leadResponse.data,
-          });
-
-          await ovlyLeadLog.save();
-
-        } else if(dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
-          const createLeadPayload = {
+          const createLeadPayloadDB = {
             phone_number: phone,
             pan: panNumber,
             email,
@@ -279,9 +268,30 @@ exports.createLead = async (req, res) => {
             gender,
           };
 
+          const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
+            headers: {
+              'admin-api-client-id': clientId,
+              'admin-api-client-key': clientKey,
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+          });
+
+          console.log('Lead successfully pushed:', leadResponse.data);
+          // Save lead response in DB
           const ovlyLeadLog = new ovlyResponseLog({
             leadId: savedLead._id,
-            requestPayload: createLeadPayload,
+            requestPayload: createLeadPayloadDB,
+            responseStatus: leadResponse.data.status,
+            responseBody: leadResponse.data,
+          });
+
+          await ovlyLeadLog.save();
+
+        } else if(dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
+
+          const ovlyLeadLog = new ovlyResponseLog({
+            leadId: savedLead._id,
+            requestPayload: dedupPayloadDB,
             responseStatus: leadResponse.data.status,
             responseBody: leadResponse.data,
           });
@@ -426,7 +436,7 @@ exports.sendLeadToOvly = async (req, res) => {
   try {
     const {leadId} = req.body;
     const lead = await Lead.findById(leadId);
-
+    console.log(lead);    
     if (!lead) {
       console.log(`Lead not found: ${leadId}`);
       return;
@@ -448,6 +458,15 @@ exports.sendLeadToOvly = async (req, res) => {
         net_monthly_income: lead.salary,
         name_as_per_pan: lead.fullName,
       });
+
+      const dedupPayloadDB = {
+        phone_number: lead.phone,
+        pan: lead.panNumber,
+        date_of_birth: lead.dateOfBirth,
+        employement_type: lead.jobType,
+        net_monthly_income: lead.salary,
+        name_as_per_pan: lead.fullName,
+      };
 
       try {
         const dedupResponse = await axios.post(dedupApiUrl, dedupPayload, {
@@ -475,6 +494,20 @@ exports.sendLeadToOvly = async (req, res) => {
             gender: lead.gender,
           });
 
+          const createLeadPayloadDB = new URLSearchParams({
+            phone_number: lead.phone,
+            pan: lead.panNumber,
+            email: lead.email,
+            employement_type: lead.jobType,
+            net_monthly_income: lead.salary,
+            mode_of_salary: 'ONLINE',
+            bank_name: 'HDFC',
+            name_as_per_pan: lead.fullName,
+            current_residence_pin_code: lead.pincode,
+            date_of_birth: lead.dateOfBirth,
+            gender: lead.gender,
+          });
+
           const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
             headers: {
               'admin-api-client-id': clientId,
@@ -488,7 +521,7 @@ exports.sendLeadToOvly = async (req, res) => {
           // Save lead response in DB
           await ovlyResponseLog.create({
             leadId: lead._id,
-            requestPayload: createLeadPayload,
+            requestPayload: createLeadPayloadDB,
             responseStatus: leadResponse.data.status,
             responseBody: leadResponse.data,
           });
@@ -496,7 +529,7 @@ exports.sendLeadToOvly = async (req, res) => {
         } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
           await ovlyResponseLog.create({
             leadId: lead._id,
-            requestPayload: dedupPayload,
+            requestPayload: dedupPayloadDB,
             responseStatus: dedupData.status,
             responseBody: dedupData,
           });
@@ -505,7 +538,7 @@ exports.sendLeadToOvly = async (req, res) => {
         console.error(`Error processing lead ${lead._id}:`, error.response?.data || error.message);
         await ovlyResponseLog.create({
           leadId: lead._id,
-          requestPayload: dedupPayload,
+          requestPayload: dedupPayloadDB,
           responseStatus: error.response?.status || 500,
           responseBody: error.response?.data || { message: 'Unknown error' },
         });
