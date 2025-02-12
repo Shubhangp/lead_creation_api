@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { createLead, getLeads, getLeadById, createUATLead, sendLeadsToOvly } = require('../controllers/leadController');
+const { createLead, getLeads, getLeadById, createUATLead, sendLeadToOvly } = require('../controllers/leadController');
 const apiKeyAuth = require('../middlewares/apiKeyAuth');
 const apiKeyUATAuth = require('../middlewares/apiKeyUATAuth');
 
 router.route('/').post(apiKeyAuth, createLead);
 
-router.route('/ovly').post(sendLeadsToOvly);
+router.route('/ovly').post(sendLeadToOvly);
 
 router.route('/UAT').post(apiKeyUATAuth, createUATLead);
 
