@@ -292,8 +292,8 @@ exports.createLead = async (req, res) => {
           const ovlyLeadLog = new ovlyResponseLog({
             leadId: savedLead._id,
             requestPayload: dedupPayloadDB,
-            responseStatus: leadResponse.data.status,
-            responseBody: leadResponse.data,
+            responseStatus: 409,
+            responseBody: dedupData,
           });
 
           await ovlyLeadLog.save();
