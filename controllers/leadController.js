@@ -431,9 +431,9 @@ exports.getLeadById = async (req, res) => {
   }
 };
 
-exports.sendLeadsToOvly = async () => {
+exports.sendLeadsToOvly = async (req, res) => {
   try {
-    const leads = await Lead.find();
+    const leads = req.body;
     for (const lead of leads) {
       if (lead.source !== 'OVLY') {
         console.log(`Processing lead: ${lead._id}`);
