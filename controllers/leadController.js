@@ -95,50 +95,50 @@ exports.createLead = async (req, res) => {
     const savedLead = await lead.save();
 
     // If source is not "SML", send lead to external API
-    // if (source !== 'SML') {
-    //   const vendorName = process.env.VENDOR_NAME_SML;
-    //   const apiKey = process.env.API_KEY_SML;
-    //   const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
+    if (source !== 'SML') {
+      const vendorName = process.env.VENDOR_NAME_SML;
+      const apiKey = process.env.API_KEY_SML;
+      const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
 
-    //   const payload = {
-    //     name: fullName,
-    //     phone,
-    //     email,
-    //     panNumber,
-    //     dob: dateOfBirth,
-    //     gender,
-    //     salary: `${finalSalary}`,
-    //     pincode,
-    //     jobType: finalJobType,
-    //   };
+      const payload = {
+        name: fullName,
+        phone,
+        email,
+        panNumber,
+        dob: dateOfBirth,
+        gender,
+        salary: `${finalSalary}`,
+        pincode,
+        jobType: finalJobType,
+      };
 
-    //   try {
-    //     const apiResponse = await axios.post(externalApiUrl, payload, {
-    //       headers: {
-    //         'x-api-key': apiKey,
-    //         'Content-Type': 'application/json',
-    //       },
-    //     });
+      try {
+        const apiResponse = await axios.post(externalApiUrl, payload, {
+          headers: {
+            'x-api-key': apiKey,
+            'Content-Type': 'application/json',
+          },
+        });
 
-    //     // Save API response to the new collection
-    //     const responseLog = new smlResponseLog({
-    //       leadId: savedLead._id,
-    //       requestPayload: payload,
-    //       responseStatus: apiResponse.status,
-    //       responseBody: apiResponse.data,
-    //     });
+        // Save API response to the new collection
+        const responseLog = new smlResponseLog({
+          leadId: savedLead._id,
+          requestPayload: payload,
+          responseStatus: apiResponse.status,
+          responseBody: apiResponse.data,
+        });
 
-    //     await responseLog.save();
-    //   } catch (error) {
-    //     console.error('Error sending lead to external API:', error.message);
-    //     await smlResponseLog.create({
-    //       leadId: savedLead._id,
-    //       requestPayload: payload,
-    //       responseStatus: error.response?.status || 500,
-    //       responseBody: error.response?.data || { message: 'Unknown error' },
-    //     });
-    //   }
-    // }
+        await responseLog.save();
+      } catch (error) {
+        console.error('Error sending lead to external API:', error.message);
+        await smlResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: payload,
+          responseStatus: error.response?.status || 500,
+          responseBody: error.response?.data || { message: 'Unknown error' },
+        });
+      }
+    }
 
     // If source is not "Freo", send lead to external API
     if (source !== 'FREO') {
