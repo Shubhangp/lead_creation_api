@@ -386,7 +386,7 @@ exports.createUATLead = async (req, res) => {
     });
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(409).json({ message: 'Duplicate PAN number' });
+      return res.status(409).json({ message: 'Duplicate PAN number or phone' });
     }
     res.status(500).json({ message: 'Server error', error: error.message });
   }
