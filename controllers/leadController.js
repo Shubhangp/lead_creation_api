@@ -5,6 +5,8 @@ const APIFeatures = require('../utils/apiFeatures');
 const axios = require('axios');
 const ovlyResponseLog = require('../models/ovlyResponseLog');
 const leadUAT = require('../models/leadUATModel');
+const LeadingPlateResponseLog = require('../models/leadingPlateResponseLog');
+const FintifiResponseLog = require('../models/fintifiResponseLog');
 
 // Helper Function to get a random residenceType
 const getRandomResidenceType = () => {
@@ -35,6 +37,48 @@ const getAccessToken = async () => {
     console.error('Error fetching access token:', error.response?.data || error.message);
     throw new Error('Failed to generate access token');
   }
+};
+
+const checkMobileExists = async (phone) => {
+  const url = 'https://lms.lendingplate.co.in/api/Api/affiliateApi/checkmobile';
+  const headers = { 
+    'Authorization': `Bearer ${process.env.LP_TOKEN}`, 
+    'Content-Type': 'application/json'
+  }
+  const checkPaayload = {
+    partner_id: process.env.LP_PARTNER_ID,
+    ref_id: phone,
+    mobile: phone
+  }
+  try {
+    const response = await axios.post(url, checkPaayload, { headers });
+    
+    return response.data.status === 'S';
+  } catch (error) {
+    console.error('Error in mobile check API:', error.response?.data || error.message);
+    return false;
+  }
+};
+
+const processLoanApplication = async (payload) => {
+  const url = 'https://lms.lendingplate.co.in/api/Api/affiliateApi/loanprocess';
+  const headers = { 
+    'Authorization': `Bearer ${process.env.LP_TOKEN}`, 
+    'Content-Type': 'application/json'
+  }
+  try {
+    const response = await axios.post(url, payload, { headers });
+    console.log(response.data);
+    return response.data;
+  } catch (error) {
+    console.error('Error in loan process API:', error.response?.data || error.message);
+    return false;
+  }
+};
+
+const formatDate = (dateString) => {
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-GB');
 };
 
 // Create a lead
@@ -89,8 +133,6 @@ exports.createLead = async (req, res) => {
       pincode,
       consent,
     });
-
-
 
     const savedLead = await lead.save();
 
@@ -308,6 +350,86 @@ exports.createLead = async (req, res) => {
         });
       }
     }
+
+    // If source is not "LendingPlate", send lead to external API
+    if (source !== 'LendingPlate') {
+      const isMobileValid = await checkMobileExists(phone);
+      if (!isMobileValid) {
+        await LeadingPlateResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: loanPayload,
+          responseStatus: "Fail",
+          responseBody: {"status": "Failed"}
+        });
+      }else if(isMobileValid){
+        const loanPayload = {
+          partner_id: process.env.LP_PARTNER_ID,
+          ref_id: phone,
+          mobile: phone,
+          customer_name: fullName,
+          pancard: panNumber,
+          dob: formatDate(dateOfBirth),
+          pincode,
+          profession: "SAL",
+          net_mothlyincome: finalSalary,
+        };
+
+        const loanSuccess = await processLoanApplication(loanPayload);
+
+        await LeadingPlateResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: loanPayload,
+          responseStatus: loanSuccess.Message,
+          responseBody: loanSuccess
+        });
+      }
+    }
+
+    // if(source !== 'FINTIFI'){
+    //   const apiKey = process.env.API_KEY_FINTIFI;
+    //   const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
+
+    //   const payload = {
+    //     firstName: fullName.split(' ')[0],
+    //     lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+    //     email,
+    //     panNumber,
+    //     dob: dateOfBirth,
+    //     gender,
+    //     salary: `${finalSalary}`,
+    //     pincode,
+    //     jobType: finalJobType,
+    //   };
+
+    //   try {
+    //     const apiResponse = await axios.post(externalApiUrl, payload, {
+    //       headers: {
+    //         'x-api-key': apiKey,
+    //         'Content-Type': 'application/json',
+    //       },
+    //     });
+
+    //     console.log(apiResponse);
+        
+    //     // Save API response to the new collection
+    //     const responseLog = new FintifiResponseLog({
+    //       // leadId: savedLead._id,
+    //       requestPayload: payload,
+    //       responseStatus: apiResponse.success,
+    //       responseBody: apiResponse.data,
+    //     });
+
+    //     await responseLog.save();
+    //   } catch (error) {
+    //     console.error('Error sending lead to external API:', error);
+    //     await FintifiResponseLog.create({
+    //       // leadId: savedLead._id,
+    //       requestPayload: payload,
+    //       responseStatus: error.success || 500,
+    //       responseBody: error.error || { message: 'Unknown error' },
+    //     });
+    //   }
+    // }
 
     res.status(201).json({
       status: 'success',
