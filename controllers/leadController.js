@@ -7,6 +7,7 @@ const ovlyResponseLog = require('../models/ovlyResponseLog');
 const leadUAT = require('../models/leadUATModel');
 const LeadingPlateResponseLog = require('../models/leadingPlateResponseLog');
 const FintifiResponseLog = require('../models/fintifiResponseLog');
+const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 
 // Helper Function to get a random residenceType
 const getRandomResidenceType = () => {
@@ -41,8 +42,8 @@ const getAccessToken = async () => {
 
 const checkMobileExists = async (phone) => {
   const url = 'https://lms.lendingplate.co.in/api/Api/affiliateApi/checkmobile';
-  const headers = { 
-    'Authorization': `Bearer ${process.env.LP_TOKEN}`, 
+  const headers = {
+    'Authorization': `Bearer ${process.env.LP_TOKEN}`,
     'Content-Type': 'application/json'
   }
   const checkPaayload = {
@@ -52,7 +53,7 @@ const checkMobileExists = async (phone) => {
   }
   try {
     const response = await axios.post(url, checkPaayload, { headers });
-    
+
     return response.data.status === 'S';
   } catch (error) {
     console.error('Error in mobile check API:', error.response?.data || error.message);
@@ -62,8 +63,8 @@ const checkMobileExists = async (phone) => {
 
 const processLoanApplication = async (payload) => {
   const url = 'https://lms.lendingplate.co.in/api/Api/affiliateApi/loanprocess';
-  const headers = { 
-    'Authorization': `Bearer ${process.env.LP_TOKEN}`, 
+  const headers = {
+    'Authorization': `Bearer ${process.env.LP_TOKEN}`,
     'Content-Type': 'application/json'
   }
   try {
@@ -75,6 +76,45 @@ const processLoanApplication = async (payload) => {
     return false;
   }
 };
+
+const checkZypeEligibility = async(mobileNumber, panNumber) => {
+  try {
+    const response = await axios.post(
+      "https://prod.zype.co.in/attribution-service/api/v1/underwriting/customerEligibility",
+      {
+        mobileNumber,
+        panNumber,
+        partnerId: process.env.ZYPE_PARTNER_ID,
+      },
+      {
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+    
+    return response.data.message
+  } catch (error) {
+    console.error("ZYPE Eligibility Check Failed:", error.response?.data || error.message);
+    return false;
+  }
+}
+
+const processZypeApplication = async(payload) => {
+  try {
+
+    const response = await axios.post(
+      "https://prod.zype.co.in/attribution-service/api/v1/underwriting/preApprovalOffer",
+      payload,
+      {
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error("Error sending lead to ZYPE:", error.response?.data || error.message);
+    return { status: "Failed", message: "ZYPE API Error" };
+  }
+}
 
 const formatDate = (dateString) => {
   const date = new Date(dateString);
@@ -245,7 +285,6 @@ exports.createLead = async (req, res) => {
 
     // If source is not "OVLY", send lead to external API
     if (source !== 'OVLY') {
-      console.log("CALL OVLY");      
       const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
       const createLeadApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/create';
       const clientId = process.env.OVLY_CLIENT_ID;
@@ -279,7 +318,7 @@ exports.createLead = async (req, res) => {
         });
 
         const dedupData = dedupResponse.data;
-        
+
         // If lead is fresh (not a duplicate), push to OVLY Lead Create API
         if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
           const createLeadPayload = new URLSearchParams({
@@ -329,7 +368,7 @@ exports.createLead = async (req, res) => {
 
           await ovlyLeadLog.save();
 
-        } else if(dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
+        } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
 
           const ovlyLeadLog = new ovlyResponseLog({
             leadId: savedLead._id,
@@ -359,9 +398,9 @@ exports.createLead = async (req, res) => {
           leadId: savedLead._id,
           requestPayload: loanPayload,
           responseStatus: "Fail",
-          responseBody: {"status": "Failed"}
+          responseBody: { "status": "Failed" }
         });
-      }else if(isMobileValid){
+      } else if (isMobileValid) {
         const loanPayload = {
           partner_id: process.env.LP_PARTNER_ID,
           ref_id: phone,
@@ -385,51 +424,93 @@ exports.createLead = async (req, res) => {
       }
     }
 
-    // if(source !== 'FINTIFI'){
-    //   const apiKey = process.env.API_KEY_FINTIFI;
-    //   const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
+    // If source is not "FINTIFI", send lead to external API
+    if(source !== 'FINTIFI'){
+      const apiKey = process.env.API_KEY_FINTIFI;
+      const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
 
-    //   const payload = {
-    //     firstName: fullName.split(' ')[0],
-    //     lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
-    //     email,
-    //     panNumber,
-    //     dob: dateOfBirth,
-    //     gender,
-    //     salary: `${finalSalary}`,
-    //     pincode,
-    //     jobType: finalJobType,
-    //   };
+      const payload = {
+        firstName: fullName.split(' ')[0],
+        lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+        phone,
+        email,
+        panNumber,
+        dob: dateOfBirth,
+        gender,
+        salary: finalSalary,
+        pincode,
+        jobType: finalJobType,
+      };
 
-    //   try {
-    //     const apiResponse = await axios.post(externalApiUrl, payload, {
-    //       headers: {
-    //         'x-api-key': apiKey,
-    //         'Content-Type': 'application/json',
-    //       },
-    //     });
+      try {
+        const apiResponse = await axios.post(externalApiUrl, payload, {
+          headers: {
+            'x-api-key': apiKey,
+            'Content-Type': 'application/json',
+          },
+        });
 
-    //     console.log(apiResponse);
-        
-    //     // Save API response to the new collection
-    //     const responseLog = new FintifiResponseLog({
-    //       // leadId: savedLead._id,
-    //       requestPayload: payload,
-    //       responseStatus: apiResponse.success,
-    //       responseBody: apiResponse.data,
-    //     });
+        console.log(apiResponse.data);
 
-    //     await responseLog.save();
-    //   } catch (error) {
-    //     console.error('Error sending lead to external API:', error);
-    //     await FintifiResponseLog.create({
-    //       // leadId: savedLead._id,
-    //       requestPayload: payload,
-    //       responseStatus: error.success || 500,
-    //       responseBody: error.error || { message: 'Unknown error' },
-    //     });
-    //   }
-    // }
+        // Save API response to the new collection
+        const responseLog = new FintifiResponseLog({
+          leadId: savedLead._id,
+          requestPayload: payload,
+          responseStatus: apiResponse.data.success,
+          responseBody: apiResponse.data,
+        });
+
+        await responseLog.save();
+      } catch (error) {
+        console.error('Error sending lead to external API:', error);
+        await FintifiResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: payload,
+          responseStatus: error.success || 500,
+          responseBody: error.error || { message: 'Unknown error' },
+        });
+      }
+    }
+
+    // If source is not "ZYPE", send lead to external API
+    if (source !== 'ZYPE') {
+      const isEligible = await checkZypeEligibility(phone, panNumber);
+      
+      if (isEligible === 'REJECT') {
+        await ZypeResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: {
+            mobileNumber: phone,
+            panNumber,
+            partnerId: process.env.ZYPE_PARTNER_ID,
+          },
+          responseStatus: "REJECT",
+          responseBody: { status: "REJECT" },
+        });
+      } else if (isEligible === 'ACCEPT') {
+        const zypePayload = {
+          mobileNumber: phone,
+          email,
+          panNumber,
+          name: fullName,
+          dob: dateOfBirth,
+          income: parseInt(finalSalary, 10),
+          employmentType: finalJobType,
+          orgName: businessType || "",
+          partnerId: process.env.ZYPE_PARTNER_ID,
+          bureauType: 3,
+        };
+
+        const zypeResponse = await processZypeApplication(zypePayload);
+
+        await ZypeResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: zypePayload,
+          responseStatus: zypeResponse?.message || "Unknown",
+          responseBody: zypeResponse,
+        });
+      }
+    }
 
     res.status(201).json({
       status: 'success',
