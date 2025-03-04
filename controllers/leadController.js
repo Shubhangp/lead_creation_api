@@ -424,6 +424,46 @@ exports.createLead = async (req, res) => {
       }
     }
 
+    // If source is not "ZYPE", send lead to external API
+    if (source !== 'ZYPE') {
+      const isEligible = await checkZypeEligibility(phone, panNumber);
+      
+      if (isEligible === 'REJECT') {
+        await ZypeResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: {
+            mobileNumber: phone,
+            panNumber,
+            partnerId: process.env.ZYPE_PARTNER_ID,
+          },
+          responseStatus: "REJECT",
+          responseBody: { status: "REJECT" },
+        });
+      } else if (isEligible === 'ACCEPT') {
+        const zypePayload = {
+          mobileNumber: phone,
+          email,
+          panNumber,
+          name: fullName,
+          dob: dateOfBirth,
+          income: parseInt(finalSalary, 10),
+          employmentType: finalJobType,
+          orgName: businessType || "",
+          partnerId: process.env.ZYPE_PARTNER_ID,
+          bureauType: 3,
+        };
+
+        const zypeResponse = await processZypeApplication(zypePayload);
+
+        await ZypeResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: zypePayload,
+          responseStatus: zypeResponse?.message || "Unknown",
+          responseBody: zypeResponse,
+        });
+      }
+    }
+
     // If source is not "FINTIFI", send lead to external API
     if(source !== 'FINTIFI'){
       const apiKey = process.env.API_KEY_FINTIFI;
@@ -468,46 +508,6 @@ exports.createLead = async (req, res) => {
           requestPayload: payload,
           responseStatus: error.success || 500,
           responseBody: error.error || { message: 'Unknown error' },
-        });
-      }
-    }
-
-    // If source is not "ZYPE", send lead to external API
-    if (source !== 'ZYPE') {
-      const isEligible = await checkZypeEligibility(phone, panNumber);
-      
-      if (isEligible === 'REJECT') {
-        await ZypeResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: {
-            mobileNumber: phone,
-            panNumber,
-            partnerId: process.env.ZYPE_PARTNER_ID,
-          },
-          responseStatus: "REJECT",
-          responseBody: { status: "REJECT" },
-        });
-      } else if (isEligible === 'ACCEPT') {
-        const zypePayload = {
-          mobileNumber: phone,
-          email,
-          panNumber,
-          name: fullName,
-          dob: dateOfBirth,
-          income: parseInt(finalSalary, 10),
-          employmentType: finalJobType,
-          orgName: businessType || "",
-          partnerId: process.env.ZYPE_PARTNER_ID,
-          bureauType: 3,
-        };
-
-        const zypeResponse = await processZypeApplication(zypePayload);
-
-        await ZypeResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: zypePayload,
-          responseStatus: zypeResponse?.message || "Unknown",
-          responseBody: zypeResponse,
         });
       }
     }
