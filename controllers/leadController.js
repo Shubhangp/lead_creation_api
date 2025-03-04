@@ -477,7 +477,7 @@ exports.createLead = async (req, res) => {
         panNumber,
         dob: dateOfBirth,
         gender,
-        salary: finalSalary,
+        salary: `${finalSalary}`,
         pincode,
         jobType: finalJobType,
       };
