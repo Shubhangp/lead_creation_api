@@ -90,8 +90,7 @@ const checkZypeEligibility = async(mobileNumber, panNumber) => {
         headers: { "Content-Type": "application/json" },
       }
     );
-    
-    return response.data.message
+    return response.data
   } catch (error) {
     console.error("ZYPE Eligibility Check Failed:", error.response?.data || error.message);
     return false;
@@ -428,7 +427,7 @@ exports.createLead = async (req, res) => {
     if (source !== 'ZYPE') {
       const isEligible = await checkZypeEligibility(phone, panNumber);
       console.log(isEligible);      
-      if (isEligible === 'REJECT') {
+      if (isEligible.message === 'REJECT') {
         await ZypeResponseLog.create({
           leadId: savedLead._id,
           requestPayload: {
@@ -439,7 +438,7 @@ exports.createLead = async (req, res) => {
           responseStatus: "REJECT",
           responseBody: { status: "REJECT" },
         });
-      } else if (isEligible === 'ACCEPT') {
+      } else if (isEligible.status === 'ACCEPT') {
         const zypePayload = {
           mobileNumber: phone,
           email,
@@ -489,8 +488,6 @@ exports.createLead = async (req, res) => {
             'Content-Type': 'application/json',
           },
         });
-
-        console.log(apiResponse.data);
 
         // Save API response to the new collection
         const responseLog = new FintifiResponseLog({
