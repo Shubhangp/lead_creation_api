@@ -436,8 +436,8 @@ exports.createLead = async (req, res) => {
             panNumber,
             partnerId: process.env.ZYPE_PARTNER_ID,
           },
-          responseStatus: "REJECT",
-          responseBody: { status: "REJECT" },
+          responseStatus: "REJECTED",
+          responseBody: { status: "REJECTED" },
         });
       } else if (isEligible.status === 'ACCEPT') {
         const zypePayload = {
