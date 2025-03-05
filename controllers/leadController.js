@@ -446,7 +446,7 @@ exports.createLead = async (req, res) => {
           name: fullName,
           dob: dateOfBirth,
           income: parseInt(finalSalary, 10),
-          employmentType: finalJobType,
+          employmentType: 'salaried',
           orgName: businessType || "",
           partnerId: process.env.ZYPE_PARTNER_ID,
           bureauType: 3,
