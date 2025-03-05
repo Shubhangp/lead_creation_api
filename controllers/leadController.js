@@ -107,7 +107,8 @@ const processZypeApplication = async(payload) => {
         headers: { "Content-Type": "application/json" },
       }
     );
-
+    // console.log(response);
+    
     return response.data;
   } catch (error) {
     console.error("Error sending lead to ZYPE:", error.response?.data || error.message);
@@ -453,11 +454,13 @@ exports.createLead = async (req, res) => {
         };
 
         const zypeResponse = await processZypeApplication(zypePayload);
+        // console.log(zypeResponse);
+        
 
         await ZypeResponseLog.create({
           leadId: savedLead._id,
           requestPayload: zypePayload,
-          responseStatus: zypeResponse?.message || "Unknown",
+          responseStatus: zypeResponse?.status || "Unknown",
           responseBody: zypeResponse,
         });
       }
