@@ -427,7 +427,7 @@ exports.createLead = async (req, res) => {
     // If source is not "ZYPE", send lead to external API
     if (source !== 'ZYPE') {
       const isEligible = await checkZypeEligibility(phone, panNumber);
-      
+      console.log(isEligible);      
       if (isEligible === 'REJECT') {
         await ZypeResponseLog.create({
           leadId: savedLead._id,
