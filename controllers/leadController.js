@@ -318,9 +318,10 @@ exports.createLead = async (req, res) => {
         });
 
         const dedupData = dedupResponse.data;
-
+        console.log("Ovly:", dedupData);
         // If lead is fresh (not a duplicate), push to OVLY Lead Create API
         if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
+          console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);  
           const createLeadPayload = new URLSearchParams({
             phone_number: phone,
             pan: panNumber,
@@ -369,7 +370,7 @@ exports.createLead = async (req, res) => {
           await ovlyLeadLog.save();
 
         } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
-
+          console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);          
           const ovlyLeadLog = new ovlyResponseLog({
             leadId: savedLead._id,
             requestPayload: dedupPayloadDB,
