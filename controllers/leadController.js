@@ -395,6 +395,18 @@ exports.createLead = async (req, res) => {
     if (source !== 'LendingPlate') {
       const isMobileValid = await checkMobileExists(phone);
       if (!isMobileValid) {
+        const loanPayload = {
+          partner_id: process.env.LP_PARTNER_ID,
+          ref_id: phone,
+          mobile: phone,
+          customer_name: fullName,
+          pancard: panNumber,
+          dob: formatDate(dateOfBirth),
+          pincode,
+          profession: "SAL",
+          net_mothlyincome: finalSalary,
+        };
+
         await LeadingPlateResponseLog.create({
           leadId: savedLead._id,
           requestPayload: loanPayload,

@@ -4,19 +4,19 @@ const ovlyResponseLogSchema = new mongoose.Schema({
   leadId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Lead',
-    required: true,
+    // required: true,
   },
   requestPayload: {
     type: Object,
-    required: true,
+    // required: true,
   },
   responseStatus: {
     type: String,
-    required: true,
+    // required: true,
   },
   responseBody: {
     type: Object,
-    required: true,
+    // required: true,
   },
   createdAt: {
     type: Date,
