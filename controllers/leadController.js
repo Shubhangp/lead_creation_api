@@ -480,50 +480,50 @@ exports.createLead = async (req, res) => {
     }
 
     // If source is not "FINTIFI", send lead to external API
-    if(source !== 'FINTIFI'){
-      const apiKey = process.env.API_KEY_FINTIFI;
-      const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
+    // if(source !== 'FINTIFI'){
+    //   const apiKey = process.env.API_KEY_FINTIFI;
+    //   const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
 
-      const payload = {
-        firstName: fullName.split(' ')[0],
-        lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
-        phone,
-        email,
-        panNumber,
-        dob: dateOfBirth,
-        gender,
-        salary: `${finalSalary}`,
-        pincode,
-        jobType: finalJobType,
-      };
+    //   const payload = {
+    //     firstName: fullName.split(' ')[0],
+    //     lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+    //     phone,
+    //     email,
+    //     panNumber,
+    //     dob: dateOfBirth,
+    //     gender,
+    //     salary: `${finalSalary}`,
+    //     pincode,
+    //     jobType: finalJobType,
+    //   };
 
-      try {
-        const apiResponse = await axios.post(externalApiUrl, payload, {
-          headers: {
-            'x-api-key': apiKey,
-            'Content-Type': 'application/json',
-          },
-        });
+    //   try {
+    //     const apiResponse = await axios.post(externalApiUrl, payload, {
+    //       headers: {
+    //         'x-api-key': apiKey,
+    //         'Content-Type': 'application/json',
+    //       },
+    //     });
 
-        // Save API response to the new collection
-        const responseLog = new FintifiResponseLog({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: apiResponse.data.success,
-          responseBody: apiResponse.data,
-        });
+    //     // Save API response to the new collection
+    //     const responseLog = new FintifiResponseLog({
+    //       leadId: savedLead._id,
+    //       requestPayload: payload,
+    //       responseStatus: apiResponse.data.success,
+    //       responseBody: apiResponse.data,
+    //     });
 
-        await responseLog.save();
-      } catch (error) {
-        console.error('Error sending lead to external API:', error);
-        await FintifiResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: error.success || 500,
-          responseBody: error.error || { message: 'Unknown error' },
-        });
-      }
-    }
+    //     await responseLog.save();
+    //   } catch (error) {
+    //     console.error('Error sending lead to external API:', error);
+    //     await FintifiResponseLog.create({
+    //       leadId: savedLead._id,
+    //       requestPayload: payload,
+    //       responseStatus: error.success || 500,
+    //       responseBody: error.error || { message: 'Unknown error' },
+    //     });
+    //   }
+    // }
 
     res.status(201).json({
       status: 'success',
