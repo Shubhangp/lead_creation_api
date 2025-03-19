@@ -123,7 +123,7 @@ const formatDate = (dateString) => {
 
 // Create a lead
 exports.createLead = async (req, res) => {
-  const { source, fullName, firstName, lastName, phone, email, age, dateOfBirth, gender, panNumber, jobType, businessType, salary, creditScore, cibilGood, address, pincode, consent, } = req.body;
+  const { source, fullName, firstName, lastName, phone, email, age, dateOfBirth, gender, panNumber, jobType, businessType, salary, creditScore, cibilScore, address, pincode, consent, } = req.body;
 
   // Input validation
   if (!source || !fullName || !phone || !email || !panNumber || consent === undefined) {
@@ -169,7 +169,7 @@ exports.createLead = async (req, res) => {
       businessType,
       salary: finalSalary,
       creditScore,
-      cibilGood,
+      cibilScore,
       address,
       pincode,
       consent,

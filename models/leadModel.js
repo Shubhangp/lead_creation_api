@@ -68,7 +68,7 @@ const leadSchema = new mongoose.Schema({
         min: 300,
         max: 900,
     },
-    cibilGood: {
+    cibilScore: {
         type: Boolean,
     },
     address: {
