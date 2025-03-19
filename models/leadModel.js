@@ -65,7 +65,7 @@ const leadSchema = new mongoose.Schema({
     },
     creditScore: {
         type: Number,
-        min: 300,
+        min: 600,
         max: 850,
     },
     address: {
