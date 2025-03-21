@@ -131,6 +131,8 @@ function readExcelFile() {
     return xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 }
 
+const pinCodeData = readExcelFile();
+
 
 // Create a lead
 exports.createLead = async (req, res) => {
@@ -539,10 +541,10 @@ exports.createLead = async (req, res) => {
 
     // If source is not "FATAKPAY", send lead to external API
     const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
-
-    if (source !== 'FATAKPAY') {
+    console.log(validPincodes);
+    
+    if (source !== 'FATAKPAY' && validPincodes.includes(parseInt(pincode))) {
       try {
-        // Step 1: Generate User Token
         const tokenResponse = await axios.post(
           'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
           {
@@ -553,7 +555,6 @@ exports.createLead = async (req, res) => {
 
         const accessToken = tokenResponse.data.data.token;
 
-        // Step 2: Call FatakPay Eligibility Check API
         const eligibilityPayload = {
           mobile: phone,
           first_name: firstName || fullName.split(' ')[0],
@@ -574,7 +575,7 @@ exports.createLead = async (req, res) => {
           eligibilityPayload,
           {
             headers: {
-              Authorization: `Bearer ${accessToken}`,
+              Authorization: `Token ${accessToken}`,
               'Content-Type': 'application/json',
             },
           }
@@ -591,7 +592,7 @@ exports.createLead = async (req, res) => {
       } catch (error) {
         console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
     
-        await FatakPayResponseLog.create({
+        await fatakPayResponseLog.create({
           leadId: savedLead._id,
           requestPayload: eligibilityPayload,
           responseStatus: error.response?.status || 500,
