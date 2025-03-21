@@ -8,6 +8,10 @@ const leadUAT = require('../models/leadUATModel');
 const LeadingPlateResponseLog = require('../models/leadingPlateResponseLog');
 const FintifiResponseLog = require('../models/fintifiResponseLog');
 const ZypeResponseLog = require('../models/ZypeResponseLogModel');
+const fatakPayResponseLog = require('../models/fatakPayResponseLog');
+const xlsx = require('xlsx');
+const path = require('path');
+
 
 // Helper Function to get a random residenceType
 const getRandomResidenceType = () => {
@@ -120,6 +124,13 @@ const formatDate = (dateString) => {
   const date = new Date(dateString);
   return date.toLocaleDateString('en-GB');
 };
+
+function readExcelFile() {
+    const workbook = xlsx.readFile(path.join(__dirname, './FatakPay_PL_Serviceable_pincode_list.xlsx'));
+    const sheetName = workbook.SheetNames[1];    
+    return xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+}
+
 
 // Create a lead
 exports.createLead = async (req, res) => {
@@ -522,6 +533,69 @@ exports.createLead = async (req, res) => {
           requestPayload: payload,
           responseStatus: error.success || 500,
           responseBody: error.error || { message: 'Unknown error' },
+        });
+      }
+    }
+
+
+    const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
+
+    if (source !== 'FATAKPAY' && cibilScore === true && validPincodes.includes(parseInt(pincode))) {
+      try {
+        // Step 1: Generate User Token
+        const tokenResponse = await axios.post(
+          'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
+          {
+            username: process.env.FATAKPAY_USERNAME,
+            password: process.env.FATAKPAY_PASSWORD,
+          }
+        );
+
+        const accessToken = tokenResponse.data.data.token;
+
+        // Step 2: Call FatakPay Eligibility Check API
+        const eligibilityPayload = {
+          mobile: phone,
+          first_name: firstName || fullName.split(' ')[0],
+          last_name: lastName || fullName.split(' ')[1] || '',
+          email,
+          employment_type_id: finalJobType,
+          pan: panNumber,
+          dob: dateOfBirth,
+          pincode,
+          home_address: address || '',
+          office_address: address || '',
+          consent: true,
+          consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
+        };
+    
+        const eligibilityResponse = await axios.post(
+          'https://onboardingapi.fatakpay.com/external-api/v1/emi-insurance-eligibility',
+          eligibilityPayload,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        // Step 3: Save Response in Database
+        await fatakPayResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: eligibilityPayload,
+          responseStatus: eligibilityResponse.data.status_code,
+          responseBody: eligibilityResponse.data,
+        });
+
+      } catch (error) {
+        console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
+    
+        await FatakPayResponseLog.create({
+          leadId: savedLead._id,
+          requestPayload: eligibilityPayload,
+          responseStatus: error.response?.status || 500,
+          responseBody: error.response?.data || { message: 'Unknown error' },
         });
       }
     }
