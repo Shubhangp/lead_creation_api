@@ -540,7 +540,7 @@ exports.createLead = async (req, res) => {
     // If source is not "FATAKPAY", send lead to external API
     const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
 
-    if (source !== 'FATAKPAY' && validPincodes.includes(parseInt(pincode))) {
+    if (source !== 'FATAKPAY') {
       try {
         // Step 1: Generate User Token
         const tokenResponse = await axios.post(
