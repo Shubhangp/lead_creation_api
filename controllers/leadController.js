@@ -537,7 +537,7 @@ exports.createLead = async (req, res) => {
       }
     }
 
-
+    // If source is not "FATAKPAY", send lead to external API
     const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
 
     if (source !== 'FATAKPAY' && cibilScore === true && validPincodes.includes(parseInt(pincode))) {
