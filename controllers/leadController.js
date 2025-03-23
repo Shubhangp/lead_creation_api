@@ -608,6 +608,7 @@ exports.createLead = async (req, res) => {
       },
     });
   } catch (error) {
+    console.log(error);
     if (error.code === 11000) {
       return res.status(409).json({ message: 'Duplicate PAN number' });
     }
