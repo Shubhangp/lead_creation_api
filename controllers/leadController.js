@@ -1,4 +1,5 @@
 const Lead = require('../models/leadModel');
+const { readFile, deleteFile } = require("../utils/readFile");
 const smlResponseLog = require('../models/smlResponseLogModel');
 const freoResponseLog = require('../models/freoResponseLogModel');
 const APIFeatures = require('../utils/apiFeatures');
@@ -11,6 +12,7 @@ const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 const fatakPayResponseLog = require('../models/fatakPayResponseLog');
 const xlsx = require('xlsx');
 const path = require('path');
+const { sendLeadsToLender } = require('../utils/sendLeads');
 
 
 // Helper Function to get a random residenceType
@@ -685,6 +687,44 @@ exports.createUATLead = async (req, res) => {
   }
 };
 
+// Function to process file
+exports.processFile = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded." });
+    }
+
+    const lenders = req.body.lenders; // Expect array like ['SML', 'FREO', 'ZYPE']
+    if (!lenders || lenders.length === 0) {
+      return res.status(400).json({ message: "Select at least one lender." });
+    }
+
+    const filePath = req.file.path;
+    const leads = readFile(filePath);
+
+    // Save leads to MongoDB
+    const savedLeads = await Lead.insertMany(
+      leads.map((lead) => ({ ...lead, source: "Ratecut" }))
+    );
+
+    const leadsWithIds = savedLeads.map((savedLead, index) => ({
+      ...leads[index],
+      _id: savedLead._id,
+    }));
+
+    // Send to selected lenders
+    const sendLeadsPromises = lenders.map((lender) => sendLeadsToLender(lender, leadsWithIds));
+    const responses = await Promise.all(sendLeadsPromises);
+
+    deleteFile(filePath);
+
+    res.status(200).json({ message: "Leads processed successfully", responses });
+  } catch (error) {
+    console.error("Error processing leads:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 // Fetch all leads
 exports.getLeads = async (req, res) => {
   try {
@@ -721,115 +761,5 @@ exports.getLeadById = async (req, res) => {
     res.status(200).json(lead);
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
-  }
-};
-
-exports.sendLeadsToOvly = async (req, res) => {
-  try {
-    const leads = req.body;
-    for (const lead of leads) {
-      if (lead.source !== 'OVLY') {
-        console.log(`Processing lead: ${lead._id}`);
-        const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
-        const createLeadApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/create';
-        const clientId = process.env.OVLY_CLIENT_ID;
-        const clientKey = process.env.OVLY_CLIENT_KEY;
-
-        const dedupPayload = new URLSearchParams({
-          phone_number: lead.phone,
-          pan: lead.panNumber,
-          date_of_birth: lead.dateOfBirth,
-          employement_type: lead.jobType,
-          net_monthly_income: lead.salary,
-          name_as_per_pan: lead.fullName,
-        });
-
-        const dedupPayloadDB = {
-          phone_number: lead.phone,
-          pan: lead.panNumber,
-          date_of_birth: lead.dateOfBirth,
-          employement_type: lead.jobType,
-          net_monthly_income: lead.salary,
-          name_as_per_pan: lead.fullName,
-        };
-
-        try {
-          const dedupResponse = await axios.post(dedupApiUrl, dedupPayload, {
-            headers: {
-              'admin-api-client-id': clientId,
-              'admin-api-client-key': clientKey,
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-          });
-
-          const dedupData = dedupResponse.data;
-
-          if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
-            const createLeadPayload = new URLSearchParams({
-              phone_number: lead.phone,
-              pan: lead.panNumber,
-              email: lead.email,
-              employement_type: lead.jobType,
-              net_monthly_income: lead.salary,
-              mode_of_salary: 'ONLINE',
-              bank_name: 'HDFC',
-              name_as_per_pan: lead.fullName,
-              current_residence_pin_code: lead.pincode,
-              date_of_birth: lead.dateOfBirth,
-              gender: lead.gender,
-            });
-
-            const createLeadPayloadDB = new URLSearchParams({
-              phone_number: lead.phone,
-              pan: lead.panNumber,
-              email: lead.email,
-              employement_type: lead.jobType,
-              net_monthly_income: lead.salary,
-              mode_of_salary: 'ONLINE',
-              bank_name: 'HDFC',
-              name_as_per_pan: lead.fullName,
-              current_residence_pin_code: lead.pincode,
-              date_of_birth: lead.dateOfBirth,
-              gender: lead.gender,
-            });
-
-            const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
-              headers: {
-                'admin-api-client-id': clientId,
-                'admin-api-client-key': clientKey,
-                'Content-Type': 'application/x-www-form-urlencoded',
-              },
-            });
-
-            console.log('Lead successfully pushed:', leadResponse.data);
-            // Save lead response in DB
-            await ovlyResponseLog.create({
-              leadId: lead._id,
-              requestPayload: createLeadPayloadDB,
-              responseStatus: leadResponse.data.status,
-              responseBody: leadResponse.data,
-            });
-          } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
-            await ovlyResponseLog.create({
-              leadId: lead._id,
-              requestPayload: dedupPayloadDB,
-              responseStatus: "duplicate",
-              responseBody: dedupData,
-            });
-          }
-        } catch (error) {
-          console.error(`Error processing lead ${lead._id}:`, error.response?.data || error.message);
-          await ovlyResponseLog.create({
-            leadId: lead._id,
-            requestPayload: dedupPayloadDB,
-            responseStatus: error.response?.status,
-            responseBody: error.response?.data || { message: 'Unknown error' },
-          });
-        }
-      }
-    }
-    console.log("All leads processed.");
-  } catch (error) {
-    console.error('Error fetching leads:', error);
   }
 };

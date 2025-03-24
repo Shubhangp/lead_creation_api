@@ -1,14 +1,15 @@
 const express = require('express');
-const router = express.Router();
-const { createLead, getLeads, getLeadById, createUATLead, sendLeadsToOvly } = require('../controllers/leadController');
+const { createLead, getLeads, processFile, getLeadById, createUATLead } = require('../controllers/leadController');
 const apiKeyAuth = require('../middlewares/apiKeyAuth');
 const apiKeyUATAuth = require('../middlewares/apiKeyUATAuth');
+const upload = require('../middlewares/uploadMiddleware');
+const router = express.Router();
 
 router.route('/').post(apiKeyAuth, createLead);
 
-router.route('/ovly').post(sendLeadsToOvly);
-
 router.route('/UAT').post(apiKeyUATAuth, createUATLead);
+
+router.post('/upload', upload.single('file'), processFile);
 
 router.route('/rate_cut/get/request/for/all/data').get(getLeads);
 
