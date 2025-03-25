@@ -50,7 +50,7 @@ const getAccessToken = async () => {
     );
     return response.data.access_token;
   } catch (error) {
-    console.error('Error fetching access token:', error.response?.data || error.message);
+    console.error('XLSX Error fetching access token:', error.response?.data || error.message);
     throw new Error('Failed to generate access token');
   }
 };
@@ -116,7 +116,7 @@ const sendToFreo = async (leads) => {
 
     await freoResponseLog.insertMany(responseLogs);
   } catch (error) {
-    // console.error('Error sending lead to MoneyTap API:', error);
+    console.error('XLSX Error sending lead to MoneyTap API:', error);
     const errorLogs = payload.map(lead => ({
       leadId: lead._id,
       requestPayload: lead,
@@ -169,7 +169,7 @@ const sendToSML = async (leads) => {
 
     await smlResponseLog.insertMany(responseLogs);
   } catch (error) {
-    console.error('Error sending leads to SML API:', error.message);
+    console.error('XLSX Error sending leads to SML API:', error.message);
 
     const errorLogs = formattedLeads.map(lead => ({
       leadId: lead._id,
@@ -199,7 +199,7 @@ const checkMobileExists = async (phone) => {
 
     return response.data.status === 'S';
   } catch (error) {
-    console.error('Error in mobile check API:', error.response?.data || error.message);
+    console.error('XLSX Error in mobile check API:', error.response?.data || error.message);
     return false;
   }
 };
@@ -212,10 +212,10 @@ const processLoanApplication = async (payload) => {
   }
   try {
     const response = await axios.post(url, payload, { headers });
-    console.log(response);
+    console.log("XLSX LP", response);
     return response.data;
   } catch (error) {
-    console.error('Error in loan process API:', error.response?.data || error.message);
+    console.error('XLSX Error in loan process API:', error.response?.data || error.message);
     return false;
   }
 };
@@ -230,7 +230,7 @@ const sendToLP = async (leads) => {
 
   for (const lead of leads) {   
     const isMobileValid = await checkMobileExists(lead.Phone);
-    console.log(isMobileValid);    
+    console.log("XLSX LP mob", isMobileValid);    
     const loanPayload = {
       partner_id: "RATECUT",
       ref_id: `${lead.Phone}`,
@@ -252,7 +252,6 @@ const sendToLP = async (leads) => {
       });
     } else if (isMobileValid) {
       const loanSuccess = await processLoanApplication(loanPayload);
-      console.log(loanSuccess);
       
       logs.push({
         leadId: lead._id,
@@ -284,7 +283,7 @@ const checkZypeEligibility = async (mobileNumber, panNumber) => {
     );
     return response.data
   } catch (error) {
-    console.error("ZYPE Eligibility Check Failed:", error.response?.data || error.message);
+    console.error("XLSX ZYPE Eligibility Check Failed:", error.response?.data || error.message);
     return false;
   }
 }
@@ -299,11 +298,11 @@ const processZypeApplication = async (payload) => {
         headers: { "Content-Type": "application/json" },
       }
     );
-    // console.log(response);
+    console.log("XLSX Zype", response);
 
     return response.data;
   } catch (error) {
-    console.error("Error sending lead to ZYPE:", error.response?.data || error.message);
+    console.error("XLSX Error sending lead to ZYPE:", error.response?.data || error.message);
     return { status: "Failed", message: "ZYPE API Error" };
   }
 }
@@ -339,7 +338,6 @@ const sendToZype = async (leads) => {
       };
 
       const zypeResponse = await processZypeApplication(zypePayload);
-      // console.log(zypeResponse);
 
       logs.push({
         leadId: lead._id,
@@ -391,7 +389,7 @@ const sendToFintifi = async (leads) => {
         responseBody: apiResponse.data,
       });
     } catch (error) {
-      console.error('Error sending lead to Fintifi API:', error);
+      console.error('XLSX Error sending lead to Fintifi API:', error);
       logs.push({
         leadId: lead._id,
         requestPayload: payload,
@@ -443,10 +441,10 @@ const sendToOvly = async (leads) => {
       });
 
       const dedupData = dedupResponse.data;
-      console.log("Ovly:", dedupData);
+      console.log("XLSX Ovly:", dedupData);
       // If lead is fresh (not a duplicate), push to OVLY Lead Create API
       if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
-        console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
+        console.log("XLSX Ovly:", dedupData.isDuplicateLead, dedupData.status);
         const createLeadPayload = new URLSearchParams({
           phone_number: `${lead.Phone}`,
           pan: lead.PAN,
@@ -483,7 +481,7 @@ const sendToOvly = async (leads) => {
           },
         });
 
-        console.log('Lead successfully pushed:', leadResponse.data);
+        console.log('XLSX Lead successfully pushed:', leadResponse.data);
         // Save lead response in DB
         logs.push({
           leadId: lead._id,
@@ -493,7 +491,7 @@ const sendToOvly = async (leads) => {
         });
 
       } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
-        console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
+        console.log("XLSX Ovly:", dedupData.isDuplicateLead, dedupData.status);
         logs.push({
           leadId: lead._id,
           requestPayload: dedupPayloadDB,
@@ -503,7 +501,7 @@ const sendToOvly = async (leads) => {
 
       }
     } catch (error) {
-      console.error('Error in OVLY API integration:', error.response?.data || error.message);
+      console.error('XLSX Error in OVLY API integration:', error.response?.data || error.message);
       logs.push({
         leadId: lead._id,
         requestPayload: dedupPayloadDB,
@@ -580,7 +578,7 @@ const sendToFatakpay = async (leads) => {
         });
 
       } catch (error) {
-        console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
+        console.error('XLSX Error in FatakPay Eligibility API:', error.response?.data || error.message);
 
         logEntries.push({
           leadId: lead._id,
