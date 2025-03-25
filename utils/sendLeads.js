@@ -67,71 +67,78 @@ const getRandomResidenceType = () => {
 };
 
 const sendToFreo = async (leads) => {
-  const accessToken = await getAccessToken();
-  // Construct payload for MoneyTap API
-  const payload = leads.map(lead => ({
-    emailId: lead.Email,
-    phone: `${lead.Phone}`,
-    name: `${lead["First Name"]} ${lead["Last Name"]}`,
-    panNumber: lead.PAN,
-    dateOfBirth: convertExcelDateToJSDate(lead.DOB),
-    gender: lead.Gender,
-    jobType: lead.EmploymentType,
-    homeAddress: {
-      addressLine1: `${lead.Pincode}`,
-      addressLine2: `${lead.Pincode}`,
-      pincode: `${lead.Pincode}`,
-    },
-    residenceType: getRandomResidenceType(),
-    officeAddress: {
-      addressLine1: `${lead.Pincode}`,
-      addressLine2: `${lead.Pincode}`,
-      pincode: `${lead.Pincode}`,
-    },
-    incomeInfo: {
-      declared: lead.Salary,
-      mode: 'ONLINE'
-    },
-  }));
+  const logs = [];
 
-  try {
-    const apiResponse = await axios.post(
-      `https://app.moneytap.com/v3/partner/lead/create`,
-      { payload },
-      {
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-      }
-    );
+  for (const lead of leads) {
+    const accessToken = await getAccessToken();
+    console.log("XLSX Freo:", accessToken);
 
-    // Save API response to the new collection
-    const responseLogs = payload.map((lead, index) => ({
-      leadId: lead._id,
-      requestPayload: lead,
-      responseStatus: apiResponse.status,
-      responseBody: apiResponse.data[index] || apiResponse.data,
-    }));
+    // Construct payload for MoneyTap API
+    const payload = {
+      emailId: lead.Email,
+      phone: `${lead.Phone}`,
+      name: `${lead["First Name"]} ${lead["Last Name"]}`,
+      panNumber: lead.PAN,
+      dateOfBirth: convertExcelDateToJSDate(lead.DOB),
+      gender: lead.Gender,
+      jobType: lead.EmploymentType,
+      homeAddress: {
+        addressLine1: `${lead.Pincode}`,
+        addressLine2: `${lead.Pincode}`,
+        pincode: `${lead.Pincode}`,
+      },
+      residenceType: getRandomResidenceType(),
+      officeAddress: {
+        addressLine1: `${lead.Pincode}`,
+        addressLine2: `${lead.Pincode}`,
+        pincode: `${lead.Pincode}`,
+      },
+      incomeInfo: {
+        declared: lead.Salary,
+        mode: 'ONLINE'
+      },
+    };
 
-    await freoResponseLog.insertMany(responseLogs);
-  } catch (error) {
-    console.error('XLSX Error sending lead to MoneyTap API:', error);
-    const errorLogs = payload.map(lead => ({
-      leadId: lead._id,
-      requestPayload: lead,
-      responseStatus: error.response?.status || 500,
-      responseBody: error.response?.data || { message: 'Unknown error' },
-    }));
+    try {
+      const apiResponse = await axios.post(
+        `https://app.moneytap.com/v3/partner/lead/create`,
+        payload,
+        {
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
 
-    await freoResponseLog.insertMany(errorLogs);
+      // Save API response to the new collection
+      logs.push({
+        leadId: lead._id,
+        requestPayload: lead,
+        responseStatus: apiResponse.status,
+        responseBody: apiResponse.data[index] || apiResponse.data,
+      });
+
+    } catch (error) {
+      console.error('XLSX Error sending lead to MoneyTap API:', error);
+      logs.push({
+        leadId: lead._id,
+        requestPayload: lead,
+        responseStatus: error.response?.status || 500,
+        responseBody: error.response?.data || { message: 'Unknown error' },
+      });
+    }
+  }
+
+  if (logs.length > 0) {
+    await freoResponseLog.insertMany(logs);
   }
 }
 
 
 // Function to send lead to SML
-const sendToSML = async (leads) => {  
+const sendToSML = async (leads) => {
   const vendorName = "ratecut";
   const apiKey = "td3gH20O6OjccEadCa8+9g==";
   const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
@@ -226,12 +233,12 @@ const formatDate = (dateString) => {
   return date.toLocaleDateString('en-GB');
 };
 
-const sendToLP = async (leads) => { 
+const sendToLP = async (leads) => {
   const logs = [];
 
-  for (const lead of leads) {   
+  for (const lead of leads) {
     const isMobileValid = await checkMobileExists(lead.Phone);
-    console.log("XLSX LP mob", isMobileValid);    
+    console.log("XLSX LP mob", isMobileValid);
     const loanPayload = {
       partner_id: "RATECUT",
       ref_id: `${lead.Phone}`,
@@ -253,7 +260,7 @@ const sendToLP = async (leads) => {
       });
     } else if (isMobileValid) {
       const loanSuccess = await processLoanApplication(loanPayload);
-      
+
       logs.push({
         leadId: lead._id,
         requestPayload: loanPayload,
