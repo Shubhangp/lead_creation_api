@@ -690,8 +690,9 @@ exports.createUATLead = async (req, res) => {
 
 // Function to process file
 const convertExcelDateToJSDate = (excelDate) => {
+  console.log(excelDate);
   const jsDate = new Date((excelDate - 25569) * 86400 * 1000);
-  console.log(jsDate.toISOString().split("T")[0], excelDate);
+  console.log(jsDate.toISOString().split("T")[0]);
   return jsDate.toISOString().split("T")[0];
 };
 
