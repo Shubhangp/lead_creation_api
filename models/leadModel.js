@@ -29,7 +29,7 @@ const leadSchema = new mongoose.Schema({
     email: {
         type: String,
         required: true,
-        match: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/
+        match: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9]{2,4}$/
     },
     age: {
         type: Number,
