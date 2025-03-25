@@ -117,8 +117,9 @@ const sendToFreo = async (leads) => {
         responseStatus: apiResponse.status,
         responseBody: apiResponse.data[index] || apiResponse.data,
       });
-      console.log(lead._id);      
+      console.log("Freo", lead._id);
     } catch (error) {
+      console.log("Freo", lead._id);      
       console.error('XLSX Error sending lead to MoneyTap API:', error);
       logs.push({
         leadId: lead._id,
