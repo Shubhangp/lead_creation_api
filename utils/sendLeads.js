@@ -33,8 +33,8 @@ const sendLeadsToLender = async (lender, leads) => {
 // Send to FREO
 const getAccessToken = async () => {
   const baseUrl = `https://app.moneytap.com/oauth/token?grant_type=client_credentials`;
-  const username = process.env.FREO_NAME;
-  const password = process.env.FREO_KEY;
+  const username = "dsa-ratecut";
+  const password = "moptX1Mwd1WcXFY";
   const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
 
   try {
@@ -50,8 +50,7 @@ const getAccessToken = async () => {
     );
     return response.data.access_token;
   } catch (error) {
-    console.error('XLSX Error fetching access token:', error.response?.data || error.message);
-    throw new Error('Failed to generate access token');
+    console.error('XLSX Error fetching access token of Money Tap:', error.response?.data || error.message);
   }
 };
 
