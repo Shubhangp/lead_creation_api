@@ -687,24 +687,47 @@ exports.createUATLead = async (req, res) => {
   }
 };
 
+
 // Function to process file
+const convertExcelDateToJSDate = (excelDate) => {
+  const jsDate = new Date((excelDate - 25569) * 86400 * 1000);
+  return jsDate.toISOString().split("T")[0];
+};
+
 exports.processFile = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: "No file uploaded." });
     }
 
-    const lenders = req.body.lenders; // Expect array like ['SML', 'FREO', 'ZYPE']
+    const lenders = req.body.lenders;
     if (!lenders || lenders.length === 0) {
       return res.status(400).json({ message: "Select at least one lender." });
-    }
+    }  
 
     const filePath = req.file.path;
     const leads = readFile(filePath);
 
+    console.log(`📊 Total leads found: ${leads.length}`);
+
     // Save leads to MongoDB
     const savedLeads = await Lead.insertMany(
-      leads.map((lead) => ({ ...lead, source: "Ratecut" }))
+      leads.map((lead) => ({
+        source: "Ratecut",
+        fullName: `${lead["First Name"]} ${lead["Last Name"]}`,
+        firstName: lead["First Name"], 
+        lastName: lead["Last Name"], 
+        phone: `${lead.Phone}`,
+        email: lead.Email,
+        dateOfBirth: convertExcelDateToJSDate(lead.DOB),
+        gender: lead.Gender,
+        panNumber: lead.PAN,
+        jobType: lead.EmploymentType,
+        salary: `${lead.Salary}`,
+        address: `${lead.Pincode}`,
+        pincode: `${lead.Pincode}`,
+        consent: true
+      }))
     );
 
     const leadsWithIds = savedLeads.map((savedLead, index) => ({
