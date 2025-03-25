@@ -18,7 +18,7 @@ const leadSchema = new mongoose.Schema({
     },
     lastName: {
         type: String,
-        minlength: 2,
+        minlength: 1,
         maxlength: 50,
     },
     phone: {
