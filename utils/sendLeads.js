@@ -57,6 +57,7 @@ const getAccessToken = async () => {
 
 const convertExcelDateToJSDate = (excelDate) => {
   const jsDate = new Date((excelDate - 25569) * 86400 * 1000);
+  console.log(jsDate.toISOString().split("T")[0], excelDate);
   return jsDate.toISOString().split("T")[0];
 };
 
