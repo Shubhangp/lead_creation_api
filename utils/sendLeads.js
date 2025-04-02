@@ -21,10 +21,10 @@ const sendLeadsToLender = async (lender, leads) => {
       return sendToLP(leads);
     case "FINTIFI":
       return sendToFintifi(leads);
-    case "OVLY":
-      return sendToOvly(leads);
     case "FATAKPAY":
       return sendToFatakpay(leads);
+    case "OVLY":
+      return sendToOvly(leads);
     default:
       return { lender, status: "Failed", message: "Lender not configured" };
   }
@@ -115,7 +115,7 @@ const sendToFreo = async (leads) => {
         leadId: lead._id,
         requestPayload: lead,
         responseStatus: apiResponse.status,
-        responseBody: apiResponse.data[index] || apiResponse.data,
+        responseBody: apiResponse.data,
       });
       console.log("Freo", lead._id);
     } catch (error) {
@@ -536,7 +536,7 @@ const pinCodeData = readExcelFile();
 const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
 
 const sendToFatakpay = async (leads) => {
-  const logEntries = [];
+  const logs = [];
 
   for (const lead of leads) {
     if (validPincodes.includes(parseInt(lead.Pincode))) {
@@ -577,7 +577,9 @@ const sendToFatakpay = async (leads) => {
           }
         );
 
-        logEntries.push({
+        console.log("XLSX FatakPay:",eligibilityResponse.data);        
+
+        logs.push({
           leadId: lead._id,
           requestPayload: eligibilityPayload,
           responseStatus: eligibilityResponse.data.status_code,
@@ -587,7 +589,7 @@ const sendToFatakpay = async (leads) => {
       } catch (error) {
         console.error('XLSX Error in FatakPay Eligibility API:', error.response?.data || error.message);
 
-        logEntries.push({
+        logs.push({
           leadId: lead._id,
           requestPayload: eligibilityPayload,
           responseStatus: error.response?.status || 500,
@@ -597,8 +599,8 @@ const sendToFatakpay = async (leads) => {
     }
   }
 
-  if (logEntries.length > 0) {
-    await fatakPayResponseLog.insertMany(logEntries);
+  if (logs.length > 0) {
+    await fatakPayResponseLog.insertMany(logs);
   }
 }
 

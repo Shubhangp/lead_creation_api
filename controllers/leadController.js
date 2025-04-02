@@ -10,6 +10,7 @@ const LeadingPlateResponseLog = require('../models/leadingPlateResponseLog');
 const FintifiResponseLog = require('../models/fintifiResponseLog');
 const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 const fatakPayResponseLog = require('../models/fatakPayResponseLog');
+const ramFinCropLog = require('../models/ramFinCropLogModel');
 const xlsx = require('xlsx');
 const path = require('path');
 const { sendLeadsToLender } = require('../utils/sendLeads');
@@ -83,7 +84,7 @@ const processLoanApplication = async (payload) => {
   }
 };
 
-const checkZypeEligibility = async(mobileNumber, panNumber) => {
+const checkZypeEligibility = async (mobileNumber, panNumber) => {
   try {
     const response = await axios.post(
       "https://prod.zype.co.in/attribution-service/api/v1/underwriting/customerEligibility",
@@ -103,7 +104,7 @@ const checkZypeEligibility = async(mobileNumber, panNumber) => {
   }
 }
 
-const processZypeApplication = async(payload) => {
+const processZypeApplication = async (payload) => {
   try {
 
     const response = await axios.post(
@@ -114,7 +115,7 @@ const processZypeApplication = async(payload) => {
       }
     );
     // console.log(response);
-    
+
     return response.data;
   } catch (error) {
     console.error("Error sending lead to ZYPE:", error.response?.data || error.message);
@@ -128,9 +129,9 @@ const formatDate = (dateString) => {
 };
 
 function readExcelFile() {
-    const workbook = xlsx.readFile(path.join(__dirname, './FatakPay_PL_Serviceable_pincode_list.xlsx'));
-    const sheetName = workbook.SheetNames[1];    
-    return xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+  const workbook = xlsx.readFile(path.join(__dirname, './FatakPay_PL_Serviceable_pincode_list.xlsx'));
+  const sheetName = workbook.SheetNames[1];
+  return xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 }
 
 const pinCodeData = readExcelFile();
@@ -337,7 +338,7 @@ exports.createLead = async (req, res) => {
         console.log("Ovly:", dedupData);
         // If lead is fresh (not a duplicate), push to OVLY Lead Create API
         if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
-          console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);  
+          console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
           const createLeadPayload = new URLSearchParams({
             phone_number: phone,
             pan: panNumber,
@@ -386,7 +387,7 @@ exports.createLead = async (req, res) => {
           await ovlyLeadLog.save();
 
         } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
-          console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);          
+          console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
           const ovlyLeadLog = new ovlyResponseLog({
             leadId: savedLead._id,
             requestPayload: dedupPayloadDB,
@@ -456,7 +457,7 @@ exports.createLead = async (req, res) => {
     // If source is not "ZYPE", send lead to external API
     if (source !== 'ZYPE') {
       const isEligible = await checkZypeEligibility(phone, panNumber);
-      console.log(isEligible);      
+      console.log(isEligible);
       if (isEligible.message === 'REJECT') {
         await ZypeResponseLog.create({
           leadId: savedLead._id,
@@ -484,7 +485,7 @@ exports.createLead = async (req, res) => {
 
         const zypeResponse = await processZypeApplication(zypePayload);
         // console.log(zypeResponse);
-        
+
 
         await ZypeResponseLog.create({
           leadId: savedLead._id,
@@ -496,7 +497,7 @@ exports.createLead = async (req, res) => {
     }
 
     // If source is not "FINTIFI", send lead to external API
-    if(source !== 'FINTIFI'){
+    if (source !== 'FINTIFI') {
       const apiKey = process.env.API_KEY_FINTIFI;
       const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
 
@@ -544,7 +545,7 @@ exports.createLead = async (req, res) => {
     // If source is not "FATAKPAY", send lead to external API
     const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
     // console.log(validPincodes);
-    
+
     if (source !== 'FATAKPAY' && validPincodes.includes(parseInt(pincode))) {
       try {
         const tokenResponse = await axios.post(
@@ -571,7 +572,7 @@ exports.createLead = async (req, res) => {
           consent: true,
           consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
         };
-    
+
         const eligibilityResponse = await axios.post(
           'https://onboardingapi.fatakpay.com/external-api/v1/emi-insurance-eligibility',
           eligibilityPayload,
@@ -593,11 +594,53 @@ exports.createLead = async (req, res) => {
 
       } catch (error) {
         console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
-    
+
         await fatakPayResponseLog.create({
           leadId: savedLead._id,
           requestPayload: eligibilityPayload,
           responseStatus: error.response?.status || 500,
+          responseBody: error.response?.data || { message: 'Unknown error' },
+        });
+      }
+    }
+
+    if (source !== 'RAMFINCROP') {
+      const payload = {
+        mobile: phone,
+        name: fullName,
+        loanAmount: finalSalary,
+        email: email,
+        employeeType: jobType,
+        dob: dateOfBirth,
+        pancard: panNumber
+      }
+
+      try {
+        const response = await axios.post(
+          'https://www.ramfincorp.com/loanapply/ramfincorp_api/lead_gen/api/v1/create_lead',
+          payload,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Basic cmFtZmluXzQ3YTVjZDcyNWNmYTMwNjA5NGY0MWM2MzNlMWZjNDE2OjRjNzBlYzc1NTc1OGYwMTYxOTVmODM5NzgxMDRhNjAzM2ZhNGExYTU='
+            }
+          }
+        );
+
+        await ramFinCropLog.create({
+          leadId: savedLead._id,
+          requestPayload: payload,
+          responseStatus: response.data.status,
+          responseBody: response.data,
+        });
+
+        console.log(response.data);
+      } catch (error) {
+        console.error('Error creating lead:', error.response ? error.response.data : error.message);
+        await ramFinCropLog.create({
+          leadId: savedLead._id,
+          requestPayload: payload,
+          responseStatus: error.response?.data.status || 500,
           responseBody: error.response?.data || { message: 'Unknown error' },
         });
       }
@@ -689,7 +732,8 @@ exports.createUATLead = async (req, res) => {
 
 
 // Function to process file
-const convertExcelDateToJSDate = (excelDate) => {
+const convertExcelDateToJSDate = (excelDate, PAN) => {
+  console.log(excelDate, PAN);
   const jsDate = new Date((excelDate - 25569) * 86400 * 1000);
   return jsDate.toISOString().split("T")[0];
 };
@@ -703,7 +747,7 @@ exports.processFile = async (req, res) => {
     const lenders = req.body.lenders;
     if (!lenders || lenders.length === 0) {
       return res.status(400).json({ message: "Select at least one lender." });
-    }  
+    }
 
     const filePath = req.file.path;
     const leads = readFile(filePath);
@@ -715,11 +759,11 @@ exports.processFile = async (req, res) => {
       leads.map((lead) => ({
         source: "Ratecut",
         fullName: `${lead["First Name"]} ${lead["Last Name"]}`,
-        firstName: lead["First Name"], 
-        lastName: lead["Last Name"], 
+        firstName: lead["First Name"],
+        lastName: lead["Last Name"],
         phone: `${lead.Phone}`,
         email: lead.Email,
-        dateOfBirth: convertExcelDateToJSDate(lead.DOB),
+        dateOfBirth: convertExcelDateToJSDate(lead.DOB, lead.PAN),
         gender: lead.Gender,
         panNumber: lead.PAN,
         jobType: lead.EmploymentType,
