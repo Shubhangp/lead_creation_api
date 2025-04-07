@@ -3,6 +3,7 @@ const morgan = require('morgan');
 const cors = require('cors');
 const leadsRouter = require('./routes/leadRoutes');
 const apiKeyRoutes = require('./routes/apiKeyRoutes');
+const formRouter = require('./routes/formRoutes');
 
 const app = express();
 if (process.env.NODE_ENV === 'development') {
@@ -26,5 +27,6 @@ app.get('/', (req, res) => {
 
 app.use('/api/v1/leads', leadsRouter);
 app.use('/api/v1/api-keys', apiKeyRoutes);
+app.use('/api/v1/loan-form', formRouter)
 
 module.exports = app;
