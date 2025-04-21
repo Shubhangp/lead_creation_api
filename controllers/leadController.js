@@ -11,9 +11,10 @@ const FintifiResponseLog = require('../models/fintifiResponseLog');
 const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 const fatakPayResponseLog = require('../models/fatakPayResponseLog');
 const ramFinCropLog = require('../models/ramFinCropLogModel');
+const DistributionRule = require('../models/distributionRuleModel');
+const { sendLeadsToLender } = require('../utils/sendLeads');
 const xlsx = require('xlsx');
 const path = require('path');
-const { sendLeadsToLender } = require('../utils/sendLeads');
 
 
 // Helper Function to get a random residenceType
@@ -128,6 +129,11 @@ const formatDate = (dateString) => {
   return date.toLocaleDateString('en-GB');
 };
 
+function formatToYYYYMMDD(dateString) {
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+}
+
 function readExcelFile() {
   const workbook = xlsx.readFile(path.join(__dirname, './FatakPay_PL_Serviceable_pincode_list.xlsx'));
   const sheetName = workbook.SheetNames[1];
@@ -139,512 +145,53 @@ const pinCodeData = readExcelFile();
 
 // Create a lead
 exports.createLead = async (req, res) => {
-  const { source, fullName, firstName, lastName, phone, email, age, dateOfBirth, gender, panNumber, jobType, businessType, salary, creditScore, cibilScore, address, pincode, consent, } = req.body;
+  const {
+    source, fullName, firstName, lastName, phone, email,
+    age, dateOfBirth, gender, panNumber, jobType, businessType,
+    salary, creditScore, cibilScore, address, pincode, consent
+  } = req.body;
 
-  // Input validation
   if (!source || !fullName || !phone || !email || !panNumber || consent === undefined) {
     return res.status(400).json({ message: 'Source, fullName, phone, email, panNumber, and consent are required.' });
   }
 
-  // Full Name validation
   if (fullName.length < 2 || fullName.length > 100) {
     return res.status(400).json({ message: 'Full name must be between 2 and 100 characters.' });
   }
 
-  // Email validation
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/;
   if (!emailRegex.test(email)) {
     return res.status(400).json({ message: 'Invalid email format.' });
   }
 
-  // PAN number validation
   const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
   if (!panRegex.test(panNumber)) {
     return res.status(400).json({ message: 'Invalid PAN number format. Must match ABCDE1234F.' });
   }
 
-  // Date of Birth validation
   const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) && !isNaN(Date.parse(dateOfBirth));
   if (dateOfBirth && (!isValidDate || new Date(dateOfBirth) > new Date())) {
     return res.status(400).json({ message: 'Invalid date of birth or date cannot be in the future.' });
   }
 
-  // Conditional defaults for salary and jobType
   const finalSalary = salary || '50000';
   const finalJobType = jobType || 'SALARIED';
 
   try {
-    // Create and save the lead
     const lead = new Lead({
       source, fullName, firstName, lastName, phone, email,
-      age,
-      dateOfBirth,
-      gender,
-      panNumber,
-      jobType: finalJobType,
-      businessType,
-      salary: finalSalary,
-      creditScore,
-      cibilScore,
-      address,
-      pincode,
-      consent,
+      age, dateOfBirth, gender, panNumber, jobType: finalJobType,
+      businessType, salary: finalSalary, creditScore, cibilScore,
+      address, pincode, consent,
     });
 
     const savedLead = await lead.save();
 
-    // If source is not "SML", send lead to external API
-    if (source !== 'SML') {
-      const vendorName = process.env.VENDOR_NAME_SML;
-      const apiKey = process.env.API_KEY_SML;
-      const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
+    const distributionRules = await getDistributionRules(source);
 
-      const payload = {
-        name: fullName,
-        phone,
-        email,
-        panNumber,
-        dob: dateOfBirth,
-        gender,
-        salary: `${finalSalary}`,
-        pincode,
-        jobType: finalJobType,
-      };
+    await processLenders(savedLead, distributionRules.immediate, 'immediate');
 
-      try {
-        const apiResponse = await axios.post(externalApiUrl, payload, {
-          headers: {
-            'x-api-key': apiKey,
-            'Content-Type': 'application/json',
-          },
-        });
-
-        // Save API response to the new collection
-        const responseLog = new smlResponseLog({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: apiResponse.status,
-          responseBody: apiResponse.data,
-        });
-
-        await responseLog.save();
-      } catch (error) {
-        console.error('Error sending lead to external API:', error.message);
-        await smlResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: error.response?.status || 500,
-          responseBody: error.response?.data || { message: 'Unknown error' },
-        });
-      }
-    }
-
-    // If source is not "Freo", send lead to external API
-    if (source !== 'FREO') {
-      const baseUrl = process.env.DEV_URL;
-      const accessToken = await getAccessToken();
-
-      // Construct payload for MoneyTap API
-      const payload = {
-        emailId: email,
-        phone,
-        name: fullName,
-        panNumber,
-        dateOfBirth,
-        gender,
-        jobType: finalJobType,
-        homeAddress: {
-          addressLine1: address || '',
-          pincode,
-        },
-        residenceType: getRandomResidenceType(),
-        officeAddress: {
-          addressLine1: address || '',
-          pincode,
-        },
-        incomeInfo: {
-          declared: finalSalary
-        },
-      };
-
-      try {
-        const apiResponse = await axios.post(
-          `${baseUrl}/v3/partner/lead/create`,
-          payload,
-          {
-            headers: {
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${accessToken}`,
-            },
-          }
-        );
-
-        // Save API response to the new collection
-        const responseLog = new freoResponseLog({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: apiResponse.status,
-          responseBody: apiResponse.data,
-        });
-
-        await responseLog.save();
-      } catch (error) {
-        console.error('Error sending lead to MoneyTap API:', error.message);
-        await freoResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: error.response?.status || 500,
-          responseBody: error.response?.data || { message: 'Unknown error' },
-        });
-      }
-    }
-
-    // If source is not "OVLY", send lead to external API
-    if (source !== 'OVLY') {
-      const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
-      const createLeadApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/create';
-      const clientId = process.env.OVLY_CLIENT_ID;
-      const clientKey = process.env.OVLY_CLIENT_KEY;
-
-      const dedupPayload = new URLSearchParams({
-        phone_number: phone,
-        pan: panNumber,
-        date_of_birth: dateOfBirth,
-        employement_type: finalJobType,
-        net_monthly_income: `${finalSalary}`,
-        name_as_per_pan: fullName,
-      });
-
-      const dedupPayloadDB = {
-        phone_number: phone,
-        pan: panNumber,
-        date_of_birth: dateOfBirth,
-        employement_type: finalJobType,
-        net_monthly_income: `${finalSalary}`,
-        name_as_per_pan: fullName,
-      };
-
-      try {
-        const dedupResponse = await axios.post(dedupApiUrl, dedupPayload, {
-          headers: {
-            'admin-api-client-id': clientId,
-            'admin-api-client-key': clientKey,
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-        });
-
-        const dedupData = dedupResponse.data;
-        console.log("Ovly:", dedupData);
-        // If lead is fresh (not a duplicate), push to OVLY Lead Create API
-        if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
-          console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
-          const createLeadPayload = new URLSearchParams({
-            phone_number: phone,
-            pan: panNumber,
-            email,
-            employement_type: finalJobType,
-            net_monthly_income: `${finalSalary}`,
-            mode_of_salary: 'ONLINE',
-            bank_name: 'HDFC',
-            name_as_per_pan: fullName,
-            current_residence_pin_code: pincode,
-            date_of_birth: dateOfBirth,
-            gender,
-          });
-
-          const createLeadPayloadDB = {
-            phone_number: phone,
-            pan: panNumber,
-            email,
-            employement_type: finalJobType,
-            net_monthly_income: `${finalSalary}`,
-            mode_of_salary: 'ONLINE',
-            bank_name: 'HDFC',
-            name_as_per_pan: fullName,
-            current_residence_pin_code: pincode,
-            date_of_birth: dateOfBirth,
-            gender,
-          };
-
-          const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
-            headers: {
-              'admin-api-client-id': clientId,
-              'admin-api-client-key': clientKey,
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-          });
-
-          console.log('Lead successfully pushed:', leadResponse.data);
-          // Save lead response in DB
-          const ovlyLeadLog = new ovlyResponseLog({
-            leadId: savedLead._id,
-            requestPayload: createLeadPayloadDB,
-            responseStatus: leadResponse.data.status,
-            responseBody: leadResponse.data,
-          });
-
-          await ovlyLeadLog.save();
-
-        } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
-          console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
-          const ovlyLeadLog = new ovlyResponseLog({
-            leadId: savedLead._id,
-            requestPayload: dedupPayloadDB,
-            responseStatus: 'duplicate',
-            responseBody: dedupData,
-          });
-
-          await ovlyLeadLog.save();
-        }
-      } catch (error) {
-        console.error('Error in OVLY API integration:', error.response?.data || error.message);
-        await ovlyResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: dedupPayloadDB,
-          responseStatus: error.response?.status,
-          responseBody: error.response?.data || { message: 'Unknown error' },
-        });
-      }
-    }
-
-    // If source is not "LendingPlate", send lead to external API
-    if (source !== 'LendingPlate') {
-      const isMobileValid = await checkMobileExists(phone);
-      if (!isMobileValid) {
-        const loanPayload = {
-          partner_id: process.env.LP_PARTNER_ID,
-          ref_id: phone,
-          mobile: phone,
-          customer_name: fullName,
-          pancard: panNumber,
-          dob: formatDate(dateOfBirth),
-          pincode,
-          profession: "SAL",
-          net_mothlyincome: finalSalary,
-        };
-
-        await LeadingPlateResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: loanPayload,
-          responseStatus: "Fail",
-          responseBody: { "status": "Failed" }
-        });
-      } else if (isMobileValid) {
-        const loanPayload = {
-          partner_id: process.env.LP_PARTNER_ID,
-          ref_id: phone,
-          mobile: phone,
-          customer_name: fullName,
-          pancard: panNumber,
-          dob: formatDate(dateOfBirth),
-          pincode,
-          profession: "SAL",
-          net_mothlyincome: finalSalary,
-        };
-
-        const loanSuccess = await processLoanApplication(loanPayload);
-
-        await LeadingPlateResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: loanPayload,
-          responseStatus: loanSuccess.Message,
-          responseBody: loanSuccess
-        });
-      }
-    }
-
-    // If source is not "ZYPE", send lead to external API
-    if (source !== 'ZYPE') {
-      const isEligible = await checkZypeEligibility(phone, panNumber);
-      console.log(isEligible);
-      if (isEligible.message === 'REJECT') {
-        await ZypeResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: {
-            mobileNumber: phone,
-            panNumber,
-            partnerId: process.env.ZYPE_PARTNER_ID,
-          },
-          responseStatus: "REJECTED",
-          responseBody: { status: "REJECTED" },
-        });
-      } else if (isEligible.status === 'ACCEPT') {
-        const zypePayload = {
-          mobileNumber: phone,
-          email,
-          panNumber,
-          name: fullName,
-          dob: dateOfBirth,
-          income: parseInt(finalSalary, 10),
-          employmentType: 'salaried',
-          orgName: businessType || "",
-          partnerId: process.env.ZYPE_PARTNER_ID,
-          bureauType: 3,
-        };
-
-        const zypeResponse = await processZypeApplication(zypePayload);
-        // console.log(zypeResponse);
-
-
-        await ZypeResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: zypePayload,
-          responseStatus: zypeResponse?.status || "Unknown",
-          responseBody: zypeResponse,
-        });
-      }
-    }
-
-    // If source is not "FINTIFI", send lead to external API
-    if (source !== 'FINTIFI') {
-      const apiKey = process.env.API_KEY_FINTIFI;
-      const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
-
-      const payload = {
-        firstName: fullName.split(' ')[0],
-        lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
-        phone,
-        email,
-        panNumber,
-        dob: dateOfBirth,
-        gender,
-        salary: `${finalSalary}`,
-        pincode,
-        jobType: finalJobType,
-      };
-
-      try {
-        const apiResponse = await axios.post(externalApiUrl, payload, {
-          headers: {
-            'x-api-key': apiKey,
-            'Content-Type': 'application/json',
-          },
-        });
-
-        // Save API response to the new collection
-        const responseLog = new FintifiResponseLog({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: apiResponse.data.success,
-          responseBody: apiResponse.data,
-        });
-
-        await responseLog.save();
-      } catch (error) {
-        console.error('Error sending lead to external API:', error);
-        await FintifiResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: error.success || 500,
-          responseBody: error.error || { message: 'Unknown error' },
-        });
-      }
-    }
-
-    // If source is not "FATAKPAY", send lead to external API
-    const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
-    // console.log(validPincodes);
-
-    if (source !== 'FATAKPAY' && validPincodes.includes(parseInt(pincode))) {
-      try {
-        const tokenResponse = await axios.post(
-          'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
-          {
-            username: process.env.FATAKPAY_USERNAME,
-            password: process.env.FATAKPAY_PASSWORD,
-          }
-        );
-
-        const accessToken = tokenResponse.data.data.token;
-
-        const eligibilityPayload = {
-          mobile: phone,
-          first_name: firstName || fullName.split(' ')[0],
-          last_name: lastName || fullName.split(' ')[1] || '',
-          email,
-          employment_type_id: finalJobType,
-          pan: panNumber,
-          dob: dateOfBirth,
-          pincode,
-          home_address: address || '',
-          office_address: address || '',
-          consent: true,
-          consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
-        };
-
-        const eligibilityResponse = await axios.post(
-          'https://onboardingapi.fatakpay.com/external-api/v1/emi-insurance-eligibility',
-          eligibilityPayload,
-          {
-            headers: {
-              Authorization: `Token ${accessToken}`,
-              'Content-Type': 'application/json',
-            },
-          }
-        );
-
-        // Step 3: Save Response in Database
-        await fatakPayResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: eligibilityPayload,
-          responseStatus: eligibilityResponse.data.status_code,
-          responseBody: eligibilityResponse.data,
-        });
-
-      } catch (error) {
-        console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
-
-        await fatakPayResponseLog.create({
-          leadId: savedLead._id,
-          requestPayload: eligibilityPayload,
-          responseStatus: error.response?.status || 500,
-          responseBody: error.response?.data || { message: 'Unknown error' },
-        });
-      }
-    }
-
-    if (source !== 'RAMFINCROP') {
-      const payload = {
-        mobile: phone,
-        name: fullName,
-        loanAmount: finalSalary,
-        email: email,
-        employeeType: jobType,
-        dob: dateOfBirth,
-        pancard: panNumber
-      }
-
-      try {
-        const response = await axios.post(
-          'https://www.ramfincorp.com/loanapply/ramfincorp_api/lead_gen/api/v1/create_lead',
-          payload,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Basic cmFtZmluXzQ3YTVjZDcyNWNmYTMwNjA5NGY0MWM2MzNlMWZjNDE2OjRjNzBlYzc1NTc1OGYwMTYxOTVmODM5NzgxMDRhNjAzM2ZhNGExYTU='
-            }
-          }
-        );
-
-        await ramFinCropLog.create({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: response.data.status,
-          responseBody: response.data,
-        });
-
-        console.log(response.data);
-      } catch (error) {
-        console.error('Error creating lead:', error.response ? error.response.data : error.message);
-        await ramFinCropLog.create({
-          leadId: savedLead._id,
-          requestPayload: payload,
-          responseStatus: error.response?.data.status || 500,
-          responseBody: error.response?.data || { message: 'Unknown error' },
-        });
-      }
-    }
+    scheduleDelayedLenders(savedLead, distributionRules.delayed);
 
     res.status(201).json({
       status: 'success',
@@ -660,6 +207,1164 @@ exports.createLead = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
+
+// Process lenders based on group (immediate or delayed)
+async function processLenders(lead, lenders, type) {
+  for (const lender of lenders) {
+    const lenderName = typeof lender === 'string' ? lender : lender.lender;
+
+    // Don't send to the same lender that created the lead
+    if (lenderName !== lead.source) {
+      try {
+        await sendToLender(lead, lenderName);
+        // Log successful distribution
+        console.log(`Lead ${lead._id} sent to ${lenderName} (${type})`);
+      } catch (error) {
+        console.error(`Error sending lead to ${lenderName}:`, error.message);
+      }
+    }
+  }
+}
+
+// Schedule delayed lenders using a job queue
+function scheduleDelayedLenders(lead, delayedLenders) {
+  for (const lenderConfig of delayedLenders) {
+    if (lenderConfig.lender !== lead.source) {
+      const delayMs = lenderConfig.delayMinutes * 60 * 1000;
+
+      setTimeout(async () => {
+        try {
+          await sendToLender(lead, lenderConfig.lender);
+          console.log(`Delayed lead ${lead._id} sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
+        } catch (error) {
+          console.error(`Error sending delayed lead to ${lenderConfig.lender}:`, error.message);
+        }
+      }, delayMs);
+
+      // Log scheduled job
+      console.log(`Scheduled lead ${lead._id} to be sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
+    }
+  }
+}
+
+// Send lead to specific lender
+async function sendToLender(lead, lender) {
+  // Extract lead data
+  // const {
+  //   _id, source, fullName, firstName, lastName, phone, email,
+  //   age, dateOfBirth, gender, panNumber, jobType, businessType,
+  //   salary, creditScore, cibilScore, address, pincode, consent
+  // } = lead;
+
+  // Create handler map for all lenders
+  const lenderHandlers = {
+    'SML': sendToSML,
+    'FREO': sendToFreo,
+    'OVLY': sendToOVLY,
+    'LendingPlate': sendToLendingPlate,
+    'ZYPE': sendToZYPE,
+    'FINTIFI': sendToFINTIFI,
+    'FATAKPAY': sendToFATAKPAY,
+    'RAMFINCROP': sendToRAMFINCROP
+  };
+
+  // Call the appropriate handler for the lender
+  if (lenderHandlers[lender]) {
+    return await lenderHandlers[lender](lead);
+  } else {
+    throw new Error(`No handler found for lender: ${lender}`);
+  }
+}
+
+async function getDistributionRules(source) {
+  try {
+    const dbRules = await DistributionRule.findOne({ source, active: true });
+    console.log(dbRules);
+
+    if (dbRules) {
+      return dbRules.rules;
+    }
+
+    const defaultRules = {
+      FREO: {
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP'],
+        delayed: [
+          { lender: 'SML', delayMinutes: 1440 },
+          { lender: 'FINTIFI', delayMinutes: 1440 }
+        ]
+      },
+      SML: {
+        immediate: ['FREO', 'OVLY'],
+        delayed: [
+          { lender: 'LendingPlate', delayMinutes: 1 },
+          { lender: 'ZYPE', delayMinutes: 1 },
+          { lender: 'FINTIFI', delayMinutes: 1 },
+          { lender: 'RAMFINCROP', delayMinutes: 1 },
+          { lender: 'FATAKPAY', delayMinutes: 1 }
+        ]
+      },
+      OVLY: {
+        immediate: ['FREO', 'SML'],
+        delayed: [
+          { lender: 'LendingPlate', delayMinutes: 1 },
+          { lender: 'ZYPE', delayMinutes: 1 },
+          { lender: 'FINTIFI', delayMinutes: 1 },
+          { lender: 'RAMFINCROP', delayMinutes: 1 },
+          { lender: 'FATAKPAY', delayMinutes: 1 }
+        ]
+      },
+      default: {
+        immediate: ['FREO', 'SML', 'OVLY'],
+        delayed: [
+          { lender: 'LendingPlate', delayMinutes: 1 },
+          { lender: 'ZYPE', delayMinutes: 1 },
+          { lender: 'FINTIFI', delayMinutes: 1 },
+          { lender: 'RAMFINCROP', delayMinutes: 1 },
+          { lender: 'FATAKPAY', delayMinutes: 1 }
+        ]
+      }
+    };
+
+    return defaultRules[source] || defaultRules.default;
+  } catch (error) {
+    console.error('Error fetching distribution rules:', error);
+
+    return {
+      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP'],
+      delayed: [
+        { lender: 'SML', delayMinutes: 1440 },
+        { lender: 'FINTIFI', delayMinutes: 1440 }
+      ]
+    };
+  }
+}
+
+// Individual lender handlers
+async function sendToSML(lead) {
+  console.log("SML", lead);
+  const {
+    _id, fullName, phone, email, dateOfBirth,
+    gender, panNumber, jobType, salary, pincode
+  } = lead;
+
+  const vendorName = "ratecut";
+  const apiKey = "td3gH20O6OjccEadCa8+9g==";
+  const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
+
+  const payload = {
+    name: fullName,
+    phone,
+    email,
+    panNumber,
+    dob: formatToYYYYMMDD(dateOfBirth),
+    gender,
+    salary: `${salary}`,
+    pincode,
+    jobType,
+  };
+
+  try {
+    const apiResponse = await axios.post(externalApiUrl, payload, {
+      headers: {
+        'x-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    // Save API response to the new collection
+    const responseLog = new smlResponseLog({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: apiResponse.status,
+      responseBody: apiResponse.data,
+    });
+
+    await responseLog.save();
+    return responseLog;
+  } catch (error) {
+    console.error('Error sending lead to SML API:', error.message);
+    const errorLog = await smlResponseLog.create({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || { message: 'Unknown error' },
+    });
+    return errorLog;
+  }
+}
+
+async function sendToFreo(lead) {
+  console.log("FREO", lead);
+  const {
+    _id, fullName, phone, email, dateOfBirth,
+    gender, panNumber, jobType, salary, address, pincode
+  } = lead;
+
+  const baseUrl = process.env.DEV_URL;
+  const accessToken = await getAccessToken();
+
+  // Construct payload for MoneyTap API
+  const payload = {
+    emailId: email,
+    phone,
+    name: fullName,
+    panNumber,
+    dateOfBirth,
+    gender,
+    jobType,
+    homeAddress: {
+      addressLine1: address || '',
+      pincode,
+    },
+    residenceType: getRandomResidenceType(),
+    officeAddress: {
+      addressLine1: address || '',
+      pincode,
+    },
+    incomeInfo: {
+      declared: salary
+    },
+  };
+
+  try {
+    const apiResponse = await axios.post(
+      `${baseUrl}/v3/partner/lead/create`,
+      payload,
+      {
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+
+    // Save API response to the new collection
+    const responseLog = new freoResponseLog({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: apiResponse.status,
+      responseBody: apiResponse.data,
+    });
+
+    await responseLog.save();
+    return responseLog;
+  } catch (error) {
+    console.error('Error sending lead to Freo API:', error.message);
+    const errorLog = await freoResponseLog.create({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || { message: 'Unknown error' },
+    });
+    return errorLog;
+  }
+}
+
+async function sendToOVLY(lead) {
+  console.log("OVLY", lead);
+  const {
+    _id, fullName, phone, email, dateOfBirth,
+    gender, panNumber, jobType, salary, pincode
+  } = lead;
+
+  const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
+  const createLeadApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/create';
+  const clientId = process.env.OVLY_CLIENT_ID;
+  const clientKey = process.env.OVLY_CLIENT_KEY;
+
+  const dedupPayload = new URLSearchParams({
+    phone_number: phone,
+    pan: panNumber,
+    date_of_birth: formatToYYYYMMDD(dateOfBirth),
+    employement_type: jobType,
+    net_monthly_income: `${salary}`,
+    name_as_per_pan: fullName,
+  });
+
+  const dedupPayloadDB = {
+    phone_number: phone,
+    pan: panNumber,
+    date_of_birth: dateOfBirth,
+    employement_type: jobType,
+    net_monthly_income: `${salary}`,
+    name_as_per_pan: fullName,
+  };
+
+  try {
+    const dedupResponse = await axios.post(dedupApiUrl, dedupPayload, {
+      headers: {
+        'admin-api-client-id': clientId,
+        'admin-api-client-key': clientKey,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
+
+    const dedupData = dedupResponse.data;
+
+    // If lead is fresh (not a duplicate), push to OVLY Lead Create API
+    if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
+      const createLeadPayload = new URLSearchParams({
+        phone_number: phone,
+        pan: panNumber,
+        email,
+        employement_type: jobType,
+        net_monthly_income: `${salary}`,
+        mode_of_salary: 'ONLINE',
+        bank_name: 'HDFC',
+        name_as_per_pan: fullName,
+        current_residence_pin_code: pincode,
+        date_of_birth: dateOfBirth,
+        gender,
+      });
+
+      const createLeadPayloadDB = {
+        phone_number: phone,
+        pan: panNumber,
+        email,
+        employement_type: jobType,
+        net_monthly_income: `${salary}`,
+        mode_of_salary: 'ONLINE',
+        bank_name: 'HDFC',
+        name_as_per_pan: fullName,
+        current_residence_pin_code: pincode,
+        date_of_birth: dateOfBirth,
+        gender,
+      };
+
+      const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
+        headers: {
+          'admin-api-client-id': clientId,
+          'admin-api-client-key': clientKey,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      });
+
+      // Save lead response in DB
+      const ovlyLeadLog = new ovlyResponseLog({
+        leadId: _id,
+        requestPayload: createLeadPayloadDB,
+        responseStatus: leadResponse.data.status,
+        responseBody: leadResponse.data,
+      });
+
+      await ovlyLeadLog.save();
+      return ovlyLeadLog;
+    } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
+      const ovlyLeadLog = new ovlyResponseLog({
+        leadId: _id,
+        requestPayload: dedupPayloadDB,
+        responseStatus: 'duplicate',
+        responseBody: dedupData,
+      });
+
+      await ovlyLeadLog.save();
+      return ovlyLeadLog;
+    }
+  } catch (error) {
+    console.error('Error in OVLY API integration:', error.response?.data || error.message);
+    const errorLog = await ovlyResponseLog.create({
+      leadId: _id,
+      requestPayload: dedupPayloadDB || {},
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || { message: 'Unknown error' },
+    });
+    return errorLog;
+  }
+}
+
+async function sendToLendingPlate(lead) {
+  console.log("LP", lead);
+  const {
+    _id, fullName, phone, panNumber, dateOfBirth, pincode, salary
+  } = lead;
+
+  const isMobileValid = await checkMobileExists(phone);
+
+  const loanPayload = {
+    partner_id: process.env.LP_PARTNER_ID,
+    ref_id: phone,
+    mobile: phone,
+    customer_name: fullName,
+    pancard: panNumber,
+    dob: formatDate(dateOfBirth),
+    pincode,
+    profession: "SAL",
+    net_mothlyincome: salary,
+  };
+
+  if (!isMobileValid) {
+    const responseLog = await LeadingPlateResponseLog.create({
+      leadId: _id,
+      requestPayload: loanPayload,
+      responseStatus: "Fail",
+      responseBody: { "status": "Failed" }
+    });
+    return responseLog;
+  } else {
+    const loanSuccess = await processLoanApplication(loanPayload);
+    const responseLog = await LeadingPlateResponseLog.create({
+      leadId: _id,
+      requestPayload: loanPayload,
+      responseStatus: loanSuccess.Message,
+      responseBody: loanSuccess
+    });
+    return responseLog;
+  }
+}
+
+async function sendToZYPE(lead) {
+  console.log("ZYPE", lead);
+  const {
+    _id, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary
+  } = lead;
+
+  const isEligible = await checkZypeEligibility(phone, panNumber);
+
+  if (isEligible.message === 'REJECT') {
+    const responseLog = await ZypeResponseLog.create({
+      leadId: _id,
+      requestPayload: {
+        mobileNumber: phone,
+        panNumber,
+        partnerId: process.env.ZYPE_PARTNER_ID,
+      },
+      responseStatus: "REJECTED",
+      responseBody: { status: "REJECTED" },
+    });
+    return responseLog;
+  } else if (isEligible.status === 'ACCEPT') {
+    const zypePayload = {
+      mobileNumber: phone,
+      email,
+      panNumber,
+      name: fullName,
+      dob: formatToYYYYMMDD(dateOfBirth),
+      income: parseInt(salary, 10),
+      employmentType: 'salaried',
+      orgName: businessType || "",
+      partnerId: process.env.ZYPE_PARTNER_ID,
+      bureauType: 3,
+    };
+
+    const zypeResponse = await processZypeApplication(zypePayload);
+    const responseLog = await ZypeResponseLog.create({
+      leadId: _id,
+      requestPayload: zypePayload,
+      responseStatus: zypeResponse?.status || "Unknown",
+      responseBody: zypeResponse,
+    });
+    return responseLog;
+  }
+}
+
+async function sendToFINTIFI(lead) {
+  console.log("FINTIFI", lead);
+  const {
+    _id, fullName, phone, email, dateOfBirth, gender, panNumber, jobType, salary, pincode
+  } = lead;
+
+  const apiKey = process.env.API_KEY_FINTIFI;
+  const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
+
+  const payload = {
+    firstName: fullName.split(' ')[0],
+    lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+    phone,
+    email,
+    panNumber,
+    dob: formatToYYYYMMDD(dateOfBirth),
+    gender,
+    salary: `${salary}`,
+    pincode,
+    jobType,
+  };
+
+  try {
+    const apiResponse = await axios.post(externalApiUrl, payload, {
+      headers: {
+        'x-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    // Save API response to the new collection
+    const responseLog = new FintifiResponseLog({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: apiResponse.data.success,
+      responseBody: apiResponse.data,
+    });
+
+    await responseLog.save();
+    return responseLog;
+  } catch (error) {
+    console.error('Error sending lead to FINTIFI API:', error);
+    const errorLog = await FintifiResponseLog.create({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: error.success || 500,
+      responseBody: error.error || { message: 'Unknown error' },
+    });
+    return errorLog;
+  }
+}
+
+async function sendToFATAKPAY(lead) {
+  console.log("FATAKPAY", lead);
+  const {
+    _id, fullName, firstName, lastName, phone, email, dateOfBirth,
+    gender, address, pincode, jobType, panNumber
+  } = lead;
+
+  // Check if pincode is valid for FATAKPAY
+  const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
+  if (!validPincodes.includes(parseInt(pincode))) {
+    console.log(`Pincode ${pincode} not valid for FATAKPAY. Skipping.`);
+    return null;
+  }
+
+  try {
+    const tokenResponse = await axios.post(
+      'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
+      {
+        username: process.env.FATAKPAY_USERNAME,
+        password: process.env.FATAKPAY_PASSWORD,
+      }
+    );
+
+    const accessToken = tokenResponse.data.data.token;
+
+    const eligibilityPayload = {
+      mobile: phone,
+      first_name: firstName || fullName.split(' ')[0],
+      last_name: lastName || fullName.split(' ')[1] || '',
+      email,
+      employment_type_id: jobType,
+      pan: panNumber,
+      dob: formatToYYYYMMDD(dateOfBirth),
+      pincode,
+      home_address: address || '',
+      office_address: address || '',
+      consent: true,
+      consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
+    };
+
+    const eligibilityResponse = await axios.post(
+      'https://onboardingapi.fatakpay.com/external-api/v1/emi-insurance-eligibility',
+      eligibilityPayload,
+      {
+        headers: {
+          Authorization: `Token ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    // Save Response in Database
+    const responseLog = await fatakPayResponseLog.create({
+      leadId: _id,
+      requestPayload: eligibilityPayload,
+      responseStatus: eligibilityResponse.data.status_code,
+      responseBody: eligibilityResponse.data,
+    });
+    return responseLog;
+  } catch (error) {
+    console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
+    const eligibilityPayload = {
+      mobile: phone,
+      first_name: firstName || fullName.split(' ')[0],
+      last_name: lastName || fullName.split(' ')[1] || '',
+      email,
+      employment_type_id: jobType,
+      pan: panNumber,
+      dob: dateOfBirth,
+      pincode,
+      home_address: address || '',
+      office_address: address || '',
+      consent: true,
+      consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
+    };
+
+    const errorLog = await fatakPayResponseLog.create({
+      leadId: _id,
+      requestPayload: eligibilityPayload || {},
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || { message: 'Unknown error' },
+    });
+    return errorLog;
+  }
+}
+
+async function sendToRAMFINCROP(lead) {
+  const {
+    _id, fullName, phone, email, dateOfBirth, panNumber, jobType, salary
+  } = lead;
+
+  const payload = {
+    mobile: phone,
+    name: fullName,
+    loanAmount: salary,
+    email: email,
+    employeeType: jobType,
+    dob: formatToYYYYMMDD(dateOfBirth),
+    pancard: panNumber
+  };
+
+  try {
+    const response = await axios.post(
+      'https://www.ramfincorp.com/loanapply/ramfincorp_api/lead_gen/api/v1/create_lead',
+      payload,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Basic cmFtZmluXzQ3YTVjZDcyNWNmYTMwNjA5NGY0MWM2MzNlMWZjNDE2OjRjNzBlYzc1NTc1OGYwMTYxOTVmODM5NzgxMDRhNjAzM2ZhNGExYTU='
+        }
+      }
+    );
+    console.log(response);
+
+    const responseLog = await ramFinCropLog.create({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: response.status,
+      responseBody: response.data,
+    });
+    return responseLog;
+  } catch (error) {
+    console.error('Error creating lead for RAMFINCROP:', error.response ? error.response.data : error.message);
+    const errorLog = await ramFinCropLog.create({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || { message: 'Unknown error' },
+    });
+    return errorLog;
+  }
+}
+
+// exports.createLead = async (req, res) => {
+//   const { source, fullName, firstName, lastName, phone, email, age, dateOfBirth, gender, panNumber, jobType, businessType, salary, creditScore, cibilScore, address, pincode, consent, } = req.body;
+
+//   // Input validation
+//   if (!source || !fullName || !phone || !email || !panNumber || consent === undefined) {
+//     return res.status(400).json({ message: 'Source, fullName, phone, email, panNumber, and consent are required.' });
+//   }
+
+//   // Full Name validation
+//   if (fullName.length < 2 || fullName.length > 100) {
+//     return res.status(400).json({ message: 'Full name must be between 2 and 100 characters.' });
+//   }
+
+//   // Email validation
+//   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/;
+//   if (!emailRegex.test(email)) {
+//     return res.status(400).json({ message: 'Invalid email format.' });
+//   }
+
+//   // PAN number validation
+//   const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+//   if (!panRegex.test(panNumber)) {
+//     return res.status(400).json({ message: 'Invalid PAN number format. Must match ABCDE1234F.' });
+//   }
+
+//   // Date of Birth validation
+//   const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) && !isNaN(Date.parse(dateOfBirth));
+//   if (dateOfBirth && (!isValidDate || new Date(dateOfBirth) > new Date())) {
+//     return res.status(400).json({ message: 'Invalid date of birth or date cannot be in the future.' });
+//   }
+
+//   // Conditional defaults for salary and jobType
+//   const finalSalary = salary || '50000';
+//   const finalJobType = jobType || 'SALARIED';
+
+//   try {
+//     // Create and save the lead
+//     const lead = new Lead({
+//       source, fullName, firstName, lastName, phone, email,
+//       age,
+//       dateOfBirth,
+//       gender,
+//       panNumber,
+//       jobType: finalJobType,
+//       businessType,
+//       salary: finalSalary,
+//       creditScore,
+//       cibilScore,
+//       address,
+//       pincode,
+//       consent,
+//     });
+
+//     const savedLead = await lead.save();
+
+//     // If source is not "SML", send lead to external API
+//     if (source !== 'SML') {
+//       const vendorName = process.env.VENDOR_NAME_SML;
+//       const apiKey = process.env.API_KEY_SML;
+//       const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
+
+//       const payload = {
+//         name: fullName,
+//         phone,
+//         email,
+//         panNumber,
+//         dob: dateOfBirth,
+//         gender,
+//         salary: `${finalSalary}`,
+//         pincode,
+//         jobType: finalJobType,
+//       };
+
+//       try {
+//         const apiResponse = await axios.post(externalApiUrl, payload, {
+//           headers: {
+//             'x-api-key': apiKey,
+//             'Content-Type': 'application/json',
+//           },
+//         });
+
+//         // Save API response to the new collection
+//         const responseLog = new smlResponseLog({
+//           leadId: savedLead._id,
+//           requestPayload: payload,
+//           responseStatus: apiResponse.status,
+//           responseBody: apiResponse.data,
+//         });
+
+//         await responseLog.save();
+//       } catch (error) {
+//         console.error('Error sending lead to external API:', error.message);
+//         await smlResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: payload,
+//           responseStatus: error.response?.status || 500,
+//           responseBody: error.response?.data || { message: 'Unknown error' },
+//         });
+//       }
+//     }
+
+//     // If source is not "Freo", send lead to external API
+//     if (source !== 'FREO') {
+//       const baseUrl = process.env.DEV_URL;
+//       const accessToken = await getAccessToken();
+
+//       // Construct payload for MoneyTap API
+//       const payload = {
+//         emailId: email,
+//         phone,
+//         name: fullName,
+//         panNumber,
+//         dateOfBirth,
+//         gender,
+//         jobType: finalJobType,
+//         homeAddress: {
+//           addressLine1: address || '',
+//           pincode,
+//         },
+//         residenceType: getRandomResidenceType(),
+//         officeAddress: {
+//           addressLine1: address || '',
+//           pincode,
+//         },
+//         incomeInfo: {
+//           declared: finalSalary
+//         },
+//       };
+
+//       try {
+//         const apiResponse = await axios.post(
+//           `${baseUrl}/v3/partner/lead/create`,
+//           payload,
+//           {
+//             headers: {
+//               Accept: 'application/json',
+//               'Content-Type': 'application/json',
+//               Authorization: `Bearer ${accessToken}`,
+//             },
+//           }
+//         );
+
+//         // Save API response to the new collection
+//         const responseLog = new freoResponseLog({
+//           leadId: savedLead._id,
+//           requestPayload: payload,
+//           responseStatus: apiResponse.status,
+//           responseBody: apiResponse.data,
+//         });
+
+//         await responseLog.save();
+//       } catch (error) {
+//         console.error('Error sending lead to MoneyTap API:', error.message);
+//         await freoResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: payload,
+//           responseStatus: error.response?.status || 500,
+//           responseBody: error.response?.data || { message: 'Unknown error' },
+//         });
+//       }
+//     }
+
+//     // If source is not "OVLY", send lead to external API
+//     if (source !== 'OVLY') {
+//       const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
+//       const createLeadApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/create';
+//       const clientId = process.env.OVLY_CLIENT_ID;
+//       const clientKey = process.env.OVLY_CLIENT_KEY;
+
+//       const dedupPayload = new URLSearchParams({
+//         phone_number: phone,
+//         pan: panNumber,
+//         date_of_birth: dateOfBirth,
+//         employement_type: finalJobType,
+//         net_monthly_income: `${finalSalary}`,
+//         name_as_per_pan: fullName,
+//       });
+
+//       const dedupPayloadDB = {
+//         phone_number: phone,
+//         pan: panNumber,
+//         date_of_birth: dateOfBirth,
+//         employement_type: finalJobType,
+//         net_monthly_income: `${finalSalary}`,
+//         name_as_per_pan: fullName,
+//       };
+
+//       try {
+//         const dedupResponse = await axios.post(dedupApiUrl, dedupPayload, {
+//           headers: {
+//             'admin-api-client-id': clientId,
+//             'admin-api-client-key': clientKey,
+//             'Content-Type': 'application/x-www-form-urlencoded',
+//           },
+//         });
+
+//         const dedupData = dedupResponse.data;
+//         console.log("Ovly:", dedupData);
+//         // If lead is fresh (not a duplicate), push to OVLY Lead Create API
+//         if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
+//           console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
+//           const createLeadPayload = new URLSearchParams({
+//             phone_number: phone,
+//             pan: panNumber,
+//             email,
+//             employement_type: finalJobType,
+//             net_monthly_income: `${finalSalary}`,
+//             mode_of_salary: 'ONLINE',
+//             bank_name: 'HDFC',
+//             name_as_per_pan: fullName,
+//             current_residence_pin_code: pincode,
+//             date_of_birth: dateOfBirth,
+//             gender,
+//           });
+
+//           const createLeadPayloadDB = {
+//             phone_number: phone,
+//             pan: panNumber,
+//             email,
+//             employement_type: finalJobType,
+//             net_monthly_income: `${finalSalary}`,
+//             mode_of_salary: 'ONLINE',
+//             bank_name: 'HDFC',
+//             name_as_per_pan: fullName,
+//             current_residence_pin_code: pincode,
+//             date_of_birth: dateOfBirth,
+//             gender,
+//           };
+
+//           const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
+//             headers: {
+//               'admin-api-client-id': clientId,
+//               'admin-api-client-key': clientKey,
+//               'Content-Type': 'application/x-www-form-urlencoded',
+//             },
+//           });
+
+//           console.log('Lead successfully pushed:', leadResponse.data);
+//           // Save lead response in DB
+//           const ovlyLeadLog = new ovlyResponseLog({
+//             leadId: savedLead._id,
+//             requestPayload: createLeadPayloadDB,
+//             responseStatus: leadResponse.data.status,
+//             responseBody: leadResponse.data,
+//           });
+
+//           await ovlyLeadLog.save();
+
+//         } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
+//           console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
+//           const ovlyLeadLog = new ovlyResponseLog({
+//             leadId: savedLead._id,
+//             requestPayload: dedupPayloadDB,
+//             responseStatus: 'duplicate',
+//             responseBody: dedupData,
+//           });
+
+//           await ovlyLeadLog.save();
+//         }
+//       } catch (error) {
+//         console.error('Error in OVLY API integration:', error.response?.data || error.message);
+//         await ovlyResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: dedupPayloadDB,
+//           responseStatus: error.response?.status,
+//           responseBody: error.response?.data || { message: 'Unknown error' },
+//         });
+//       }
+//     }
+
+//     // If source is not "LendingPlate", send lead to external API
+//     if (source !== 'LendingPlate') {
+//       const isMobileValid = await checkMobileExists(phone);
+//       if (!isMobileValid) {
+//         const loanPayload = {
+//           partner_id: process.env.LP_PARTNER_ID,
+//           ref_id: phone,
+//           mobile: phone,
+//           customer_name: fullName,
+//           pancard: panNumber,
+//           dob: formatDate(dateOfBirth),
+//           pincode,
+//           profession: "SAL",
+//           net_mothlyincome: finalSalary,
+//         };
+
+//         await LeadingPlateResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: loanPayload,
+//           responseStatus: "Fail",
+//           responseBody: { "status": "Failed" }
+//         });
+//       } else if (isMobileValid) {
+//         const loanPayload = {
+//           partner_id: process.env.LP_PARTNER_ID,
+//           ref_id: phone,
+//           mobile: phone,
+//           customer_name: fullName,
+//           pancard: panNumber,
+//           dob: formatDate(dateOfBirth),
+//           pincode,
+//           profession: "SAL",
+//           net_mothlyincome: finalSalary,
+//         };
+
+//         const loanSuccess = await processLoanApplication(loanPayload);
+
+//         await LeadingPlateResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: loanPayload,
+//           responseStatus: loanSuccess.Message,
+//           responseBody: loanSuccess
+//         });
+//       }
+//     }
+
+//     // If source is not "ZYPE", send lead to external API
+//     if (source !== 'ZYPE') {
+//       const isEligible = await checkZypeEligibility(phone, panNumber);
+//       console.log(isEligible);
+//       if (isEligible.message === 'REJECT') {
+//         await ZypeResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: {
+//             mobileNumber: phone,
+//             panNumber,
+//             partnerId: process.env.ZYPE_PARTNER_ID,
+//           },
+//           responseStatus: "REJECTED",
+//           responseBody: { status: "REJECTED" },
+//         });
+//       } else if (isEligible.status === 'ACCEPT') {
+//         const zypePayload = {
+//           mobileNumber: phone,
+//           email,
+//           panNumber,
+//           name: fullName,
+//           dob: dateOfBirth,
+//           income: parseInt(finalSalary, 10),
+//           employmentType: 'salaried',
+//           orgName: businessType || "",
+//           partnerId: process.env.ZYPE_PARTNER_ID,
+//           bureauType: 3,
+//         };
+
+//         const zypeResponse = await processZypeApplication(zypePayload);
+//         // console.log(zypeResponse);
+
+
+//         await ZypeResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: zypePayload,
+//           responseStatus: zypeResponse?.status || "Unknown",
+//           responseBody: zypeResponse,
+//         });
+//       }
+//     }
+
+//     // If source is not "FINTIFI", send lead to external API
+//     if (source !== 'FINTIFI') {
+//       const apiKey = process.env.API_KEY_FINTIFI;
+//       const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
+
+//       const payload = {
+//         firstName: fullName.split(' ')[0],
+//         lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+//         phone,
+//         email,
+//         panNumber,
+//         dob: dateOfBirth,
+//         gender,
+//         salary: `${finalSalary}`,
+//         pincode,
+//         jobType: finalJobType,
+//       };
+
+//       try {
+//         const apiResponse = await axios.post(externalApiUrl, payload, {
+//           headers: {
+//             'x-api-key': apiKey,
+//             'Content-Type': 'application/json',
+//           },
+//         });
+
+//         // Save API response to the new collection
+//         const responseLog = new FintifiResponseLog({
+//           leadId: savedLead._id,
+//           requestPayload: payload,
+//           responseStatus: apiResponse.data.success,
+//           responseBody: apiResponse.data,
+//         });
+
+//         await responseLog.save();
+//       } catch (error) {
+//         console.error('Error sending lead to external API:', error);
+//         await FintifiResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: payload,
+//           responseStatus: error.success || 500,
+//           responseBody: error.error || { message: 'Unknown error' },
+//         });
+//       }
+//     }
+
+//     // If source is not "FATAKPAY", send lead to external API
+//     const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
+//     // console.log(validPincodes);
+
+//     if (source !== 'FATAKPAY' && validPincodes.includes(parseInt(pincode))) {
+//       try {
+//         const tokenResponse = await axios.post(
+//           'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
+//           {
+//             username: process.env.FATAKPAY_USERNAME,
+//             password: process.env.FATAKPAY_PASSWORD,
+//           }
+//         );
+
+//         const accessToken = tokenResponse.data.data.token;
+
+//         const eligibilityPayload = {
+//           mobile: phone,
+//           first_name: firstName || fullName.split(' ')[0],
+//           last_name: lastName || fullName.split(' ')[1] || '',
+//           email,
+//           employment_type_id: finalJobType,
+//           pan: panNumber,
+//           dob: dateOfBirth,
+//           pincode,
+//           home_address: address || '',
+//           office_address: address || '',
+//           consent: true,
+//           consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
+//         };
+
+//         const eligibilityResponse = await axios.post(
+//           'https://onboardingapi.fatakpay.com/external-api/v1/emi-insurance-eligibility',
+//           eligibilityPayload,
+//           {
+//             headers: {
+//               Authorization: `Token ${accessToken}`,
+//               'Content-Type': 'application/json',
+//             },
+//           }
+//         );
+
+//         // Step 3: Save Response in Database
+//         await fatakPayResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: eligibilityPayload,
+//           responseStatus: eligibilityResponse.data.status_code,
+//           responseBody: eligibilityResponse.data,
+//         });
+
+//       } catch (error) {
+//         console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
+
+//         await fatakPayResponseLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: eligibilityPayload,
+//           responseStatus: error.response?.status || 500,
+//           responseBody: error.response?.data || { message: 'Unknown error' },
+//         });
+//       }
+//     }
+
+//     if (source !== 'RAMFINCROP') {
+//       const payload = {
+//         mobile: phone,
+//         name: fullName,
+//         loanAmount: finalSalary,
+//         email: email,
+//         employeeType: jobType,
+//         dob: dateOfBirth,
+//         pancard: panNumber
+//       }
+
+//       try {
+//         const response = await axios.post(
+//           'https://www.ramfincorp.com/loanapply/ramfincorp_api/lead_gen/api/v1/create_lead',
+//           payload,
+//           {
+//             headers: {
+//               'Content-Type': 'application/json',
+//               'Authorization': 'Basic cmFtZmluXzQ3YTVjZDcyNWNmYTMwNjA5NGY0MWM2MzNlMWZjNDE2OjRjNzBlYzc1NTc1OGYwMTYxOTVmODM5NzgxMDRhNjAzM2ZhNGExYTU='
+//             }
+//           }
+//         );
+
+//         await ramFinCropLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: payload,
+//           responseStatus: response.data.status,
+//           responseBody: response.data,
+//         });
+
+//         console.log(response.data);
+//       } catch (error) {
+//         console.error('Error creating lead:', error.response ? error.response.data : error.message);
+//         await ramFinCropLog.create({
+//           leadId: savedLead._id,
+//           requestPayload: payload,
+//           responseStatus: error.response?.data.status || 500,
+//           responseBody: error.response?.data || { message: 'Unknown error' },
+//         });
+//       }
+//     }
+
+//     res.status(201).json({
+//       status: 'success',
+//       data: {
+//         lead: savedLead,
+//       },
+//     });
+//   } catch (error) {
+//     console.log(error);
+//     if (error.code === 11000) {
+//       return res.status(409).json({ message: 'Duplicate PAN number' });
+//     }
+//     res.status(500).json({ message: 'Server error', error: error.message });
+//   }
+// };
 
 // Create a lead
 exports.createUATLead = async (req, res) => {
