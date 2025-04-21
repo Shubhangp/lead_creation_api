@@ -249,12 +249,6 @@ function scheduleDelayedLenders(lead, delayedLenders) {
 
 // Send lead to specific lender
 async function sendToLender(lead, lender) {
-  // Extract lead data
-  // const {
-  //   _id, source, fullName, firstName, lastName, phone, email,
-  //   age, dateOfBirth, gender, panNumber, jobType, businessType,
-  //   salary, creditScore, cibilScore, address, pincode, consent
-  // } = lead;
 
   // Create handler map for all lenders
   const lenderHandlers = {
