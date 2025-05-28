@@ -11,6 +11,7 @@ const FintifiResponseLog = require('../models/fintifiResponseLog');
 const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 const fatakPayResponseLog = require('../models/fatakPayResponseLog');
 const ramFinCropLog = require('../models/ramFinCropLogModel');
+const vrindaLog = require('../models/VrindaFintechResponseLog');
 const DistributionRule = require('../models/distributionRuleModel');
 const { sendLeadsToLender } = require('../utils/sendLeads');
 const xlsx = require('xlsx');
@@ -259,7 +260,8 @@ async function sendToLender(lead, lender) {
     'ZYPE': sendToZYPE,
     'FINTIFI': sendToFINTIFI,
     'FATAKPAY': sendToFATAKPAY,
-    'RAMFINCROP': sendToRAMFINCROP
+    'RAMFINCROP': sendToRAMFINCROP,
+    'VRINDAFINTECH': sendToVrindaFintech
   };
 
   // Call the appropriate handler for the lender
@@ -281,14 +283,14 @@ async function getDistributionRules(source) {
 
     const defaultRules = {
       FREO: {
-        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP'],
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'VRINDAFINTECH'],
         delayed: [
           { lender: 'SML', delayMinutes: 1440 },
           { lender: 'FINTIFI', delayMinutes: 1440 }
         ]
       },
       SML: {
-        immediate: ['FREO', 'OVLY'],
+        immediate: ['FREO', 'OVLY', 'VRINDAFINTECH'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -298,7 +300,7 @@ async function getDistributionRules(source) {
         ]
       },
       OVLY: {
-        immediate: ['FREO', 'SML'],
+        immediate: ['FREO', 'SML', 'VRINDAFINTECH'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -308,7 +310,7 @@ async function getDistributionRules(source) {
         ]
       },
       default: {
-        immediate: ['FREO', 'SML', 'OVLY'],
+        immediate: ['FREO', 'SML', 'OVLY', 'VRINDAFINTECH'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -324,7 +326,7 @@ async function getDistributionRules(source) {
     console.error('Error fetching distribution rules:', error);
 
     return {
-      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP'],
+      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'VRINDAFINTECH'],
       delayed: [
         { lender: 'SML', delayMinutes: 1440 },
         { lender: 'FINTIFI', delayMinutes: 1440 }
@@ -470,7 +472,7 @@ async function sendToOVLY(lead) {
   const dedupPayload = new URLSearchParams({
     phone_number: phone,
     pan: panNumber,
-    date_of_birth: formatToYYYYMMDD(dateOfBirth),
+    date_of_birth: null,
     employement_type: jobType,
     net_monthly_income: `${salary}`,
     name_as_per_pan: fullName,
@@ -508,7 +510,7 @@ async function sendToOVLY(lead) {
         bank_name: 'HDFC',
         name_as_per_pan: fullName,
         current_residence_pin_code: pincode,
-        date_of_birth: dateOfBirth,
+        date_of_birth: null,
         gender,
       });
 
@@ -522,7 +524,7 @@ async function sendToOVLY(lead) {
         bank_name: 'HDFC',
         name_as_per_pan: fullName,
         current_residence_pin_code: pincode,
-        date_of_birth: dateOfBirth,
+        date_of_birth: null,
         gender,
       };
 
@@ -833,6 +835,61 @@ async function sendToRAMFINCROP(lead) {
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
     });
+    return errorLog;
+  }
+}
+
+async function sendToVrindaFintech(lead) {
+  const {
+    _id, fullName, phone, email, panNumber, pincode,
+    jobType, salary,
+  } = lead;
+
+  const payload = {
+    full_name: fullName,
+    mobile: phone,
+    mobile_verification_flag: "0",
+    email,
+    pancard: panNumber,
+    pincode,
+    income_type: jobType,
+    purpose_of_loan: 'Purchase',
+    monthly_salary: salary,
+    loan_amount: salary,
+    customer_lead_id: _id.toString(),
+  };
+
+  try {
+    const response = await axios.post(
+      'https://preprod-api.vrindafintech.com/marketing-push-data/',
+      payload,
+      {
+        headers: {
+          'Auth': 'd95af2f34ac136f6941307556bda40f881c6349cfc380c07b010a068474f40e8',
+          'Username': 'RATECUT_30042025',
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const responseLog = await vrindaLog.create({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: response.status,
+      responseBody: response.data,
+    });
+
+    return responseLog;
+  } catch (error) {
+    console.error('Error creating lead for VrindaFintech:', error.response?.data || error.message);
+    const errorLog = await vrindaLog.create({
+      leadId: _id,
+      requestPayload: payload,
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || { message: 'Unknown error' },
+    });
+
     return errorLog;
   }
 }
