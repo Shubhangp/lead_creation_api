@@ -472,7 +472,7 @@ async function sendToOVLY(lead) {
   const dedupPayload = new URLSearchParams({
     phone_number: phone,
     pan: panNumber,
-    date_of_birth: null,
+    // date_of_birth: formatToYYYYMMDD(dateOfBirth),
     employement_type: jobType,
     net_monthly_income: `${salary}`,
     name_as_per_pan: fullName,
@@ -510,7 +510,7 @@ async function sendToOVLY(lead) {
         bank_name: 'HDFC',
         name_as_per_pan: fullName,
         current_residence_pin_code: pincode,
-        date_of_birth: null,
+        // date_of_birth: null,
         gender,
       });
 
