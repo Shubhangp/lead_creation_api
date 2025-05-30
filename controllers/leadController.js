@@ -260,8 +260,7 @@ async function sendToLender(lead, lender) {
     'ZYPE': sendToZYPE,
     'FINTIFI': sendToFINTIFI,
     'FATAKPAY': sendToFATAKPAY,
-    'RAMFINCROP': sendToRAMFINCROP,
-    'VRINDAFINTECH': sendToVrindaFintech
+    'RAMFINCROP': sendToRAMFINCROP
   };
 
   // Call the appropriate handler for the lender
@@ -283,14 +282,14 @@ async function getDistributionRules(source) {
 
     const defaultRules = {
       FREO: {
-        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'VRINDAFINTECH'],
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP'],
         delayed: [
           { lender: 'SML', delayMinutes: 1440 },
           { lender: 'FINTIFI', delayMinutes: 1440 }
         ]
       },
       SML: {
-        immediate: ['FREO', 'OVLY', 'VRINDAFINTECH'],
+        immediate: ['FREO', 'OVLY'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -300,7 +299,7 @@ async function getDistributionRules(source) {
         ]
       },
       OVLY: {
-        immediate: ['FREO', 'SML', 'VRINDAFINTECH'],
+        immediate: ['FREO', 'SML'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -310,7 +309,7 @@ async function getDistributionRules(source) {
         ]
       },
       default: {
-        immediate: ['FREO', 'SML', 'OVLY', 'VRINDAFINTECH'],
+        immediate: ['FREO', 'SML', 'OVLY'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -326,7 +325,7 @@ async function getDistributionRules(source) {
     console.error('Error fetching distribution rules:', error);
 
     return {
-      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'VRINDAFINTECH'],
+      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP'],
       delayed: [
         { lender: 'SML', delayMinutes: 1440 },
         { lender: 'FINTIFI', delayMinutes: 1440 }
