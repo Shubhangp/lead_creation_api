@@ -16,6 +16,7 @@ const DistributionRule = require('../models/distributionRuleModel');
 const { sendLeadsToLender } = require('../utils/sendLeads');
 const xlsx = require('xlsx');
 const path = require('path');
+const mmmResponseLog = require('../models/mmmResponseLog');
 
 
 // Helper Function to get a random residenceType
@@ -260,7 +261,8 @@ async function sendToLender(lead, lender) {
     'ZYPE': sendToZYPE,
     'FINTIFI': sendToFINTIFI,
     'FATAKPAY': sendToFATAKPAY,
-    'RAMFINCROP': sendToRAMFINCROP
+    'RAMFINCROP': sendToRAMFINCROP,
+    "MyMoneyMantra": sendToMyMoneyMantra
   };
 
   // Call the appropriate handler for the lender
@@ -282,14 +284,14 @@ async function getDistributionRules(source) {
 
     const defaultRules = {
       FREO: {
-        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP'],
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra'],
         delayed: [
           { lender: 'SML', delayMinutes: 1440 },
           { lender: 'FINTIFI', delayMinutes: 1440 }
         ]
       },
       SML: {
-        immediate: ['FREO', 'OVLY'],
+        immediate: ['FREO', 'OVLY', 'MyMoneyMantra'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -299,7 +301,7 @@ async function getDistributionRules(source) {
         ]
       },
       OVLY: {
-        immediate: ['FREO', 'SML'],
+        immediate: ['FREO', 'SML', 'MyMoneyMantra'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -309,7 +311,7 @@ async function getDistributionRules(source) {
         ]
       },
       default: {
-        immediate: ['FREO', 'SML', 'OVLY'],
+        immediate: ['FREO', 'SML', 'OVLY', 'MyMoneyMantra'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -325,7 +327,7 @@ async function getDistributionRules(source) {
     console.error('Error fetching distribution rules:', error);
 
     return {
-      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP'],
+      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra'],
       delayed: [
         { lender: 'SML', delayMinutes: 1440 },
         { lender: 'FINTIFI', delayMinutes: 1440 }
@@ -891,6 +893,162 @@ async function sendToVrindaFintech(lead) {
 
     return errorLog;
   }
+}
+
+async function sendToMyMoneyMantra(lead) {
+  console.log("MyMoneyMantra API Call", lead);
+
+  const {
+    _id, fullName, phone, email, dateOfBirth,
+    gender, pincode, jobType, panNumber,
+  } = lead;
+
+  try {
+    // Step 1: Get Access Token
+    const authResponse = await axios.post(
+      'https://uat.mymoneymantra.com/api/jwt/v1/authenticate',
+      {
+        clientId: process.env.MMM_CLIENT_ID || 'RATECUT',
+        clientSecret: process.env.MMM_CLIENT_SECRET || 'mmm@2025#rateCut@UAT'
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const { accessToken } = authResponse.data;
+
+    // Step 2: Prepare Lead Payload
+    const leadPayload = {
+      personal: {
+        fullName: fullName,
+        gender: mapGenderToMMM(gender),
+        dob: formatDate(dateOfBirth),
+        bankConsent: true,
+        pan: panNumber,
+        whatsappConsent: true,
+        mmmConsent: true
+      },
+      contact: {
+        mobile: [
+          {
+            addressTypeMasterId: "1",
+            mobile: phone,
+            isDefault: "Y"
+          }
+        ],
+        email: [
+          {
+            addressTypeMasterId: "5",
+            email: email,
+            isDefault: "Y"
+          }
+        ]
+      },
+      work: {
+        applicantType: mapJobTypeToMMM(jobType)
+      },
+      productId: 17,
+      utmMedium: process.env.MMM_UTM_MEDIUM || "cpd",
+      utmSource: process.env.MMM_UTM_SOURCE || "affliate_ratecut",
+      utmCampaign: process.env.MMM_UTM_CAMPAIGN || "affliate_ratecut",
+      address: [
+        {
+          addressTypeMasterId: "1000000001",
+          pincode: pincode
+        }
+      ],
+    };
+
+    // Step 3: Send Lead to MMM
+    const correlationId = `MMM_${_id}_${Date.now()}`;
+
+    const leadResponse = await axios.post(
+      'https://uat.mymoneymantra.com/orchestration/api/v2/lead',
+      leadPayload,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+          'correlationId': correlationId,
+          'channelName': process.env.MMM_CHANNEL_NAME || 'MMM_API_WEB',
+          'channelSource': process.env.MMM_CHANNEL_SOURCE || 'RateCut_B2C',
+          'sync': 'false',
+          'documentAsync': 'true'
+        }
+      }
+    );
+
+    // Step 4: Save Response in Database
+    const responseLog = await mmmResponseLog.create({
+      leadId: _id,
+      correlationId: correlationId,
+      requestPayload: leadPayload,
+      responseStatus: leadResponse.status,
+      responseBody: leadResponse.data
+    });
+
+    console.log('MyMoneyMantra Lead Created:', leadResponse.data);
+    return responseLog;
+
+  } catch (error) {
+    console.error('Error in MyMoneyMantra API:', error.response?.data || error.message);
+
+    // Prepare payload for error logging
+    const leadPayload = {
+      personal: {
+        fullName: fullName,
+        mobile: phone,
+        email: email,
+        pan: panNumber || '',
+        dob: formatDate(dateOfBirth)
+      },
+      pincode: pincode
+    };
+
+    // Save error log
+    const errorLog = await mmmResponseLog.create({
+      leadId: _id,
+      requestPayload: leadPayload,
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || {
+        message: error.message || 'Unknown error',
+        error: true
+      },
+      errorDetails: {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      }
+    });
+
+    return errorLog;
+  }
+}
+
+// Map gender to MMM master values
+function mapGenderToMMM(gender) {
+  const genderMap = {
+    'male': '1000000001',
+    'm': '1000000001',
+    'female': '1000000002',
+    'f': '1000000002'
+  };
+  return genderMap[gender?.toLowerCase()] || '1000000001';
+}
+
+// Map job type to MMM applicant type
+function mapJobTypeToMMM(jobType) {
+  const jobTypeMap = {
+    'salaried': '1000000004',
+    'self-employed': '1000000001',
+    'self employed': '1000000001',
+    'professional': '1000000002',
+    'defence': '1000000008'
+  };
+  return jobTypeMap[jobType?.toLowerCase()] || '1000000004';
 }
 
 // exports.createLead = async (req, res) => {
