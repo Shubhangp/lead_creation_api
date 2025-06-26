@@ -964,6 +964,8 @@ async function sendToMyMoneyMantra(lead) {
 
     // Step 3: Send Lead to MMM
     const correlationId = `MMM_${_id}_${Date.now()}`;
+    console.log("correlationId:", correlationId);
+    
 
     const leadResponse = await axios.post(
       'https://uat.mymoneymantra.com/orchestration/api/v2/lead',
