@@ -905,6 +905,9 @@ async function sendToMyMoneyMantra(lead) {
 
   try {
     // Step 1: Get Access Token
+    const correlationId = `MMM_${_id}_${Date.now()}`;
+    console.log("correlationId:", correlationId);
+    
     const authResponse = await axios.post(
       'https://uat.mymoneymantra.com/api/jwt/v1/authenticate',
       {
@@ -913,13 +916,16 @@ async function sendToMyMoneyMantra(lead) {
       },
       {
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'correlationId': correlationId,
+          'appId': 'MMMWEBAPP'
         }
       }
     );
-
+    console.log(authResponse.data);
+    
     const { accessToken } = authResponse.data;
-
+    
     // Step 2: Prepare Lead Payload
     const leadPayload = {
       personal: {
@@ -962,10 +968,7 @@ async function sendToMyMoneyMantra(lead) {
       ],
     };
 
-    // Step 3: Send Lead to MMM
-    const correlationId = `MMM_${_id}_${Date.now()}`;
-    console.log("correlationId:", correlationId);
-    
+    // Step 3: Send Lead to MMM    
 
     const leadResponse = await axios.post(
       'https://uat.mymoneymantra.com/orchestration/api/v2/lead',
