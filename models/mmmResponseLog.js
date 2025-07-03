@@ -33,9 +33,4 @@ const mmmResponseLogSchema = new mongoose.Schema({
     }
 });
 
-// Index for faster queries
-mmmResponseLogSchema.index({ leadId: 1 });
-mmmResponseLogSchema.index({ mmmLeadId: 1 });
-mmmResponseLogSchema.index({ createdAt: -1 });
-
 module.exports = mongoose.model('MMMResponseLog', mmmResponseLogSchema);

@@ -896,7 +896,7 @@ async function sendToVrindaFintech(lead) {
 }
 
 async function sendToMyMoneyMantra(lead) {
-  console.log("MyMoneyMantra API Call", lead);
+  console.log("MyMoneyMantra API Call899", lead);
 
   const {
     _id, fullName, phone, email, dateOfBirth,
@@ -906,8 +906,8 @@ async function sendToMyMoneyMantra(lead) {
   try {
     // Step 1: Get Access Token
     const correlationId = `MMM_${_id}_${Date.now()}`;
-    console.log("correlationId:", correlationId);
-    
+    console.log("correlationId:909", correlationId);
+
     const authResponse = await axios.post(
       'https://uat.mymoneymantra.com/api/jwt/v1/authenticate',
       {
@@ -922,7 +922,7 @@ async function sendToMyMoneyMantra(lead) {
         }
       }
     );
-    console.log(authResponse.data);
+    console.log("925",authResponse.data);
     
     const { accessToken } = authResponse.data;
     
