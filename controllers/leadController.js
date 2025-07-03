@@ -980,6 +980,7 @@ async function sendToMyMoneyMantra(lead) {
           'correlationId': correlationId,
           'channelName': process.env.MMM_CHANNEL_NAME || 'MMM_API_WEB',
           'channelSource': process.env.MMM_CHANNEL_SOURCE || 'RateCut_B2C',
+          'appId': 'MMMWEBAPP',
           'sync': 'false',
           'documentAsync': 'true'
         }
