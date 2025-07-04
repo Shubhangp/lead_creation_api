@@ -131,6 +131,15 @@ const formatDate = (dateString) => {
   return date.toLocaleDateString('en-GB');
 };
 
+const formatDatewithdash = (dateString) => {
+  const date = new Date(dateString);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  
+  return `${day}-${month}-${year}`;
+};
+
 function formatToYYYYMMDD(dateString) {
   const date = new Date(dateString);
   return date.toISOString().split('T')[0];
@@ -905,7 +914,7 @@ async function sendToMyMoneyMantra(lead) {
 
   try {
     // Step 1: Get Access Token
-    const correlationId = `MMM_${_id}_${Date.now()}`;
+    const correlationId = `MMM_${Date.now()}`;
     console.log("correlationId:909", correlationId);
 
     const authResponse = await axios.post(
@@ -931,7 +940,7 @@ async function sendToMyMoneyMantra(lead) {
       personal: {
         fullName: fullName,
         gender: mapGenderToMMM(gender),
-        dob: formatDate(dateOfBirth),
+        dob: formatDatewithdash(dateOfBirth),
         bankConsent: true,
         pan: panNumber,
         whatsappConsent: true,
@@ -1009,7 +1018,7 @@ async function sendToMyMoneyMantra(lead) {
         mobile: phone,
         email: email,
         pan: panNumber || '',
-        dob: formatDate(dateOfBirth)
+        dob: formatDatewithdash(dateOfBirth)
       },
       pincode: pincode
     };
