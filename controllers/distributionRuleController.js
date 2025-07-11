@@ -24,7 +24,7 @@ exports.getAllDistributionRules = async (req, res) => {
 exports.getDistributionRuleBySource = async (req, res) => {
   try {
     const { source } = req.params;
-    const rule = await DistributionRule.findOne({ source: source.toUpperCase() });
+    const rule = await DistributionRule.findOne({ source: source });
     
     if (!rule) {
       return res.status(404).json({
@@ -62,7 +62,7 @@ exports.createDistributionRule = async (req, res) => {
     }
     
     // Check if rule already exists
-    const existingRule = await DistributionRule.findOne({ source: source.toUpperCase() });
+    const existingRule = await DistributionRule.findOne({ source: source });
     if (existingRule) {
       return res.status(409).json({
         status: 'fail',
@@ -72,7 +72,7 @@ exports.createDistributionRule = async (req, res) => {
     
     // Create new rule
     const newRule = await DistributionRule.create({
-      source: source.toUpperCase(),
+      source: source,
       rules,
       active,
       lastUpdatedBy: req.user ? req.user.email : 'system'
@@ -106,7 +106,7 @@ exports.updateDistributionRule = async (req, res) => {
     updateData.lastUpdatedBy = req.user ? req.user.email : 'system';
     
     const updatedRule = await DistributionRule.findOneAndUpdate(
-      { source: source.toUpperCase() },
+      { source: source },
       updateData,
       { new: true, runValidators: true }
     );
@@ -137,7 +137,7 @@ exports.updateDistributionRule = async (req, res) => {
 exports.deleteDistributionRule = async (req, res) => {
   try {
     const { source } = req.params;
-    const deletedRule = await DistributionRule.findOneAndDelete({ source: source.toUpperCase() });
+    const deletedRule = await DistributionRule.findOneAndDelete({ source: source });
     
     if (!deletedRule) {
       return res.status(404).json({

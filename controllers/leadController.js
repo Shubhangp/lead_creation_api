@@ -293,10 +293,15 @@ async function getDistributionRules(source) {
 
     const defaultRules = {
       FREO: {
-        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra'],
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'MyMoneyMantra'],
         delayed: [
-          { lender: 'SML', delayMinutes: 1440 },
-          { lender: 'FINTIFI', delayMinutes: 1440 }
+          { lender: 'SML', delayMinutes: 1440 }
+        ]
+      },
+      MyMoneyMantra: {
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY',],
+        delayed: [
+          { lender: 'SML', delayMinutes: 1440 }
         ]
       },
       SML: {
@@ -918,10 +923,10 @@ async function sendToMyMoneyMantra(lead) {
     console.log("correlationId:909", correlationId);
 
     const authResponse = await axios.post(
-      'https://uat.mymoneymantra.com/api/jwt/v1/authenticate',
+      'https://api2.mymoneymantra.com/api/jwt/v1/authenticate',
       {
-        clientId: process.env.MMM_CLIENT_ID || 'RATECUT',
-        clientSecret: process.env.MMM_CLIENT_SECRET || 'mmm@2025#rateCut@UAT'
+        clientId: process.env.MMM_CLIENT_ID || 'RateCut',
+        clientSecret: process.env.MMM_CLIENT_SECRET || 'mmm@2025#rateCut@Pr0d'
       },
       {
         headers: {
@@ -980,7 +985,7 @@ async function sendToMyMoneyMantra(lead) {
     // Step 3: Send Lead to MMM    
 
     const leadResponse = await axios.post(
-      'https://uat.mymoneymantra.com/orchestration/api/v2/lead',
+      'https://api2.mymoneymantra.com/orchestration/api/affiliate/lead',
       leadPayload,
       {
         headers: {
@@ -991,7 +996,8 @@ async function sendToMyMoneyMantra(lead) {
           'channelSource': process.env.MMM_CHANNEL_SOURCE || 'RateCut_B2C',
           'appId': 'MMMWEBAPP',
           'sync': 'false',
-          'documentAsync': 'true'
+          'documentAsync': 'true',
+          'affiliate': true
         }
       }
     );
