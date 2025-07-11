@@ -5,7 +5,6 @@ const distributionRuleSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
-    uppercase: true,
     trim: true
   },
   active: {
@@ -15,12 +14,12 @@ const distributionRuleSchema = new mongoose.Schema({
   rules: {
     immediate: [{
       type: String,
-      enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP']
+      enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra']
     }],
     delayed: [{
       lender: {
         type: String,
-        enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP']
+        enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra']
       },
       delayMinutes: {
         type: Number,
