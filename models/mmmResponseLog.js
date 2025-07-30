@@ -6,6 +6,9 @@ const mmmResponseLogSchema = new mongoose.Schema({
         ref: 'Lead',
         // required: true,
     },
+    source: {
+        type: String
+    },
     correlationId: {
         type: String,
         // required: true,

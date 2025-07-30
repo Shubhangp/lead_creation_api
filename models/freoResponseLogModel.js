@@ -6,6 +6,9 @@ const freoResponseLogSchema = new mongoose.Schema({
     ref: 'Lead',
     // required: true,
   },
+  source: {
+    type: String
+  },
   requestPayload: {
     type: Object,
     // required: true,

@@ -355,7 +355,7 @@ async function sendToSML(lead) {
   console.log("SML", lead);
   const {
     _id, fullName, phone, email, dateOfBirth,
-    gender, panNumber, jobType, salary, pincode
+    gender, panNumber, jobType, salary, pincode, source
   } = lead;
 
   const vendorName = "ratecut";
@@ -385,6 +385,7 @@ async function sendToSML(lead) {
     // Save API response to the new collection
     const responseLog = new smlResponseLog({
       leadId: _id,
+      source: source,
       requestPayload: payload,
       responseStatus: apiResponse.status,
       responseBody: apiResponse.data,
@@ -396,6 +397,7 @@ async function sendToSML(lead) {
     console.error('Error sending lead to SML API:', error.message);
     const errorLog = await smlResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: payload,
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
@@ -408,7 +410,7 @@ async function sendToFreo(lead) {
   console.log("FREO", lead);
   const {
     _id, fullName, phone, email, dateOfBirth,
-    gender, panNumber, jobType, salary, address, pincode
+    gender, panNumber, jobType, salary, address, pincode, source
   } = lead;
 
   const baseUrl = process.env.DEV_URL;
@@ -453,6 +455,7 @@ async function sendToFreo(lead) {
     // Save API response to the new collection
     const responseLog = new freoResponseLog({
       leadId: _id,
+      source: source,
       requestPayload: payload,
       responseStatus: apiResponse.status,
       responseBody: apiResponse.data,
@@ -464,6 +467,7 @@ async function sendToFreo(lead) {
     console.error('Error sending lead to Freo API:', error.message);
     const errorLog = await freoResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: payload,
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
@@ -476,7 +480,7 @@ async function sendToOVLY(lead) {
   console.log("OVLY", lead);
   const {
     _id, fullName, phone, email, dateOfBirth,
-    gender, panNumber, jobType, salary, pincode
+    gender, panNumber, jobType, salary, pincode, source
   } = lead;
 
   const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
@@ -554,6 +558,7 @@ async function sendToOVLY(lead) {
       // Save lead response in DB
       const ovlyLeadLog = new ovlyResponseLog({
         leadId: _id,
+        source: source,
         requestPayload: createLeadPayloadDB,
         responseStatus: leadResponse.data.status,
         responseBody: leadResponse.data,
@@ -564,6 +569,7 @@ async function sendToOVLY(lead) {
     } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
       const ovlyLeadLog = new ovlyResponseLog({
         leadId: _id,
+        source: source,
         requestPayload: dedupPayloadDB,
         responseStatus: 'duplicate',
         responseBody: dedupData,
@@ -576,6 +582,7 @@ async function sendToOVLY(lead) {
     console.error('Error in OVLY API integration:', error.response?.data || error.message);
     const errorLog = await ovlyResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: dedupPayloadDB || {},
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
@@ -587,7 +594,7 @@ async function sendToOVLY(lead) {
 async function sendToLendingPlate(lead) {
   console.log("LP", lead);
   const {
-    _id, fullName, phone, panNumber, dateOfBirth, pincode, salary
+    _id, fullName, phone, panNumber, dateOfBirth, pincode, salary, source
   } = lead;
 
   const isMobileValid = await checkMobileExists(phone);
@@ -607,6 +614,7 @@ async function sendToLendingPlate(lead) {
   if (!isMobileValid) {
     const responseLog = await LeadingPlateResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: loanPayload,
       responseStatus: "Fail",
       responseBody: { "status": "Failed" }
@@ -616,6 +624,7 @@ async function sendToLendingPlate(lead) {
     const loanSuccess = await processLoanApplication(loanPayload);
     const responseLog = await LeadingPlateResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: loanPayload,
       responseStatus: loanSuccess.Message,
       responseBody: loanSuccess
@@ -627,7 +636,7 @@ async function sendToLendingPlate(lead) {
 async function sendToZYPE(lead) {
   console.log("ZYPE", lead);
   const {
-    _id, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary
+    _id, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary, source
   } = lead;
 
   const isEligible = await checkZypeEligibility(phone, panNumber);
@@ -635,6 +644,7 @@ async function sendToZYPE(lead) {
   if (isEligible.message === 'REJECT') {
     const responseLog = await ZypeResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: {
         mobileNumber: phone,
         panNumber,
@@ -661,6 +671,7 @@ async function sendToZYPE(lead) {
     const zypeResponse = await processZypeApplication(zypePayload);
     const responseLog = await ZypeResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: zypePayload,
       responseStatus: zypeResponse?.status || "Unknown",
       responseBody: zypeResponse,
@@ -672,7 +683,7 @@ async function sendToZYPE(lead) {
 async function sendToFINTIFI(lead) {
   console.log("FINTIFI", lead);
   const {
-    _id, fullName, phone, email, dateOfBirth, gender, panNumber, jobType, salary, pincode
+    _id, fullName, phone, email, dateOfBirth, gender, panNumber, jobType, salary, pincode, source
   } = lead;
 
   const apiKey = process.env.API_KEY_FINTIFI;
@@ -702,6 +713,7 @@ async function sendToFINTIFI(lead) {
     // Save API response to the new collection
     const responseLog = new FintifiResponseLog({
       leadId: _id,
+      source: source,
       requestPayload: payload,
       responseStatus: apiResponse.data.success,
       responseBody: apiResponse.data,
@@ -713,6 +725,7 @@ async function sendToFINTIFI(lead) {
     console.error('Error sending lead to FINTIFI API:', error);
     const errorLog = await FintifiResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: payload,
       responseStatus: error.success || 500,
       responseBody: error.error || { message: 'Unknown error' },
@@ -725,7 +738,7 @@ async function sendToFATAKPAY(lead) {
   console.log("FATAKPAY", lead);
   const {
     _id, fullName, firstName, lastName, phone, email, dateOfBirth,
-    gender, address, pincode, jobType, panNumber
+    gender, address, pincode, jobType, panNumber, source
   } = lead;
 
   // Check if pincode is valid for FATAKPAY
@@ -775,6 +788,7 @@ async function sendToFATAKPAY(lead) {
     // Save Response in Database
     const responseLog = await fatakPayResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: eligibilityPayload,
       responseStatus: eligibilityResponse.data.status_code,
       responseBody: eligibilityResponse.data,
@@ -799,6 +813,7 @@ async function sendToFATAKPAY(lead) {
 
     const errorLog = await fatakPayResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: eligibilityPayload || {},
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
@@ -809,7 +824,7 @@ async function sendToFATAKPAY(lead) {
 
 async function sendToRAMFINCROP(lead) {
   const {
-    _id, fullName, phone, email, dateOfBirth, panNumber, jobType, salary
+    _id, fullName, phone, email, dateOfBirth, panNumber, jobType, salary, source
   } = lead;
 
   const payload = {
@@ -837,6 +852,7 @@ async function sendToRAMFINCROP(lead) {
 
     const responseLog = await ramFinCropLog.create({
       leadId: _id,
+      source: source,
       requestPayload: payload,
       responseStatus: response.status,
       responseBody: response.data,
@@ -846,6 +862,7 @@ async function sendToRAMFINCROP(lead) {
     console.error('Error creating lead for RAMFINCROP:', error.response ? error.response.data : error.message);
     const errorLog = await ramFinCropLog.create({
       leadId: _id,
+      source: source,
       requestPayload: payload,
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
@@ -914,7 +931,7 @@ async function sendToMyMoneyMantra(lead) {
 
   const {
     _id, fullName, phone, email, dateOfBirth,
-    gender, pincode, jobType, panNumber,
+    gender, pincode, jobType, panNumber, salary, source
   } = lead;
 
   try {
@@ -968,7 +985,8 @@ async function sendToMyMoneyMantra(lead) {
         ]
       },
       work: {
-        applicantType: mapJobTypeToMMM(jobType)
+        applicantType: mapJobTypeToMMM(jobType),
+        netMonthlyIncome: salary
       },
       productId: 17,
       utmMedium: process.env.MMM_UTM_MEDIUM || "cpd",
@@ -1005,6 +1023,7 @@ async function sendToMyMoneyMantra(lead) {
     // Step 4: Save Response in Database
     const responseLog = await mmmResponseLog.create({
       leadId: _id,
+      source: source,
       correlationId: correlationId,
       requestPayload: leadPayload,
       responseStatus: leadResponse.status,
@@ -1032,6 +1051,7 @@ async function sendToMyMoneyMantra(lead) {
     // Save error log
     const errorLog = await mmmResponseLog.create({
       leadId: _id,
+      source: source,
       requestPayload: leadPayload,
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || {
