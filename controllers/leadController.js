@@ -358,26 +358,30 @@ async function sendToSML(lead) {
     gender, panNumber, jobType, salary, pincode, source
   } = lead;
 
-  const vendorName = "ratecut";
-  const apiKey = "td3gH20O6OjccEadCa8+9g==";
-  const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
+  const username = "7606a78263df4f5";
+  const password = "c04515f890b68a5";
+  const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
 
   const payload = {
-    name: fullName,
-    phone,
-    email,
-    panNumber,
-    dob: formatToYYYYMMDD(dateOfBirth),
+    mobile_number: phone,
+    first_name: fullName.split(' ')[0],
+    last_name: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
     gender,
-    salary: `${salary}`,
-    pincode,
-    jobType,
+    pan_number: panNumber,
+    dob: formatToYYYYMMDD(dateOfBirth),
+    net_monthly_income: `${salary}`,
+    email,
+    pin_code: pincode,
+    profession: jobType,
+    channel_partner: 'Ratecut',
   };
+
+  const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
 
   try {
     const apiResponse = await axios.post(externalApiUrl, payload, {
       headers: {
-        'x-api-key': apiKey,
+        Authorization: `Basic ${authHeader}`,
         'Content-Type': 'application/json',
       },
     });
