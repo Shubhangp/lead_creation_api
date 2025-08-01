@@ -385,6 +385,8 @@ async function sendToSML(lead) {
       },
     });
 
+    console.log(apiResponse);
+
     // Save API response to the new collection
     const responseLog = new smlResponseLog({
       leadId: _id,
