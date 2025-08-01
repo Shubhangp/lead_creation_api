@@ -399,7 +399,7 @@ async function sendToSML(lead) {
     await responseLog.save();
     return responseLog;
   } catch (error) {
-    console.error('Error sending lead to SML API:', error.message);
+    console.error('Error sending lead to SML API:', error);
     const errorLog = await smlResponseLog.create({
       leadId: _id,
       source: source,
