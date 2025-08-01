@@ -376,12 +376,11 @@ async function sendToSML(lead) {
     channel_partner: 'Ratecut',
   };
 
-  const authHeader = Buffer.from(`${username}:${password}`).toString('base64');
 
   try {
     const apiResponse = await axios.post(externalApiUrl, payload, {
       headers: {
-        Authorization: `Basic ${authHeader}`,
+        Authorization: `Basic <base64(${username}:${password})>`,
         'Content-Type': 'application/json',
       },
     });
