@@ -136,7 +136,7 @@ const formatDatewithdash = (dateString) => {
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const year = date.getFullYear();
-  
+
   return `${day}-${month}-${year}`;
 };
 
@@ -376,16 +376,14 @@ async function sendToSML(lead) {
     channel_partner: 'Ratecut',
   };
 
-
   try {
     const apiResponse = await axios.post(externalApiUrl, payload, {
       headers: {
-        Authorization: `Basic <base64(${username}:${password})>`,
         'Content-Type': 'application/json',
+        'Authorization': 'Basic NzYwNmE3ODI2M2RmNGY1OmMwNDUxNWY4OTBiNjhhNQ==',
+        'Cookie': 'full_name=Guest; sid=Guest; system_user=no; user_id=Guest; user_image='
       },
     });
-
-    console.log(apiResponse);
 
     // Save API response to the new collection
     const responseLog = new smlResponseLog({
@@ -958,10 +956,10 @@ async function sendToMyMoneyMantra(lead) {
         }
       }
     );
-    console.log("925",authResponse.data);
-    
+    console.log("925", authResponse.data);
+
     const { accessToken } = authResponse.data;
-    
+
     // Step 2: Prepare Lead Payload
     const leadPayload = {
       personal: {
