@@ -145,8 +145,8 @@ const sendToSML = async (leads) => {
   const formattedLeads = leads.map(lead => ({
     // name: `${lead["First Name"]} ${lead["Last Name"]}`,
     mobile_number: `${lead.phone}`,
-    first_name: fullName.split(' ')[0],
-    last_name: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+    first_name: lead.fullName.split(' ')[0],
+    last_name: lead.fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
     gender: lead.gender,
     pan_number: lead.panNumber,
     dob: convertExcelDateToJSDate(lead.dateOfBirth),

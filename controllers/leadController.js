@@ -1717,17 +1717,17 @@ exports.processFile = async (req, res) => {
     const savedLeads = await Lead.insertMany(
       leads.map((lead) => ({
         source: "FREO_FEB",
-        fullName: `${lead["First Name"]} ${lead["Last Name"]}`,
-        firstName: lead["First Name"],
-        lastName: lead["Last Name"],
-        phone: `${lead.Phone}`,
-        email: lead.Email,
-        dateOfBirth: convertExcelDateToJSDate(lead.DOB, lead.PAN),
-        gender: lead.Gender,
-        panNumber: lead.PAN,
-        jobType: lead.EmploymentType,
-        salary: `${lead.Salary}`,
-        address: `${lead.Pincode}`,
+        fullName: lead.fullName,
+        firstName: lead.fullName.split(' ')[0],
+        lastName: lead.fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+        phone: `${lead.phone}`,
+        email: lead.email,
+        dateOfBirth: convertExcelDateToJSDate(lead.DOB, lead.panNumber),
+        gender: lead.gender,
+        panNumber: lead.panNumber,
+        jobType: lead.jobType,
+        salary: `${lead.salary}`,
+        address: `${lead.address}`,
         pincode: `${lead.Pincode}`,
         consent: true
       }))
