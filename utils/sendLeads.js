@@ -119,7 +119,7 @@ const sendToFreo = async (leads) => {
       });
       console.log("Freo", lead._id);
     } catch (error) {
-      console.log("Freo", lead._id);      
+      console.log("Freo", lead._id);
       console.error('XLSX Error sending lead to MoneyTap API:', error);
       logs.push({
         leadId: lead._id,
@@ -140,18 +140,21 @@ const sendToFreo = async (leads) => {
 const sendToSML = async (leads) => {
   const vendorName = "ratecut";
   const apiKey = "td3gH20O6OjccEadCa8+9g==";
-  const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
+  const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
 
   const formattedLeads = leads.map(lead => ({
-    name: `${lead["First Name"]} ${lead["Last Name"]}`,
-    phone: `${lead.Phone}`,
-    email: lead.Email,
-    panNumber: lead.PAN,
-    dob: convertExcelDateToJSDate(lead.DOB),
-    gender: lead.Gender,
-    salary: `${lead.Salary}`,
-    pincode: `${lead.Pincode}`,
-    jobType: lead.EmploymentType,
+    // name: `${lead["First Name"]} ${lead["Last Name"]}`,
+    mobile_number: `${lead.phone}`,
+    first_name: fullName.split(' ')[0],
+    last_name: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+    gender: lead.gender,
+    pan_number: lead.panNumber,
+    dob: convertExcelDateToJSDate(lead.dateOfBirth),
+    net_monthly_income: `${lead.salary}`,
+    email: lead.email,
+    pin_code: `${lead.pincode}`,
+    profession: lead.jobType,
+    channel_partner: 'Ratecut',
   }));
 
   try {
@@ -160,8 +163,9 @@ const sendToSML = async (leads) => {
       { formattedLeads },
       {
         headers: {
-          'x-api-key': apiKey,
           'Content-Type': 'application/json',
+          'Authorization': 'Basic NzYwNmE3ODI2M2RmNGY1OmMwNDUxNWY4OTBiNjhhNQ==',
+          'Cookie': 'full_name=Guest; sid=Guest; system_user=no; user_id=Guest; user_image='
         },
       }
     );
@@ -169,6 +173,7 @@ const sendToSML = async (leads) => {
     // Save response logs in bulk
     const responseLogs = formattedLeads.map((lead, index) => ({
       leadId: lead._id,
+      source: lead.source,
       requestPayload: lead,
       responseStatus: apiResponse.status,
       responseBody: apiResponse.data[index] || apiResponse.data,
@@ -180,6 +185,7 @@ const sendToSML = async (leads) => {
 
     const errorLogs = formattedLeads.map(lead => ({
       leadId: lead._id,
+      source: lead.source,
       requestPayload: lead,
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
@@ -577,7 +583,7 @@ const sendToFatakpay = async (leads) => {
           }
         );
 
-        console.log("XLSX FatakPay:",eligibilityResponse.data);        
+        console.log("XLSX FatakPay:", eligibilityResponse.data);
 
         logs.push({
           leadId: lead._id,
