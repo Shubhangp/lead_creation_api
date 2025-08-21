@@ -767,7 +767,7 @@ async function sendToFATAKPAY(lead) {
     const eligibilityPayload = {
       mobile: phone,
       first_name: firstName || fullName.split(' ')[0],
-      last_name: lastName || fullName.split(' ')[1] || '',
+      last_name: lastName || fullName.split(' ')[1] || fullName.split(' ')[0],
       email,
       employment_type_id: jobType,
       pan: panNumber,
@@ -1712,17 +1712,15 @@ exports.processFile = async (req, res) => {
     const leads = readFile(filePath);
 
     console.log(`📊 Total leads found: ${leads.length}`);
-
+    console.log(leads[0]);
     // Save leads to MongoDB
     const savedLeads = await Lead.insertMany(
       leads.map((lead) => ({
         source: "FREO_FEB",
-        fullName: lead.fullName,
-        firstName: lead.fullName.split(' ')[0],
-        lastName: lead.fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+        fullName: `${lead.fullName}`,
         phone: `${lead.phone}`,
         email: lead.email,
-        dateOfBirth: convertExcelDateToJSDate(lead.DOB, lead.panNumber),
+        dateOfBirth: lead.dateOfBirth,
         gender: lead.gender,
         panNumber: lead.panNumber,
         jobType: lead.jobType,
