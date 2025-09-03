@@ -644,6 +644,10 @@ async function sendToZYPE(lead) {
     _id, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary, source
   } = lead;
 
+  if(jobType === "SELF_EMPLOYED"){
+    return;
+  }
+
   const isEligible = await checkZypeEligibility(phone, panNumber);
 
   if (isEligible.message === 'REJECT') {
