@@ -26,6 +26,14 @@ const leadSchema = new mongoose.Schema({
         required: true,
         validate: {
             validator: async function (phone) {
+                // Define sources that should skip uniqueness check
+                const sourcesWithoutUniquenessCheck = ['FREO_FEB'];
+                
+                // Skip uniqueness check for specific sources
+                if (sourcesWithoutUniquenessCheck.includes(this.source)) {
+                    return true;
+                }
+
                 const thirtyDaysAgo = new Date();
                 thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -68,6 +76,14 @@ const leadSchema = new mongoose.Schema({
         match: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
         validate: {
             validator: async function (panNumber) {
+                // Define sources that should skip uniqueness check
+                const sourcesWithoutUniquenessCheck = ['FREO_FEB'];
+                
+                // Skip uniqueness check for specific sources
+                if (sourcesWithoutUniquenessCheck.includes(this.source)) {
+                    return true;
+                }
+
                 const thirtyDaysAgo = new Date();
                 thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -119,8 +135,14 @@ const leadSchema = new mongoose.Schema({
 leadSchema.index({ phone: 1, createdAt: 1 });
 leadSchema.index({ panNumber: 1, createdAt: 1 });
 
-// Static method to check phone uniqueness (alternative approach)
-leadSchema.statics.isPhoneUniqueInLast30Days = async function(phone, excludeId = null) {
+// Updated static methods with source awareness
+leadSchema.statics.isPhoneUniqueInLast30Days = async function(phone, excludeId = null, source = null) {
+  // Skip uniqueness check for specific sources
+  const sourcesWithoutUniquenessCheck = ['FREO_FEB'];
+  if (source && sourcesWithoutUniquenessCheck.includes(source)) {
+    return true;
+  }
+
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   
@@ -137,8 +159,13 @@ leadSchema.statics.isPhoneUniqueInLast30Days = async function(phone, excludeId =
   return !existingLead;
 };
 
-// Static method to check PAN number uniqueness
-leadSchema.statics.isPanUniqueInLast30Days = async function(panNumber, excludeId = null) {
+leadSchema.statics.isPanUniqueInLast30Days = async function(panNumber, excludeId = null, source = null) {
+  // Skip uniqueness check for specific sources
+  const sourcesWithoutUniquenessCheck = ['FREO_FEB'];
+  if (source && sourcesWithoutUniquenessCheck.includes(source)) {
+    return true;
+  }
+
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   
@@ -155,13 +182,38 @@ leadSchema.statics.isPanUniqueInLast30Days = async function(panNumber, excludeId
   return !existingLead;
 };
 
-// Generic method to check any field uniqueness within 30 days
-leadSchema.statics.isFieldUniqueInLast30Days = async function(fieldName, fieldValue, excludeId = null) {
+// Enhanced generic method with source awareness
+leadSchema.statics.isFieldUniqueInLast30Days = async function(fieldName, fieldValue, excludeId = null, source = null) {
+  // Skip uniqueness check for specific sources
+  const sourcesWithoutUniquenessCheck = ['FREO_FEB'];
+  if (source && sourcesWithoutUniquenessCheck.includes(source)) {
+    return true;
+  }
+
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   
   const query = {
     [fieldName]: fieldValue,
+    createdAt: { $gte: thirtyDaysAgo }
+  };
+  
+  if (excludeId) {
+    query._id = { $ne: excludeId };
+  }
+  
+  const existingLead = await this.findOne(query);
+  return !existingLead;
+};
+
+// Alternative: Source-specific uniqueness (only check within same source)
+leadSchema.statics.isPhoneUniqueInSourceLast30Days = async function(phone, source, excludeId = null) {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  
+  const query = {
+    phone: phone,
+    source: source,
     createdAt: { $gte: thirtyDaysAgo }
   };
   

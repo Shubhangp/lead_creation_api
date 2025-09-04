@@ -352,14 +352,11 @@ async function getDistributionRules(source) {
 
 // Individual lender handlers
 async function sendToSML(lead) {
-  console.log("SML", lead);
   const {
     _id, fullName, phone, email, dateOfBirth,
     gender, panNumber, jobType, salary, pincode, source
   } = lead;
-  console.log("360:",lead);
-  const username = "7606a78263df4f5";
-  const password = "c04515f890b68a5";
+
   const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
 
   const payload = {
