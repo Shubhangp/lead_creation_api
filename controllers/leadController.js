@@ -363,16 +363,16 @@ async function sendToSML(lead) {
   const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
 
   const payload = {
-    mobile_number: phone,
+    mobile_number: String(phone),
     first_name: fullName.split(' ')[0],
     last_name: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
-    gender,
-    pan_number: panNumber,
+    gender: String(gender),
+    pan_number: String(panNumber),
     dob: formatToYYYYMMDD(dateOfBirth),
-    net_monthly_income: `${salary}`,
-    email,
-    pin_code: pincode,
-    profession: jobType,
+    net_monthly_income: String(salary),
+    email: String(email),
+    pin_code: String(pincode),
+    profession: String(jobType),
     channel_partner: 'Ratecut',
   };
 
@@ -385,7 +385,7 @@ async function sendToSML(lead) {
       },
     });
 
-    console.log("SML response:",apiResponse);
+    console.log("SML response:", apiResponse.data);
 
     // Save API response to the new collection
     const responseLog = new smlResponseLog({
@@ -644,7 +644,7 @@ async function sendToZYPE(lead) {
     _id, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary, source
   } = lead;
 
-  if(jobType === "SELF_EMPLOYED"){
+  if (jobType === "SELF_EMPLOYED") {
     return;
   }
 
@@ -1730,7 +1730,7 @@ exports.processFile = async (req, res) => {
         jobType: lead.jobType,
         salary: `${lead.salary}`,
         address: `${lead.address}`,
-        pincode: `${lead.Pincode}`,
+        pincode: `${lead.pincode}`,
         consent: true
       }))
     );
@@ -1741,7 +1741,7 @@ exports.processFile = async (req, res) => {
     }));
 
     // Send to selected lenders
-    const sendLeadsPromises = lenders.map((lender) => sendLeadsToLender(lender, leadsWithIds));
+    const sendLeadsPromises = leadsWithIds.map((lead) => sendToSML(lead));
     const responses = await Promise.all(sendLeadsPromises);
 
     deleteFile(filePath);

@@ -138,29 +138,33 @@ const sendToFreo = async (leads) => {
 
 // Function to send lead to SML
 const sendToSML = async (leads) => {
-  const vendorName = "ratecut";
-  const apiKey = "td3gH20O6OjccEadCa8+9g==";
   const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
 
+  for(const lead of leads) {
+    console.log("mobile_number:", lead.phone);
+  }
+
   const formattedLeads = leads.map(lead => ({
-    // name: `${lead["First Name"]} ${lead["Last Name"]}`,
-    mobile_number: `${lead.phone}`,
+    mobile_number: lead.phone,
     first_name: lead.fullName.split(' ')[0],
-    last_name: lead.fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+    last_name: lead.fullName.split(' ')[1] ? lead.fullName.split(' ')[1] : lead.fullName.split(' ')[0],
     gender: lead.gender,
     pan_number: lead.panNumber,
     dob: convertExcelDateToJSDate(lead.dateOfBirth),
     net_monthly_income: `${lead.salary}`,
     email: lead.email,
-    pin_code: `${lead.pincode}`,
+    pin_code: lead.pincode,
     profession: lead.jobType,
     channel_partner: 'Ratecut',
   }));
 
+  // Add 100ms delay before making the API call
+  await new Promise(resolve => setTimeout(resolve, 100));
+
   try {
     const apiResponse = await axios.post(
       externalApiUrl,
-      { formattedLeads },
+      formattedLeads,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -181,8 +185,7 @@ const sendToSML = async (leads) => {
 
     await smlResponseLog.insertMany(responseLogs);
   } catch (error) {
-    console.error('XLSX Error sending leads to SML API:', error.message);
-
+    console.error('XLSX Error sending leads to SML API:', error);
     const errorLogs = formattedLeads.map(lead => ({
       leadId: lead._id,
       source: lead.source,
