@@ -357,7 +357,7 @@ async function sendToSML(lead) {
     _id, fullName, phone, email, dateOfBirth,
     gender, panNumber, jobType, salary, pincode, source
   } = lead;
-
+  console.log("360:",lead);
   const username = "7606a78263df4f5";
   const password = "c04515f890b68a5";
   const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
@@ -1735,13 +1735,13 @@ exports.processFile = async (req, res) => {
       }))
     );
 
-    const leadsWithIds = savedLeads.map((savedLead, index) => ({
-      ...leads[index],
-      _id: savedLead._id,
-    }));
+    // const leadsWithIds = savedLeads.map((savedLead, index) => ({
+    //   ...leads[index],
+    //   _id: savedLead._id,
+    // }));
 
     // Send to selected lenders
-    const sendLeadsPromises = leadsWithIds.map((lead) => sendToSML(lead));
+    const sendLeadsPromises = savedLeads.map((lead) => sendToSML(lead));
     const responses = await Promise.all(sendLeadsPromises);
 
     deleteFile(filePath);
