@@ -13,7 +13,6 @@ const fatakPayResponseLog = require('../models/fatakPayResponseLog');
 const ramFinCropLog = require('../models/ramFinCropLogModel');
 const vrindaLog = require('../models/VrindaFintechResponseLog');
 const DistributionRule = require('../models/distributionRuleModel');
-const { sendLeadsToLender } = require('../utils/sendLeads');
 const xlsx = require('xlsx');
 const path = require('path');
 const mmmResponseLog = require('../models/mmmResponseLog');
@@ -1698,6 +1697,28 @@ const convertExcelDateToJSDate = (excelDate, PAN) => {
   return jsDate.toISOString().split("T")[0];
 };
 
+// Bulk lead passing function
+const sendLeadsToLender = async (lender, leads) => {
+  switch (lender) {
+    case "SML":
+      return Promise.all(leads.map((lead) => sendToSML(lead)));
+    case "FREO":
+      return Promise.all(leads.map((lead) => sendToFreo(lead)));
+    case "ZYPE":
+      return Promise.all(leads.map((lead) => sendToZYPE(lead)));
+    case "LendingPlate":
+      return Promise.all(leads.map((lead) => sendToLendingPlate(lead)));
+    case "FINTIFI":
+      return Promise.all(leads.map((lead) => sendToFINTIFI(lead)));
+    case "FATAKPAY":
+      return Promise.all(leads.map((lead) => sendToFATAKPAY(lead)));
+    case "OVLY":
+      return Promise.all(leads.map((lead) => sendToOVLY(lead)));
+    default:
+      return { lender, status: "Failed", message: "Lender not configured" };
+  }
+};
+
 exports.processFile = async (req, res) => {
   try {
     if (!req.file) {
@@ -1714,6 +1735,7 @@ exports.processFile = async (req, res) => {
 
     console.log(`📊 Total leads found: ${leads.length}`);
     console.log(leads[0]);
+
     // Save leads to MongoDB
     const savedLeads = await Lead.insertMany(
       leads.map((lead) => ({
@@ -1732,18 +1754,36 @@ exports.processFile = async (req, res) => {
       }))
     );
 
-    // const leadsWithIds = savedLeads.map((savedLead, index) => ({
-    //   ...leads[index],
-    //   _id: savedLead._id,
-    // }));
+    // Send leads to selected lenders individually
+    const allResponses = {};
 
-    // Send to selected lenders
-    const sendLeadsPromises = savedLeads.map((lead) => sendToSML(lead));
-    const responses = await Promise.all(sendLeadsPromises);
+    for (const lender of lenders) {
+      console.log(`📤 Sending ${savedLeads.length} leads to ${lender}`);
+      try {
+        const lenderResponses = await sendLeadsToLender(lender, savedLeads);
+        allResponses[lender] = {
+          status: "success",
+          totalLeads: savedLeads.length,
+          responses: lenderResponses
+        };
+      } catch (error) {
+        console.error(`Error sending leads to ${lender}:`, error);
+        allResponses[lender] = {
+          status: "error",
+          message: error.message,
+          totalLeads: savedLeads.length
+        };
+      }
+    }
 
     deleteFile(filePath);
 
-    res.status(200).json({ message: "Leads processed successfully", responses });
+    res.status(200).json({
+      message: "Leads processed successfully",
+      totalLeads: savedLeads.length,
+      lenderResponses: allResponses
+    });
+
   } catch (error) {
     console.error("Error processing leads:", error);
     res.status(500).json({ message: "Internal server error" });
