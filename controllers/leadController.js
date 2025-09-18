@@ -1,4 +1,5 @@
 const Lead = require('../models/leadModel');
+const ExcelLead = require('../models/ExcelLeadModel');
 const { readFile, deleteFile } = require("../utils/readFile");
 const smlResponseLog = require('../models/smlResponseLogModel');
 const freoResponseLog = require('../models/freoResponseLogModel');
@@ -1737,7 +1738,7 @@ exports.processFile = async (req, res) => {
     console.log(leads[0]);
 
     // Save leads to MongoDB
-    const savedLeads = await Lead.insertMany(
+    const savedLeads = await ExcelLead.insertMany(
       leads.map((lead) => ({
         source: req.body.source,
         fullName: `${lead.fullName}`,
