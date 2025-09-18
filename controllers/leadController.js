@@ -1739,7 +1739,7 @@ exports.processFile = async (req, res) => {
     // Save leads to MongoDB
     const savedLeads = await Lead.insertMany(
       leads.map((lead) => ({
-        source: "FREO_FEB",
+        source: req.body.source,
         fullName: `${lead.fullName}`,
         phone: `${lead.phone}`,
         email: lead.email,
