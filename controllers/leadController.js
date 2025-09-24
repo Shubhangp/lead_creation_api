@@ -748,11 +748,11 @@ async function sendToFATAKPAY(lead) {
   } = lead;
 
   // Check if pincode is valid for FATAKPAY
-  const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
-  if (!validPincodes.includes(parseInt(pincode))) {
-    console.log(`Pincode ${pincode} not valid for FATAKPAY. Skipping.`);
-    return null;
-  }
+  // const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
+  // if (!validPincodes.includes(parseInt(pincode))) {
+  //   console.log(`Pincode ${pincode} not valid for FATAKPAY. Skipping.`);
+  //   return null;
+  // }
 
   try {
     const tokenResponse = await axios.post(
