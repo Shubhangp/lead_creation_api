@@ -14,9 +14,10 @@ const fatakPayResponseLog = require('../models/fatakPayResponseLog');
 const ramFinCropLog = require('../models/ramFinCropLogModel');
 const vrindaLog = require('../models/VrindaFintechResponseLog');
 const DistributionRule = require('../models/distributionRuleModel');
+const mmmResponseLog = require('../models/mmmResponseLog');
+const rcsService = require('../services/rcsService');
 const xlsx = require('xlsx');
 const path = require('path');
-const mmmResponseLog = require('../models/mmmResponseLog');
 
 
 // Helper Function to get a random residenceType
@@ -200,9 +201,16 @@ exports.createLead = async (req, res) => {
 
     const distributionRules = await getDistributionRules(source);
 
-    await processLenders(savedLead, distributionRules.immediate, 'immediate');
+    const immediateSuccessfulLenders = await processLenders(savedLead, distributionRules.immediate, 'immediate');
 
     scheduleDelayedLenders(savedLead, distributionRules.delayed);
+
+    // If no delayed lenders, schedule RCS based on immediate results only
+    if (distributionRules.delayed.length === 0) {
+      setTimeout(async () => {
+        await rcsService.scheduleRCSForLead(savedLead._id, immediateSuccessfulLenders);
+      }, 5000);
+    }
 
     res.status(201).json({
       status: 'success',
@@ -221,13 +229,21 @@ exports.createLead = async (req, res) => {
 
 // Process lenders based on group (immediate or delayed)
 async function processLenders(lead, lenders, type) {
+  const successfulLenders = [];
+  
   for (const lender of lenders) {
     const lenderName = typeof lender === 'string' ? lender : lender.lender;
 
     // Don't send to the same lender that created the lead
     if (lenderName !== lead.source) {
       try {
-        await sendToLender(lead, lenderName);
+        const result = await sendToLender(lead, lenderName);
+        
+        // Check if lender API was successful
+        if (isLenderSuccess(result, lenderName)) {
+          successfulLenders.push(lenderName);
+        }
+        
         // Log successful distribution
         console.log(`Lead ${lead._id} sent to ${lenderName} (${type})`);
       } catch (error) {
@@ -235,26 +251,61 @@ async function processLenders(lead, lenders, type) {
       }
     }
   }
+
+  // Store successful lenders for RCS scheduling
+  if (type === 'immediate') {
+    // Store immediate successful lenders in lead for later processing
+    await Lead.findByIdAndUpdate(lead._id, { 
+      $set: { immediateSuccessfulLenders: successfulLenders }
+    });
+  }
+  
+  return successfulLenders;
 }
 
 // Schedule delayed lenders using a job queue
 function scheduleDelayedLenders(lead, delayedLenders) {
+  let delayedSuccessCount = 0;
+  const totalDelayedLenders = delayedLenders.filter(lender => lender.lender !== lead.source).length;
+  
   for (const lenderConfig of delayedLenders) {
     if (lenderConfig.lender !== lead.source) {
       const delayMs = lenderConfig.delayMinutes * 60 * 1000;
 
       setTimeout(async () => {
         try {
-          await sendToLender(lead, lenderConfig.lender);
+          const result = await sendToLender(lead, lenderConfig.lender);
+          
+          if (isLenderSuccess(result, lenderConfig.lender)) {
+            delayedSuccessCount++;
+          }
+          
           console.log(`Delayed lead ${lead._id} sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
+          
+          // Check if this is the last delayed lender
+          if (delayedSuccessCount === totalDelayedLenders || 
+              (Date.now() - lead.createdAt.getTime()) > (24 * 60 * 60 * 1000)) { // 24 hours timeout
+            await scheduleRCSAfterAllLenders(lead._id);
+          }
         } catch (error) {
           console.error(`Error sending delayed lead to ${lenderConfig.lender}:`, error.message);
+          
+          // Still check if this is the last attempt
+          delayedSuccessCount++;
+          if (delayedSuccessCount === totalDelayedLenders) {
+            await scheduleRCSAfterAllLenders(lead._id);
+          }
         }
       }, delayMs);
 
       // Log scheduled job
       console.log(`Scheduled lead ${lead._id} to be sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
     }
+  }
+
+  // If no delayed lenders, schedule RCS immediately after processing immediate lenders
+  if (totalDelayedLenders === 0) {
+    setTimeout(() => scheduleRCSAfterAllLenders(lead._id), 5000); // 5 second delay
   }
 }
 
@@ -348,6 +399,129 @@ async function getDistributionRules(source) {
       ]
     };
   }
+}
+
+// If lender response indicates success
+function isLenderSuccess(result, lenderName) {
+  if (!result) return false;
+  
+  const successCriteria = {
+    'SML': (result) => result.responseBody?.message === 'Lead created successfully',
+    'FREO': (result) => result.responseBody?.success === true,
+    'OVLY': (result) => result.responseStatus === 'success' && result.responseBody?.isDuplicateLead === "false",
+    'LendingPlate': (result) => result.responseStatus === 'Success',
+    'ZYPE': (result) => result.responseStatus === 'ACCEPT' || result.responseBody?.status === 'ACCEPT',
+    'FINTIFI': (result) => result.responseStatus === 200,
+    'FATAKPAY': (result) => result.responseStatus === 200 || result.responseStatus === '200',
+    'RAMFINCROP': (result) => result.responseStatus === 'success',
+    'MyMoneyMantra': (result) => result.responseStatus === 200 || result.responseStatus === 201
+  };
+
+  const checkSuccess = successCriteria[lenderName];
+  return checkSuccess ? checkSuccess(result) : false;
+}
+
+// Schedule RCS after all lenders have been processed
+async function scheduleRCSAfterAllLenders(leadId) {
+  try {
+    const lead = await Lead.findById(leadId);
+    if (!lead) return;
+
+    // Get all successful lenders from database logs
+    const allSuccessfulLenders = await getAllSuccessfulLendersForLead(leadId);
+    
+    // Schedule RCS based on results
+    await rcsService.scheduleRCSForLead(leadId, allSuccessfulLenders);
+    
+    console.log(`RCS scheduled for lead ${leadId} with ${allSuccessfulLenders.length} successful lenders`);
+  } catch (error) {
+    console.error('Error scheduling RCS after all lenders:', error);
+  }
+}
+
+// Helper function to get successful lenders from all log collections
+async function getAllSuccessfulLendersForLead(leadId) {
+  const successfulLenders = [];
+  
+  try {
+    // Check SML
+    const smlResult = await smlResponseLog.findOne({ 
+      leadId, 
+      'responseBody.message': 'Lead created successfully'
+    });
+    if (smlResult) successfulLenders.push('SML');
+
+    // Check FREO  
+    const freoResult = await freoResponseLog.findOne({ 
+      leadId, 
+      'responseBody.success': true
+    });
+    if (freoResult) successfulLenders.push('FREO');
+
+    // Check OVLY
+    const ovlyResult = await ovlyResponseLog.findOne({ 
+      leadId, 
+      responseStatus: 'success',
+      'responseBody.isDuplicateLead': "false"
+    });
+    if (ovlyResult) successfulLenders.push('OVLY');
+
+    // Check LendingPlate
+    const lpResult = await LeadingPlateResponseLog.findOne({ 
+      leadId, 
+      responseStatus: 'Success'
+    });
+    if (lpResult) successfulLenders.push('LendingPlate');
+
+    // Check ZYPE
+    const zygeResult = await ZypeResponseLog.findOne({ 
+      leadId, 
+      $or: [
+        { responseStatus: 'ACCEPT' },
+        { 'responseBody.status': 'ACCEPT' }
+      ]
+    });
+    if (zygeResult) successfulLenders.push('ZYPE');
+
+    // Check FINTIFI
+    const fintifiResult = await FintifiResponseLog.findOne({ 
+      leadId, 
+      responseStatus: 200
+    });
+    if (fintifiResult) successfulLenders.push('FINTIFI');
+
+    // Check FATAKPAY
+    const fatakResult = await fatakPayResponseLog.findOne({ 
+      leadId, 
+      $or: [
+        { responseStatus: 200 },
+        { responseStatus: '200' }
+      ]
+    });
+    if (fatakResult) successfulLenders.push('FATAKPAY');
+
+    // Check RAMFINCROP
+    const ramResult = await ramFinCropLog.findOne({ 
+      leadId, 
+      responseStatus: 'success'
+    });
+    if (ramResult) successfulLenders.push('RAMFINCROP');
+
+    // Check MyMoneyMantra
+    const mmmResult = await mmmResponseLog.findOne({ 
+      leadId, 
+      $or: [
+        { responseStatus: 200 },
+        { responseStatus: 201 }
+      ]
+    });
+    if (mmmResult) successfulLenders.push('MyMoneyMantra');
+
+  } catch (error) {
+    console.error('Error getting successful lenders:', error);
+  }
+
+  return successfulLenders;
 }
 
 // Individual lender handlers

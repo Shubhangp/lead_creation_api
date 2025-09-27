@@ -5,6 +5,8 @@ const leadsRouter = require('./routes/leadRoutes');
 const apiKeyRoutes = require('./routes/apiKeyRoutes');
 const formRouter = require('./routes/formRoutes');
 const distributionRuleRouter = require('./routes/distributionRuleRoutes');
+const rcsRouter = require('./routes/rcsRoutes');
+const rcsScheduler = require('./scheduler/rcsScheduler');
 
 const app = express();
 if (process.env.NODE_ENV === 'development') {
@@ -30,5 +32,8 @@ app.use('/api/v1/leads', leadsRouter);
 app.use('/api/v1/api-keys', apiKeyRoutes);
 app.use('/api/v1/loan-form', formRouter);
 app.use('/api/v1/distribution-rules', distributionRuleRouter);
+app.use('/api/v1/rcs', rcsRouter);
+
+rcsScheduler.init();
 
 module.exports = app;
