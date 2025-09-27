@@ -51,7 +51,7 @@ exports.getDistributionRuleBySource = async (req, res) => {
 // Create a new distribution rule
 exports.createDistributionRule = async (req, res) => {
   try {
-    const { source, rules, active = true } = req.body;
+    const { source, rules, active = true, rcsConfig } = req.body;
     
     // Validate required fields
     if (!source || !rules || !rules.immediate || !rules.delayed) {
@@ -70,13 +70,21 @@ exports.createDistributionRule = async (req, res) => {
       });
     }
     
-    // Create new rule
-    const newRule = await DistributionRule.create({
+    // Prepare rule data
+    const ruleData = {
       source: source,
       rules,
       active,
       lastUpdatedBy: req.user ? req.user.email : 'system'
-    });
+    };
+    
+    // Add rcsConfig if provided
+    if (rcsConfig) {
+      ruleData.rcsConfig = rcsConfig;
+    }
+    
+    // Create new rule
+    const newRule = await DistributionRule.create(ruleData);
     
     res.status(201).json({
       status: 'success',
@@ -97,11 +105,13 @@ exports.createDistributionRule = async (req, res) => {
 exports.updateDistributionRule = async (req, res) => {
   try {
     const { source } = req.params;
-    const { rules, active } = req.body;
+    const { rules, active, rcsConfig } = req.body;
     
     const updateData = {};
     if (rules) updateData.rules = rules;
     if (active !== undefined) updateData.active = active;
+    if (rcsConfig) updateData.rcsConfig = rcsConfig;
+    
     updateData.lastUpdated = Date.now();
     updateData.lastUpdatedBy = req.user ? req.user.email : 'system';
     
