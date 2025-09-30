@@ -36,7 +36,7 @@ const rcsQueueSchema = new mongoose.Schema({
   attempts: {
     type: Number,
     default: 0,
-    max: 3
+    max: 1
   },
   sentAt: {
     type: Date
