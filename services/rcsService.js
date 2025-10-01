@@ -15,17 +15,17 @@ class RCSService {
   isWithinOperatingHours(startTime = '10:00', endTime = '19:00') {
     const now = new Date();
     const istTime = new Date(now.toLocaleString("en-US", { timeZone: this.timezone }));
-    
+
     const currentHour = istTime.getHours();
     const currentMinute = istTime.getMinutes();
     const currentTimeInMinutes = currentHour * 60 + currentMinute;
-    
+
     const [startHour, startMinute] = startTime.split(':').map(Number);
     const [endHour, endMinute] = endTime.split(':').map(Number);
-    
+
     const startTimeInMinutes = startHour * 60 + startMinute;
     const endTimeInMinutes = endHour * 60 + endMinute;
-    
+
     return currentTimeInMinutes >= startTimeInMinutes && currentTimeInMinutes <= endTimeInMinutes;
   }
 
@@ -36,10 +36,10 @@ class RCSService {
     const now = new Date();
     const tomorrow = new Date(now);
     tomorrow.setDate(now.getDate() + 1);
-    
+
     const [hour, minute] = startTime.split(':').map(Number);
     tomorrow.setHours(hour, minute, 0, 0);
-    
+
     // Convert to IST
     const istTomorrow = new Date(tomorrow.toLocaleString("en-US", { timeZone: this.timezone }));
     return istTomorrow;
@@ -187,9 +187,9 @@ class RCSService {
    */
   async queueRCS(leadId, phone, rcsType, lenderName = null, priority = null, delayDays = 0) {
     try {
-      const distributionRule = await DistributionRule.findOne({ 
-        source: { $exists: true }, 
-        active: true 
+      const distributionRule = await DistributionRule.findOne({
+        source: { $exists: true },
+        active: true
       });
 
       const operatingHours = distributionRule?.rcsConfig?.operatingHours || {
@@ -198,7 +198,7 @@ class RCSService {
       };
 
       let scheduledTime = new Date();
-      
+
       // Add delay days if specified
       if (delayDays > 0) {
         scheduledTime.setDate(scheduledTime.getDate() + delayDays);
@@ -222,7 +222,7 @@ class RCSService {
 
       await rcsQueueEntry.save();
       console.log(`RCS queued for lead ${leadId}, scheduled at ${scheduledTime}`);
-      
+
       return rcsQueueEntry;
     } catch (error) {
       console.error('Error queuing RCS:', error);
@@ -245,16 +245,16 @@ class RCSService {
       for (const message of pendingMessages) {
         try {
           let payload;
-          
+
           if (message.rcsType === 'LENDER_SUCCESS') {
             payload = this.generateLenderSuccessPayload(
-              message.phone, 
-              message.lenderName, 
+              message.phone,
+              message.lenderName,
               message.leadId
             );
           } else if (message.rcsType === 'ZET_CAMPAIGN') {
             payload = this.generateZetCampaignPayload(
-              message.phone, 
+              message.phone,
               message.leadId
             );
           }
@@ -272,7 +272,7 @@ class RCSService {
 
             // Log successful RCS
             await this.logRCS(message, payload, result.status, result.data, true);
-            
+
             console.log(`RCS sent successfully for lead ${message.leadId._id}`);
           } else {
             if (message.attempts >= 3) {
@@ -283,14 +283,14 @@ class RCSService {
 
             // Log failed RCS
             await this.logRCS(message, payload, result.status, result.error, false, result.error);
-            
+
             console.error(`RCS failed for lead ${message.leadId._id}:`, result.error);
           }
 
           await message.save();
         } catch (error) {
           console.error(`Error processing RCS for lead ${message.leadId._id}:`, error);
-          
+
           message.attempts += 1;
           if (message.attempts >= 3) {
             message.status = 'FAILED';
@@ -340,9 +340,9 @@ class RCSService {
         throw new Error('Lead not found');
       }
 
-      const distributionRule = await DistributionRule.findOne({ 
-        source: lead.source, 
-        active: true 
+      const distributionRule = await DistributionRule.findOne({
+        source: lead.source,
+        active: true
       });
 
       if (!distributionRule?.rcsConfig?.enabled) {
@@ -356,11 +356,11 @@ class RCSService {
         // No successful lenders - send ZET campaign
         if (zetCampaign.enabled) {
           await this.queueRCS(
-            leadId, 
-            lead.phone, 
-            'ZET_CAMPAIGN', 
-            null, 
-            null, 
+            leadId,
+            lead.phone,
+            'ZET_CAMPAIGN',
+            null,
+            null,
             zetCampaign.dayDelay
           );
         }
@@ -373,8 +373,8 @@ class RCSService {
             lead.phone,
             'LENDER_SUCCESS',
             lenderConfig.lender,
-            lenderConfig.priority,
-            lenderConfig.rcsDayDelay
+            1,
+            0
           );
         }
       } else {
@@ -385,15 +385,42 @@ class RCSService {
           .sort((a, b) => a.priority - b.priority)
           .slice(0, 2);
 
-        for (const lenderConfig of sortedSuccessfulLenders) {
-          await this.queueRCS(
-            leadId,
-            lead.phone,
-            'LENDER_SUCCESS',
-            lenderConfig.lender,
-            lenderConfig.priority,
-            lenderConfig.rcsDayDelay
-          );
+        // for (const lenderConfig of sortedSuccessfulLenders) {
+        //   await this.queueRCS(
+        //     leadId,
+        //     lead.phone,
+        //     'LENDER_SUCCESS',
+        //     lenderConfig.lender,
+        //     lenderConfig.priority,
+        //     lenderConfig.rcsDayDelay
+        //   );
+        // }
+        // Multiple successful lenders - adjust priorities and delays
+        for (let i = 0; i < Math.min(sortedSuccessfulLenders.length, 2); i++) {
+          const lenderConfig = sortedSuccessfulLenders[i];
+
+          if (i === 0) {
+            // First successful lender becomes P1 - send immediately
+            await this.queueRCS(
+              leadId,
+              lead.phone,
+              'LENDER_SUCCESS',
+              lenderConfig.lender,
+              1,
+              0 // Send immediately for P1
+            );
+          } else if (i === 1) {
+            // Second successful lender becomes P2 - use P1's original delay
+            const p1OriginalDelay = lenderPriority.find(lp => lp.priority === 1)?.rcsDayDelay || 1;
+            await this.queueRCS(
+              leadId,
+              lead.phone,
+              'LENDER_SUCCESS',
+              lenderConfig.lender,
+              2,
+              p1OriginalDelay // Use P1's delay for P2
+            );
+          }
         }
       }
     } catch (error) {
