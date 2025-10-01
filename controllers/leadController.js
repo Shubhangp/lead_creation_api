@@ -461,8 +461,7 @@ async function getAllSuccessfulLendersForLead(leadId) {
     // Check OVLY
     const ovlyResult = await ovlyResponseLog.findOne({ 
       leadId, 
-      responseStatus: 'success',
-      'responseBody.isDuplicateLead': "false"
+      responseStatus: 'success'
     });
     if (ovlyResult) successfulLenders.push('OVLY');
 
@@ -520,7 +519,7 @@ async function getAllSuccessfulLendersForLead(leadId) {
   } catch (error) {
     console.error('Error getting successful lenders:', error);
   }
-
+  console.log("RCS lenders list:", successfulLenders);
   return successfulLenders;
 }
 
