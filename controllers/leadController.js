@@ -15,6 +15,7 @@ const ramFinCropLog = require('../models/ramFinCropLogModel');
 const vrindaLog = require('../models/VrindaFintechResponseLog');
 const DistributionRule = require('../models/distributionRuleModel');
 const mmmResponseLog = require('../models/mmmResponseLog');
+const leadSuccess = require('../models/leadSuccessModel');
 const rcsService = require('../services/rcsService');
 const xlsx = require('xlsx');
 const path = require('path');
@@ -515,6 +516,27 @@ async function getAllSuccessfulLendersForLead(leadId) {
       ]
     });
     if (mmmResult) successfulLenders.push('MyMoneyMantra');
+
+    // --- Create entry in leadSuccess ---
+    const lead = await Lead.findById(leadId);
+    if (lead) {
+      // Prepare lender flags
+      const lenderFlags = {};
+      successfulLenders.forEach(lender => {
+        lenderFlags[lender] = true;
+      });
+
+      // Create new record
+      await leadSuccess.create({
+        leadId,
+        source: lead.source,
+        phone: lead.phone,
+        email: lead.email,
+        panNumber: lead.panNumber,
+        fullName: lead.fullName,
+        ...lenderFlags
+      });
+    }
 
   } catch (error) {
     console.error('Error getting successful lenders:', error);
