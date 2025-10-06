@@ -429,7 +429,7 @@ async function scheduleRCSAfterAllLenders(leadId) {
     if (!lead) return;
 
     // Get all successful lenders from database logs
-    const allSuccessfulLenders = await getAllSuccessfulLendersForLead(leadId);
+    const allSuccessfulLenders = await getAllSuccessfulLendersForLead(leadId, lead);
     
     // Schedule RCS based on results
     await rcsService.scheduleRCSForLead(leadId, allSuccessfulLenders);
@@ -441,7 +441,7 @@ async function scheduleRCSAfterAllLenders(leadId) {
 }
 
 // Helper function to get successful lenders from all log collections
-async function getAllSuccessfulLendersForLead(leadId) {
+async function getAllSuccessfulLendersForLead(leadId, lead) {
   const successfulLenders = [];
   
   try {
@@ -518,7 +518,7 @@ async function getAllSuccessfulLendersForLead(leadId) {
     if (mmmResult) successfulLenders.push('MyMoneyMantra');
 
     // --- Create entry in leadSuccess ---
-    const lead = await Lead.findById(leadId);
+    // const lead = await Lead.findById(leadId);
     if (lead) {
       // Prepare lender flags
       const lenderFlags = {};
