@@ -206,13 +206,6 @@ exports.createLead = async (req, res) => {
 
     scheduleDelayedLenders(savedLead, distributionRules.delayed);
 
-    // If no delayed lenders, schedule RCS based on immediate results only
-    if (distributionRules.delayed.length === 0) {
-      setTimeout(async () => {
-        await rcsService.scheduleRCSForLead(savedLead._id, immediateSuccessfulLenders);
-      }, 5000);
-    }
-
     res.status(201).json({
       status: 'success',
       data: {
@@ -266,7 +259,7 @@ async function processLenders(lead, lenders, type) {
 
 // Schedule delayed lenders using a job queue
 function scheduleDelayedLenders(lead, delayedLenders) {
-  let delayedSuccessCount = 0;
+  let completedLendersCount = 0;
   const totalDelayedLenders = delayedLenders.filter(lender => lender.lender !== lead.source).length;
   
   for (const lenderConfig of delayedLenders) {
@@ -278,28 +271,23 @@ function scheduleDelayedLenders(lead, delayedLenders) {
           const result = await sendToLender(lead, lenderConfig.lender);
           
           if (isLenderSuccess(result, lenderConfig.lender)) {
-            delayedSuccessCount++;
+            console.log(`Delayed lender ${lenderConfig.lender} succeeded for lead ${lead._id}`);
           }
           
           console.log(`Delayed lead ${lead._id} sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
-          
-          // Check if this is the last delayed lender
-          if (delayedSuccessCount === totalDelayedLenders || 
-              (Date.now() - lead.createdAt.getTime()) > (24 * 60 * 60 * 1000)) { // 24 hours timeout
-            await scheduleRCSAfterAllLenders(lead._id);
-          }
         } catch (error) {
           console.error(`Error sending delayed lead to ${lenderConfig.lender}:`, error.message);
+        } finally {
+          // Track completion
+          completedLendersCount++;
           
-          // Still check if this is the last attempt
-          delayedSuccessCount++;
-          if (delayedSuccessCount === totalDelayedLenders) {
+          // When all delayed lenders are processed, schedule RCS
+          if (completedLendersCount === totalDelayedLenders) {
             await scheduleRCSAfterAllLenders(lead._id);
           }
         }
       }, delayMs);
 
-      // Log scheduled job
       console.log(`Scheduled lead ${lead._id} to be sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
     }
   }

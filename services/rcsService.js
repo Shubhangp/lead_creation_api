@@ -233,16 +233,50 @@ class RCSService {
   /**
    * Process pending RCS messages
    */
+  /**
+ * Process pending RCS messages with atomic locking
+ */
   async processPendingRCS() {
     try {
       const now = new Date();
-      const pendingMessages = await RCSQueue.find({
-        status: 'PENDING',
-        scheduledTime: { $lte: now },
-        attempts: { $lt: 3 }
-      }).populate('leadId');
 
-      for (const message of pendingMessages) {
+      // Atomic claim: Find and update in one operation to prevent race conditions
+      // This works even with multiple app instances
+      const claimedMessages = [];
+
+      // Process messages one at a time with atomic updates
+      let hasMore = true;
+      while (hasMore && claimedMessages.length < 50) { // Limit batch size
+        const message = await RCSQueue.findOneAndUpdate(
+          {
+            status: 'PENDING',
+            scheduledTime: { $lte: now },
+            attempts: { $lt: 1 }
+          },
+          {
+            $set: {
+              status: 'PROCESSING',
+              processingStartedAt: new Date()
+            },
+            $inc: { attempts: 1 }
+          },
+          {
+            new: true,
+            sort: { scheduledTime: 1, priority: 1 } // Process oldest/highest priority first
+          }
+        ).populate('leadId');
+
+        if (message) {
+          claimedMessages.push(message);
+        } else {
+          hasMore = false;
+        }
+      }
+
+      console.log(`Claimed ${claimedMessages.length} RCS messages for processing`);
+
+      // Now process the claimed messages
+      for (const message of claimedMessages) {
         try {
           let payload;
 
@@ -261,7 +295,6 @@ class RCSService {
 
           // Update queue entry with payload
           message.rcsPayload = payload;
-          message.attempts += 1;
 
           const result = await this.sendRCS(payload);
 
@@ -278,6 +311,9 @@ class RCSService {
             if (message.attempts >= 3) {
               message.status = 'FAILED';
               message.failureReason = result.error;
+            } else {
+              // Reset to PENDING for retry
+              message.status = 'PENDING';
             }
             message.rcsResponse = result.error;
 
@@ -291,16 +327,31 @@ class RCSService {
         } catch (error) {
           console.error(`Error processing RCS for lead ${message.leadId._id}:`, error);
 
-          message.attempts += 1;
           if (message.attempts >= 3) {
             message.status = 'FAILED';
             message.failureReason = error.message;
+          } else {
+            // Reset to PENDING for retry
+            message.status = 'PENDING';
           }
           await message.save();
         }
       }
 
-      console.log(`Processed ${pendingMessages.length} pending RCS messages`);
+      console.log(`Processed ${claimedMessages.length} RCS messages`);
+
+      // Clean up any stuck PROCESSING messages (older than 10 minutes)
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+      await RCSQueue.updateMany(
+        {
+          status: 'PROCESSING',
+          processingStartedAt: { $lt: tenMinutesAgo }
+        },
+        {
+          $set: { status: 'PENDING' }
+        }
+      );
+
     } catch (error) {
       console.error('Error processing pending RCS:', error);
     }

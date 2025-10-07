@@ -40,20 +40,6 @@ class RCSScheduler {
       timezone: "Asia/Kolkata"
     });
 
-    // Also run once at 10 AM to process any queued messages from previous day
-    cron.schedule('0 10 * * *', async () => {
-      console.log('Morning RCS batch processing...');
-      
-      try {
-        await rcsService.processPendingRCS();
-      } catch (error) {
-        console.error('Error in morning RCS batch:', error);
-      }
-    }, {
-      scheduled: true,
-      timezone: "Asia/Kolkata"
-    });
-
     console.log('RCS Scheduler initialized successfully');
   }
 
