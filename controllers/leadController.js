@@ -507,24 +507,24 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // --- Create entry in leadSuccess ---
     // const lead = await Lead.findById(leadId);
-    if (lead) {
-      // Prepare lender flags
-      const lenderFlags = {};
-      successfulLenders.forEach(lender => {
-        lenderFlags[lender] = true;
-      });
+    // if (lead) {
+    //   // Prepare lender flags
+    //   const lenderFlags = {};
+    //   successfulLenders.forEach(lender => {
+    //     lenderFlags[lender] = true;
+    //   });
 
-      // Create new record
-      await leadSuccess.create({
-        leadId,
-        source: lead.source,
-        phone: lead.phone,
-        email: lead.email,
-        panNumber: lead.panNumber,
-        fullName: lead.fullName,
-        ...lenderFlags
-      });
-    }
+    //   // Create new record
+    //   await leadSuccess.create({
+    //     leadId,
+    //     source: lead.source,
+    //     phone: lead.phone,
+    //     email: lead.email,
+    //     panNumber: lead.panNumber,
+    //     fullName: lead.fullName,
+    //     ...lenderFlags
+    //   });
+    // }
 
   } catch (error) {
     console.error('Error getting successful lenders:', error);
