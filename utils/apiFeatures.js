@@ -23,6 +23,7 @@ class APIFeatures {
             const sortBy = this.queryString.sort.split(',').join(' ');
             this.query = this.query.sort(sortBy);
         } else {
+            // Prefer sorting by createdAt only if index exists on createdAt
             this.query = this.query.sort('-createdAt');
         }
     
@@ -42,10 +43,12 @@ class APIFeatures {
   
     paginate() {
         const page = this.queryString.page * 1 || 1;
-        const limit = this.queryString.limit * 1 || 100;
+        // Cap limit to prevent memory blowups
+        const requestedLimit = this.queryString.limit * 1 || 100;
+        const limit = Math.min(requestedLimit, 200);
         const skip = (page - 1) * limit;
     
-        this.query = this.query.skip(skip).limit(limit);
+        this.query = this.query.skip(skip).limit(limit).lean();
     
         return this;
     }

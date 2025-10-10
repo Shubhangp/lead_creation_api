@@ -131,9 +131,10 @@ const leadSchema = new mongoose.Schema({
     },
 });
 
-// Add indexes to optimize the uniqueness queries
-leadSchema.index({ phone: 1, createdAt: 1 });
-leadSchema.index({ panNumber: 1, createdAt: 1 });
+// Add indexes to optimize the uniqueness queries and sorts
+leadSchema.index({ phone: 1, createdAt: -1 });
+leadSchema.index({ panNumber: 1, createdAt: -1 });
+leadSchema.index({ createdAt: -1 });
 
 // Updated static methods with source awareness
 leadSchema.statics.isPhoneUniqueInLast30Days = async function(phone, excludeId = null, source = null) {

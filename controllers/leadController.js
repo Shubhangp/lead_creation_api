@@ -1978,7 +1978,7 @@ exports.processFile = async (req, res) => {
 exports.getLeads = async (req, res) => {
   try {
     // excute query
-    const features = new APIFeatures(Lead.find(), req.query)
+    const features = new APIFeatures(Lead.find({}, 'source fullName phone email panNumber salary createdAt'), req.query)
       .filter()
       .sort()
       .limitFields()
@@ -2003,7 +2003,7 @@ exports.getLeadById = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const lead = await Lead.findById(id);
+    const lead = await Lead.findById(id).lean();
     if (!lead) {
       return res.status(404).json({ message: 'Lead not found' });
     }

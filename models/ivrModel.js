@@ -52,8 +52,9 @@ const ivrCallSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for querying by date range
+// Indexes for common queries
 ivrCallSchema.index({ createdAt: -1 });
+ivrCallSchema.index({ digitPressed: 1, createdAt: -1 });
 
 // Index for analytics queries
 ivrCallSchema.index({ digitPressed: 1, rcsMessageSent: 1 });

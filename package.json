@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node --max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE:-1024} --heapsnapshot-near-heap-limit=1 server.js",
+    "start:dev": "NODE_ENV=development nodemon --signal SIGTERM server.js"
   },
   "keywords": [],
   "author": "Shubhang",

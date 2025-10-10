@@ -55,10 +55,11 @@ exports.getRCSQueueStatus = async (req, res) => {
     }).countDocuments();
 
     // Get recent queue entries for preview
-    const recentMessages = await RCSQueue.find()
+    const recentMessages = await RCSQueue.find({}, 'leadId rcsType status createdAt')
       .populate('leadId', 'fullName phone source')
       .sort({ createdAt: -1 })
-      .limit(10);
+      .limit(10)
+      .lean();
 
     res.json({
       status: 'success',
@@ -96,14 +97,16 @@ exports.getRCSLogsForLead = async (req, res) => {
     }
 
     // Get RCS logs
-    const logs = await RCSLog.find({ leadId })
-      .populate('queueId')
-      .sort({ createdAt: -1 });
+    const logs = await RCSLog.find({ leadId }, 'queueId rcsType responseStatus sentAt success createdAt')
+      .populate('queueId', 'status scheduledTime createdAt')
+      .sort({ createdAt: -1 })
+      .lean();
 
     // Get queue entries
-    const queueEntries = await RCSQueue.find({ leadId })
+    const queueEntries = await RCSQueue.find({ leadId }, 'leadId rcsType status scheduledTime attempts createdAt')
       .populate('leadId', 'fullName phone source')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.json({
       status: 'success',

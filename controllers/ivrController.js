@@ -277,7 +277,7 @@ const getAllIvrCalls = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const [calls, total] = await Promise.all([
-            IvrCall.find(query)
+            IvrCall.find(query, 'callId uuid phoneNumber digitPressed rcsMessageSent rcsMessageId createdAt')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit))
@@ -328,7 +328,7 @@ const getIvrAnalytics = async (req, res) => {
             }
         ]);
 
-        const totalCalls = await IvrCall.countDocuments();
+        const totalCalls = await IvrCall.estimatedDocumentCount();
         const totalRcsSent = await IvrCall.countDocuments({ rcsMessageSent: true });
 
         return res.status(200).json({
