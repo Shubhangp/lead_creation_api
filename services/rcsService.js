@@ -68,6 +68,12 @@ class RCSService {
         imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1758734324/LP_zsqfp8.jpg',
         actionUrl: 'https://lendingplate.com/personal-loan-lead-form?utm_source=RATECUT&utm_campaign=RATECUT#applynow'
       },
+      'FATAKPAY': {
+        title: 'FatakPay: Get Loan upto ₹2 Lakhs💵',
+        description: '✅Interest starting at as low as 1.5%* per month.\n💳EMIs as low as ₹512*.\n🤝 Trusted by over 4 crore Indians.\n🏦  Loans via RBI-registered lenders.\nT&C Apply.',
+        imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1758734319/fatakpay_giqt2z.jpg',
+        actionUrl: 'https://web.fatakpay.com/authentication/login?utm_source=708_8FQLQ&source_caller=api&shortlink=708_8FQLQ&utm_medium='
+      },
       'default': {
         title: 'Loan Approved!',
         description: 'Your loan application has been approved✅\n\n🏦  Loans via RBI-registered lenders.\n\n📱Complete your application now!\n\nT&C Apply.',
