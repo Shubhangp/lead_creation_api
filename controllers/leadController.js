@@ -19,6 +19,7 @@ const leadSuccess = require('../models/leadSuccessModel');
 const rcsService = require('../services/rcsService');
 const xlsx = require('xlsx');
 const path = require('path');
+const indiaLendsResponseLog = require('../models/indiaLendsResponseLog');
 
 
 // Helper Function to get a random residenceType
@@ -311,7 +312,8 @@ async function sendToLender(lead, lender) {
     'FINTIFI': sendToFINTIFI,
     'FATAKPAY': sendToFATAKPAY,
     'RAMFINCROP': sendToRAMFINCROP,
-    "MyMoneyMantra": sendToMyMoneyMantra
+    "MyMoneyMantra": sendToMyMoneyMantra,
+    "INDIALENDS": sendToIndiaLends
   };
 
   // Call the appropriate handler for the lender
@@ -333,19 +335,19 @@ async function getDistributionRules(source) {
 
     const defaultRules = {
       FREO: {
-        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'MyMoneyMantra'],
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'INDIALENDS'],
         delayed: [
           { lender: 'SML', delayMinutes: 1440 }
         ]
       },
       MyMoneyMantra: {
-        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY',],
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'INDIALENDS'],
         delayed: [
           { lender: 'SML', delayMinutes: 1440 }
         ]
       },
       SML: {
-        immediate: ['FREO', 'OVLY', 'MyMoneyMantra'],
+        immediate: ['FREO', 'OVLY', 'INDIALENDS'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -355,7 +357,7 @@ async function getDistributionRules(source) {
         ]
       },
       OVLY: {
-        immediate: ['FREO', 'SML', 'MyMoneyMantra'],
+        immediate: ['FREO', 'SML', 'INDIALENDS'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -365,7 +367,7 @@ async function getDistributionRules(source) {
         ]
       },
       default: {
-        immediate: ['FREO', 'SML', 'OVLY', 'MyMoneyMantra'],
+        immediate: ['FREO', 'SML', 'OVLY', 'INDIALENDS'],
         delayed: [
           { lender: 'LendingPlate', delayMinutes: 1 },
           { lender: 'ZYPE', delayMinutes: 1 },
@@ -381,7 +383,7 @@ async function getDistributionRules(source) {
     console.error('Error fetching distribution rules:', error);
 
     return {
-      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra'],
+      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'INDIALENDS'],
       delayed: [
         { lender: 'SML', delayMinutes: 1440 },
         { lender: 'FINTIFI', delayMinutes: 1440 }
@@ -1279,6 +1281,202 @@ function mapJobTypeToMMM(jobType) {
     'defence': '1000000008'
   };
   return jobTypeMap[jobType?.toLowerCase()] || '1000000004';
+}
+
+async function sendToIndiaLends(lead) {
+  console.log("IndiaLends API Call", lead);
+
+  const {
+    _id,
+    fullName,
+    phone,
+    email,
+    dateOfBirth,
+    gender,
+    pincode,
+    jobType,
+    panNumber,
+    salary,
+    source,
+    companyName
+  } = lead;
+
+  try {
+    // Step 1: Authenticate and Get Access Token
+    const authResponse = await axios.post(
+      'https://ilauthenticationlive.azurewebsites.net/api/Login/PostImplicitLogin',
+      null,
+      {
+        params: {
+          email: process.env.INDIALENDS_EMAIL || 'RateCut@indialends.com',
+          password: process.env.INDIALENDS_PASSWORD || 'raiNdL@211125$#'
+        }
+      }
+    );
+
+    console.log("Authentication Response:", authResponse.data);
+
+    if (authResponse.data.info.status !== "100") {
+      throw new Error(`Authentication failed: ${authResponse.data.info.message}`);
+    }
+
+    const accessToken = authResponse.data.data.access_token;
+
+    // Step 2: Check for Duplicate Lead (Dedup Check)
+    const mobileHash = hashMobileNumber(phone);
+    
+    const dedupResponse = await axios.post(
+      'https://apimgmtlive.indialends.com/LoanOffers/LaasDedupV1',
+      {
+        MobileNumber: mobileHash
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Ocp-Apim-Subscription-Key': process.env.INDIALENDS_SUBSCRIPTION_KEY || 'c24c7706d8e84bd7be5f661aa1622082',
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log("Dedup Response:", dedupResponse.data);
+
+    const isDedupe = dedupResponse.data.data.IsDedupe;
+
+    // If IsDedupe is "1" or "2", save as duplicate and return
+    if (isDedupe === "1" || isDedupe === "2") {
+      const duplicateLog = await indiaLendsResponseLog.create({
+        leadId: _id,
+        source: source,
+        requestPayload: { MobileNumber: mobileHash },
+        responseStatus: dedupResponse.status,
+        responseBody: dedupResponse.data,
+        isDuplicate: true,
+        duplicateStatus: isDedupe
+      });
+
+      console.log('IndiaLends Duplicate Lead Found:', dedupResponse.data);
+      return duplicateLog;
+    }
+
+    // Step 3: Submit Credit Report Details (Only if not duplicate)
+    const [firstName, ...lastNameParts] = fullName.split(' ');
+    const lastName = lastNameParts.join(' ') || firstName;
+
+    const creditReportPayload = {
+      EmailID: email,
+      reference_id: phone,
+      PanNumber: panNumber,
+      MobileNumber: phone,
+      EmployementType: mapJobTypeToEmploymentType(jobType),
+      MonthlyIncome: salary.toString(),
+      FirstName: firstName,
+      LastName: lastName,
+      ResidencePinCode: pincode,
+      CompanyName: companyName || "Not Provided",
+      DOB: formatDateForIndiaLends(dateOfBirth),
+      Gender: mapGenderToIndiaLends(gender),
+      FlowByPass: 1,
+      SalaryMode: "cheque"
+    };
+
+    const creditReportResponse = await axios.post(
+      'https://apimgmtlive.indialends.com/LoanOffers/api/CreditReport/POSTCreditReportDetailsv1',
+      creditReportPayload,
+      {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Ocp-Apim-Subscription-Key': process.env.INDIALENDS_SUBSCRIPTION_KEY || 'c24c7706d8e84bd7be5f661aa1622082',
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log("Credit Report Response:", creditReportResponse.data);
+
+    // Step 4: Save Response in Database
+    const responseLog = await indiaLendsResponseLog.create({
+      leadId: _id,
+      source: source,
+      accessToken: accessToken,
+      dedupCheck: dedupResponse.data,
+      requestPayload: creditReportPayload,
+      responseStatus: creditReportResponse.status,
+      responseBody: creditReportResponse.data,
+      isDuplicate: false
+    });
+
+    console.log('IndiaLends Lead Created:', creditReportResponse.data);
+    return responseLog;
+
+  } catch (error) {
+    console.error('Error in IndiaLends API:', error.response?.data || error.message);
+
+    // Prepare payload for error logging
+    const errorPayload = {
+      EmailID: email,
+      MobileNumber: phone,
+      PanNumber: panNumber || '',
+      FirstName: fullName,
+      DOB: formatDateForIndiaLends(dateOfBirth),
+      ResidencePinCode: pincode
+    };
+
+    // Save error log
+    const errorLog = await indiaLendsResponseLog.create({
+      leadId: _id,
+      source: source,
+      requestPayload: errorPayload,
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || {
+        message: error.message || 'Unknown error',
+        error: true
+      },
+      errorDetails: {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      }
+    });
+
+    return errorLog;
+  }
+}
+
+// Helper function to hash mobile number
+function hashMobileNumber(mobile) {
+  return crypto.createHash('sha256').update(mobile).digest('hex');
+}
+
+// Helper function to format date (MM-DD-YYYY)
+function formatDateForIndiaLends(date) {
+  const d = new Date(date);
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${month}-${day}-${year}`;
+}
+
+// Helper function to map gender
+function mapGenderToIndiaLends(gender) {
+  const genderMap = {
+    'male': 'male',
+    'female': 'female',
+    'm': 'male',
+    'f': 'female'
+  };
+  return genderMap[gender?.toLowerCase()] || 'male';
+}
+
+// Helper function to map job type to employment type
+function mapJobTypeToEmploymentType(jobType) {
+  const jobTypeMap = {
+    'salaried': 'salaried',
+    'self-employed': 'self_employed',
+    'selfemployed': 'self_employed',
+    'business': 'self_employed'
+  };
+  return jobTypeMap[jobType?.toLowerCase()] || 'salaried';
 }
 
 // exports.createLead = async (req, res) => {
