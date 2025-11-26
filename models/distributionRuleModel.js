@@ -37,7 +37,7 @@ const distributionRuleSchema = new mongoose.Schema({
     lenderPriority: [{
       lender: {
         type: String,
-        enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra'],
+        enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS'],
         required: true
       },
       priority: {
