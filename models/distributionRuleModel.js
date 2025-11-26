@@ -14,12 +14,12 @@ const distributionRuleSchema = new mongoose.Schema({
   rules: {
     immediate: [{
       type: String,
-      enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra']
+      enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS']
     }],
     delayed: [{
       lender: {
         type: String,
-        enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra']
+        enum: ['SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS']
       },
       delayMinutes: {
         type: Number,
