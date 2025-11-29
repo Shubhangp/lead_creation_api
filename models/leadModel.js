@@ -24,6 +24,7 @@ const leadSchema = new mongoose.Schema({
     phone: {
         type: String,
         required: true,
+        unique: true,
         validate: {
             validator: async function (phone) {
                 // Define sources that should skip uniqueness check
@@ -74,6 +75,7 @@ const leadSchema = new mongoose.Schema({
         type: String,
         required: true,
         match: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
+        unique: true,
         validate: {
             validator: async function (panNumber) {
                 // Define sources that should skip uniqueness check
