@@ -2211,3 +2211,233 @@ exports.getLeadById = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
+
+// const pushLeadsToLender = async (req, res) => {
+//   try {
+//     const {
+//       lender,
+//       source,
+//       startDate,
+//       endDate,
+//       limit,
+//       skip = 0,
+//       excludeAlreadyPushed = false
+//     } = req.body;
+
+//     // Validate required fields
+//     if (!lender) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Lender is required'
+//       });
+//     }
+
+//     // Build query filters
+//     const query = {};
+
+//     // Filter by source
+//     if (source) {
+//       if (Array.isArray(source)) {
+//         query.source = { $in: source };
+//       } else {
+//         query.source = source;
+//       }
+//     }
+
+//     // Filter by date range
+//     if (startDate || endDate) {
+//       query.createdAt = {};
+//       if (startDate) {
+//         query.createdAt.$gte = new Date(startDate);
+//       }
+//       if (endDate) {
+//         query.createdAt.$lte = new Date(endDate);
+//       }
+//     }
+
+//     // Optional: Exclude leads already pushed to this lender
+//     if (excludeAlreadyPushed) {
+//       query[`pushedTo.${lender}`] = { $exists: false };
+//     }
+
+//     // Fetch leads from database
+//     const leads = await Lead.find(query)
+//       .sort({ createdAt: -1 })
+//       .skip(skip)
+//       .limit(limit || 100);
+
+//     if (leads.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'No leads found matching the criteria'
+//       });
+//     }
+
+//     // Send leads to lender
+//     const result = await sendLeadsToLender(lender, leads);
+
+//     // Update leads with push status (optional)
+//     const updatePromises = leads.map(lead => 
+//       Lead.findByIdAndUpdate(lead._id, {
+//         $set: {
+//           [`pushedTo.${lender}`]: {
+//             pushedAt: new Date(),
+//             status: 'success'
+//           }
+//         }
+//       })
+//     );
+//     await Promise.all(updatePromises);
+
+//     res.status(200).json({
+//       success: true,
+//       message: `Successfully pushed ${leads.length} leads to ${lender}`,
+//       data: {
+//         lender,
+//         totalLeadsPushed: leads.length,
+//         results: result
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('Error pushing leads to lender:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to push leads to lender',
+//       error: error.message
+//     });
+//   }
+// };
+
+// /**
+//  * Controller to get leads with filters (without sending to lender)
+//  */
+// const getLeadsWithFilters = async (req, res) => {
+//   try {
+//     const {
+//       source,
+//       startDate,
+//       endDate,
+//       page = 1,
+//       limit = 50,
+//       sortBy = 'createdAt',
+//       sortOrder = 'desc'
+//     } = req.query;
+
+//     // Build query filters
+//     const query = {};
+
+//     if (source) {
+//       if (source.includes(',')) {
+//         query.source = { $in: source.split(',') };
+//       } else {
+//         query.source = source;
+//       }
+//     }
+
+//     if (startDate || endDate) {
+//       query.createdAt = {};
+//       if (startDate) {
+//         query.createdAt.$gte = new Date(startDate);
+//       }
+//       if (endDate) {
+//         query.createdAt.$lte = new Date(endDate);
+//       }
+//     }
+
+//     const skip = (page - 1) * limit;
+//     const sort = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
+
+//     const [leads, totalCount] = await Promise.all([
+//       Lead.find(query)
+//         .sort(sort)
+//         .skip(skip)
+//         .limit(parseInt(limit)),
+//       Lead.countDocuments(query)
+//     ]);
+
+//     res.status(200).json({
+//       success: true,
+//       data: {
+//         leads,
+//         pagination: {
+//           total: totalCount,
+//           page: parseInt(page),
+//           limit: parseInt(limit),
+//           totalPages: Math.ceil(totalCount / limit)
+//         }
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('Error fetching leads:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to fetch leads',
+//       error: error.message
+//     });
+//   }
+// };
+
+// /**
+//  * Bulk send function - sends all leads to the specified lender
+//  */
+// exports.sendLeadsToLender = async (lender, leads) => {
+//   try {
+//     let results;
+    
+//     switch (lender) {
+//       case "SML":
+//         results = await Promise.allSettled(leads.map((lead) => sendToSML(lead)));
+//         break;
+//       case "FREO":
+//         results = await Promise.allSettled(leads.map((lead) => sendToFreo(lead)));
+//         break;
+//       case "ZYPE":
+//         results = await Promise.allSettled(leads.map((lead) => sendToZYPE(lead)));
+//         break;
+//       case "LendingPlate":
+//         results = await Promise.allSettled(leads.map((lead) => sendToLendingPlate(lead)));
+//         break;
+//       case "FINTIFI":
+//         results = await Promise.allSettled(leads.map((lead) => sendToFINTIFI(lead)));
+//         break;
+//       case "FATAKPAY":
+//         results = await Promise.allSettled(leads.map((lead) => sendToFATAKPAY(lead)));
+//         break;
+//       case "OVLY":
+//         results = await Promise.allSettled(leads.map((lead) => sendToOVLY(lead)));
+//         break;
+//       case "INDIALENDS":
+//         results = await Promise.allSettled(leads.map((lead) => sendToIndiaLends(lead)));
+//         break;
+//       default:
+//         return { lender, status: "Failed", message: "Lender not configured" };
+//     }
+
+//     // Summarize results
+//     const successful = results.filter(r => r.status === 'fulfilled').length;
+//     const failed = results.filter(r => r.status === 'rejected').length;
+
+//     return {
+//       lender,
+//       total: leads.length,
+//       successful,
+//       failed,
+//       details: results
+//     };
+
+//   } catch (error) {
+//     console.error(`Error sending leads to ${lender}:`, error);
+//     return {
+//       lender,
+//       status: "Failed",
+//       message: error.message
+//     };
+//   }
+// };
+
+// module.exports = {
+//   pushLeadsToLender,
+//   getLeadsWithFilters
+// };

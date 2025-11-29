@@ -60,59 +60,59 @@ rcsQueueSchema.index({ status: 1, attempts: 1 });
 const RCSQueue = mongoose.model('RCSQueue', rcsQueueSchema);
 
 // models/rcsLogModel.js
-const rcsLogSchema = new mongoose.Schema({
-  leadId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Lead',
-    required: true
-  },
-  queueId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'RCSQueue',
-    required: true
-  },
-  phone: {
-    type: String,
-    required: true
-  },
-  rcsType: {
-    type: String,
-    enum: ['LENDER_SUCCESS', 'ZET_CAMPAIGN'],
-    required: true
-  },
-  lenderName: {
-    type: String
-  },
-  requestPayload: {
-    type: mongoose.Schema.Types.Mixed,
-    required: true
-  },
-  responseStatus: {
-    type: Number
-  },
-  responseBody: {
-    type: mongoose.Schema.Types.Mixed
-  },
-  sentAt: {
-    type: Date,
-    default: Date.now
-  },
-  success: {
-    type: Boolean,
-    required: true
-  },
-  errorMessage: {
-    type: String
-  }
-}, { timestamps: true });
+// const rcsLogSchema = new mongoose.Schema({
+//   leadId: {
+//     type: mongoose.Schema.Types.ObjectId,
+//     ref: 'Lead',
+//     required: true
+//   },
+//   queueId: {
+//     type: mongoose.Schema.Types.ObjectId,
+//     ref: 'RCSQueue',
+//     required: true
+//   },
+//   phone: {
+//     type: String,
+//     required: true
+//   },
+//   rcsType: {
+//     type: String,
+//     enum: ['LENDER_SUCCESS', 'ZET_CAMPAIGN'],
+//     required: true
+//   },
+//   lenderName: {
+//     type: String
+//   },
+//   requestPayload: {
+//     type: mongoose.Schema.Types.Mixed,
+//     required: true
+//   },
+//   responseStatus: {
+//     type: Number
+//   },
+//   responseBody: {
+//     type: mongoose.Schema.Types.Mixed
+//   },
+//   sentAt: {
+//     type: Date,
+//     default: Date.now
+//   },
+//   success: {
+//     type: Boolean,
+//     required: true
+//   },
+//   errorMessage: {
+//     type: String
+//   }
+// }, { timestamps: true });
 
-rcsLogSchema.index({ leadId: 1 });
-rcsLogSchema.index({ sentAt: 1 });
-rcsLogSchema.index({ success: 1 });
+// rcsLogSchema.index({ leadId: 1 });
+// rcsLogSchema.index({ sentAt: 1 });
+// rcsLogSchema.index({ success: 1 });
 
-const RCSLog = mongoose.model('RCSLog', rcsLogSchema);
+// const RCSLog = mongoose.model('RCSLog', rcsLogSchema);
 
 module.exports = {
   RCSQueue,
-  RCSLog
+  // RCSLog
 };

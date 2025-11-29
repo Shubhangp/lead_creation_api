@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { RCSQueue, RCSLog } = require('../models/rcsModels');
+const { RCSQueue } = require('../models/rcsModels');
 const DistributionRule = require('../models/distributionRuleModel');
 
 class RCSService {
@@ -73,6 +73,12 @@ class RCSService {
         description: '✅Interest starting at as low as 1.5%* per month.\n💳EMIs as low as ₹512*.\n🤝 Trusted by over 4 crore Indians.\n🏦  Loans via RBI-registered lenders.\nT&C Apply.',
         imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1758734319/fatakpay_giqt2z.jpg',
         actionUrl: 'https://web.fatakpay.com/authentication/login?utm_source=708_8FQLQ&source_caller=api&shortlink=708_8FQLQ&utm_medium='
+      },
+      'RAMFINCROP': {
+        title: 'Loans upto Rs 8 Lakhs in 5 minutes',
+        description: '✅Interest starting at as low as 1.5%* per month.\n💳EMIs as low as ₹512*.\n🤝 Trusted by over 4 crore Indians.\n🏦  Loans via RBI-registered lenders.\nT&C Apply.',
+        imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1764403776/Ramfincorp_wfpetc.jpg',
+        actionUrl: 'https://applyonline.ramfincorp.com/?utm_source=RateCut'
       },
       'default': {
         title: 'Loan Approved!',
@@ -309,9 +315,6 @@ class RCSService {
             message.sentAt = new Date();
             message.rcsResponse = result.data;
 
-            // Log successful RCS
-            await this.logRCS(message, payload, result.status, result.data, true);
-
             console.log(`RCS sent successfully for lead ${message.leadId._id}`);
           } else {
             if (message.attempts >= 3) {
@@ -322,9 +325,6 @@ class RCSService {
               message.status = 'PENDING';
             }
             message.rcsResponse = result.error;
-
-            // Log failed RCS
-            await this.logRCS(message, payload, result.status, result.error, false, result.error);
 
             console.error(`RCS failed for lead ${message.leadId._id}:`, result.error);
           }
@@ -360,30 +360,6 @@ class RCSService {
 
     } catch (error) {
       console.error('Error processing pending RCS:', error);
-    }
-  }
-
-  /**
-   * Log RCS activity
-   */
-  async logRCS(queueEntry, payload, status, responseBody, success, errorMessage = null) {
-    try {
-      const rcsLog = new RCSLog({
-        leadId: queueEntry.leadId,
-        queueId: queueEntry._id,
-        phone: queueEntry.phone,
-        rcsType: queueEntry.rcsType,
-        lenderName: queueEntry.lenderName,
-        requestPayload: payload,
-        responseStatus: status,
-        responseBody,
-        success,
-        errorMessage
-      });
-
-      await rcsLog.save();
-    } catch (error) {
-      console.error('Error logging RCS activity:', error);
     }
   }
 

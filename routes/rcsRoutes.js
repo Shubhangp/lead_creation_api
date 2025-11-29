@@ -21,7 +21,7 @@ router.delete('/queue/lead/:leadId', rcsController.cancelRCSForLead);
 router.get('/logs/lead/:leadId', rcsController.getRCSLogsForLead);
 
 // Get RCS analytics and reporting data
-router.get('/analytics', rcsController.getRCSAnalytics);
+// router.get('/analytics', rcsController.getRCSAnalytics);
 
 // ============ RCS CONFIGURATION ============
 // Get RCS configuration for a source

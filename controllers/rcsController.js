@@ -1,5 +1,5 @@
 const rcsService = require('../services/rcsService');
-const { RCSQueue, RCSLog } = require('../models/rcsModels');
+const { RCSQueue } = require('../models/rcsModels');
 const DistributionRule = require('../models/distributionRuleModel');
 
 /**
@@ -97,10 +97,10 @@ exports.getRCSLogsForLead = async (req, res) => {
     }
 
     // Get RCS logs
-    const logs = await RCSLog.find({ leadId }, 'queueId rcsType responseStatus sentAt success createdAt')
-      .populate('queueId', 'status scheduledTime createdAt')
-      .sort({ createdAt: -1 })
-      .lean();
+    // const logs = await RCSLog.find({ leadId }, 'queueId rcsType responseStatus sentAt success createdAt')
+    //   .populate('queueId', 'status scheduledTime createdAt')
+    //   .sort({ createdAt: -1 })
+    //   .lean();
 
     // Get queue entries
     const queueEntries = await RCSQueue.find({ leadId }, 'leadId rcsType status scheduledTime attempts createdAt')
@@ -111,9 +111,9 @@ exports.getRCSLogsForLead = async (req, res) => {
     res.json({
       status: 'success',
       data: {
-        logs,
+        // logs,
         queueEntries,
-        totalLogs: logs.length,
+        // totalLogs: logs.length,
         totalQueueEntries: queueEntries.length
       }
     });
@@ -130,109 +130,109 @@ exports.getRCSLogsForLead = async (req, res) => {
  * Get RCS analytics and reporting
  * GET /api/rcs/analytics?startDate=2024-01-01&endDate=2024-01-31
  */
-exports.getRCSAnalytics = async (req, res) => {
-  try {
-    const { startDate, endDate, rcsType, lenderName } = req.query;
+// exports.getRCSAnalytics = async (req, res) => {
+//   try {
+//     const { startDate, endDate, rcsType, lenderName } = req.query;
     
-    // Build match filter
-    const matchFilter = {};
+//     // Build match filter
+//     const matchFilter = {};
     
-    if (startDate && endDate) {
-      matchFilter.sentAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    }
+//     if (startDate && endDate) {
+//       matchFilter.sentAt = {
+//         $gte: new Date(startDate),
+//         $lte: new Date(endDate)
+//       };
+//     }
     
-    if (rcsType) {
-      matchFilter.rcsType = rcsType;
-    }
+//     if (rcsType) {
+//       matchFilter.rcsType = rcsType;
+//     }
     
-    if (lenderName) {
-      matchFilter.lenderName = lenderName;
-    }
+//     if (lenderName) {
+//       matchFilter.lenderName = lenderName;
+//     }
 
-    // Get detailed analytics
-    const analytics = await RCSLog.aggregate([
-      { $match: matchFilter },
-      {
-        $group: {
-          _id: {
-            rcsType: '$rcsType',
-            success: '$success',
-            lenderName: '$lenderName',
-            date: { $dateToString: { format: '%Y-%m-%d', date: '$sentAt' } }
-          },
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            rcsType: '$_id.rcsType',
-            date: '$_id.date'
-          },
-          totalMessages: { $sum: '$count' },
-          successfulMessages: {
-            $sum: {
-              $cond: [{ $eq: ['$_id.success', true] }, '$count', 0]
-            }
-          },
-          failedMessages: {
-            $sum: {
-              $cond: [{ $eq: ['$_id.success', false] }, '$count', 0]
-            }
-          }
-        }
-      },
-      { $sort: { '_id.date': -1 } }
-    ]);
+//     // Get detailed analytics
+//     const analytics = await RCSLog.aggregate([
+//       { $match: matchFilter },
+//       {
+//         $group: {
+//           _id: {
+//             rcsType: '$rcsType',
+//             success: '$success',
+//             lenderName: '$lenderName',
+//             date: { $dateToString: { format: '%Y-%m-%d', date: '$sentAt' } }
+//           },
+//           count: { $sum: 1 }
+//         }
+//       },
+//       {
+//         $group: {
+//           _id: {
+//             rcsType: '$_id.rcsType',
+//             date: '$_id.date'
+//           },
+//           totalMessages: { $sum: '$count' },
+//           successfulMessages: {
+//             $sum: {
+//               $cond: [{ $eq: ['$_id.success', true] }, '$count', 0]
+//             }
+//           },
+//           failedMessages: {
+//             $sum: {
+//               $cond: [{ $eq: ['$_id.success', false] }, '$count', 0]
+//             }
+//           }
+//         }
+//       },
+//       { $sort: { '_id.date': -1 } }
+//     ]);
 
-    // Get summary statistics
-    const summary = await RCSLog.aggregate([
-      { $match: matchFilter },
-      {
-        $group: {
-          _id: null,
-          totalSent: { $sum: 1 },
-          totalSuccess: { $sum: { $cond: ['$success', 1, 0] } },
-          totalFailed: { $sum: { $cond: ['$success', 0, 1] } },
-          avgResponseTime: { $avg: '$responseTime' }
-        }
-      }
-    ]);
+//     // Get summary statistics
+//     const summary = await RCSLog.aggregate([
+//       { $match: matchFilter },
+//       {
+//         $group: {
+//           _id: null,
+//           totalSent: { $sum: 1 },
+//           totalSuccess: { $sum: { $cond: ['$success', 1, 0] } },
+//           totalFailed: { $sum: { $cond: ['$success', 0, 1] } },
+//           avgResponseTime: { $avg: '$responseTime' }
+//         }
+//       }
+//     ]);
 
-    // Get lender-wise breakdown
-    const lenderBreakdown = await RCSLog.aggregate([
-      { $match: matchFilter },
-      {
-        $group: {
-          _id: '$lenderName',
-          totalSent: { $sum: 1 },
-          successful: { $sum: { $cond: ['$success', 1, 0] } },
-          failed: { $sum: { $cond: ['$success', 0, 1] } }
-        }
-      },
-      { $sort: { totalSent: -1 } }
-    ]);
+//     // Get lender-wise breakdown
+//     const lenderBreakdown = await RCSLog.aggregate([
+//       { $match: matchFilter },
+//       {
+//         $group: {
+//           _id: '$lenderName',
+//           totalSent: { $sum: 1 },
+//           successful: { $sum: { $cond: ['$success', 1, 0] } },
+//           failed: { $sum: { $cond: ['$success', 0, 1] } }
+//         }
+//       },
+//       { $sort: { totalSent: -1 } }
+//     ]);
 
-    res.json({
-      status: 'success',
-      data: {
-        analytics,
-        summary: summary[0] || { totalSent: 0, totalSuccess: 0, totalFailed: 0 },
-        lenderBreakdown,
-        filters: { startDate, endDate, rcsType, lenderName }
-      }
-    });
-  } catch (error) {
-    console.error('Error getting RCS analytics:', error);
-    res.status(500).json({
-      status: 'error',
-      message: error.message
-    });
-  }
-};
+//     res.json({
+//       status: 'success',
+//       data: {
+//         analytics,
+//         summary: summary[0] || { totalSent: 0, totalSuccess: 0, totalFailed: 0 },
+//         lenderBreakdown,
+//         filters: { startDate, endDate, rcsType, lenderName }
+//       }
+//     });
+//   } catch (error) {
+//     console.error('Error getting RCS analytics:', error);
+//     res.status(500).json({
+//       status: 'error',
+//       message: error.message
+//     });
+//   }
+// };
 
 /**
  * Update RCS configuration for a source
