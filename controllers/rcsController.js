@@ -33,39 +33,26 @@ exports.processPendingRCS = async (req, res) => {
 exports.getRCSQueueStatus = async (req, res) => {
   try {
     // Get status breakdown
-    const stats = await RCSQueue.aggregate([
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 }
-        }
-      }
-    ]);
+    const stats = await RCSQueue.getAggregateStats();
 
     // Get pending messages (ready to send)
-    const pendingMessages = await RCSQueue.find({ 
-      status: 'PENDING',
-      scheduledTime: { $lte: new Date() }
-    }).countDocuments();
+    const pendingMessages = await RCSQueue.findByStatusAndScheduledTime(
+      'PENDING',
+      new Date()
+    );
 
     // Get upcoming messages (scheduled for future)
-    const upcomingMessages = await RCSQueue.find({ 
-      status: 'PENDING',
-      scheduledTime: { $gt: new Date() }
-    }).countDocuments();
+    const allPending = await RCSQueue.countByStatus('PENDING');
+    const upcomingMessages = allPending - pendingMessages.length;
 
     // Get recent queue entries for preview
-    const recentMessages = await RCSQueue.find({}, 'leadId rcsType status createdAt')
-      .populate('leadId', 'fullName phone source')
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .lean();
+    const recentMessages = await RCSQueue.findRecent(10);
 
     res.json({
       status: 'success',
       data: {
         stats,
-        pendingMessages,
+        pendingMessages: pendingMessages.length,
         upcomingMessages,
         recentMessages,
         isWithinOperatingHours: rcsService.isWithinOperatingHours(),
@@ -96,24 +83,13 @@ exports.getRCSLogsForLead = async (req, res) => {
       });
     }
 
-    // Get RCS logs
-    // const logs = await RCSLog.find({ leadId }, 'queueId rcsType responseStatus sentAt success createdAt')
-    //   .populate('queueId', 'status scheduledTime createdAt')
-    //   .sort({ createdAt: -1 })
-    //   .lean();
-
     // Get queue entries
-    const queueEntries = await RCSQueue.find({ leadId }, 'leadId rcsType status scheduledTime attempts createdAt')
-      .populate('leadId', 'fullName phone source')
-      .sort({ createdAt: -1 })
-      .lean();
+    const queueEntries = await RCSQueue.findByLeadId(leadId);
 
     res.json({
       status: 'success',
       data: {
-        // logs,
         queueEntries,
-        // totalLogs: logs.length,
         totalQueueEntries: queueEntries.length
       }
     });
@@ -125,114 +101,6 @@ exports.getRCSLogsForLead = async (req, res) => {
     });
   }
 };
-
-/**
- * Get RCS analytics and reporting
- * GET /api/rcs/analytics?startDate=2024-01-01&endDate=2024-01-31
- */
-// exports.getRCSAnalytics = async (req, res) => {
-//   try {
-//     const { startDate, endDate, rcsType, lenderName } = req.query;
-    
-//     // Build match filter
-//     const matchFilter = {};
-    
-//     if (startDate && endDate) {
-//       matchFilter.sentAt = {
-//         $gte: new Date(startDate),
-//         $lte: new Date(endDate)
-//       };
-//     }
-    
-//     if (rcsType) {
-//       matchFilter.rcsType = rcsType;
-//     }
-    
-//     if (lenderName) {
-//       matchFilter.lenderName = lenderName;
-//     }
-
-//     // Get detailed analytics
-//     const analytics = await RCSLog.aggregate([
-//       { $match: matchFilter },
-//       {
-//         $group: {
-//           _id: {
-//             rcsType: '$rcsType',
-//             success: '$success',
-//             lenderName: '$lenderName',
-//             date: { $dateToString: { format: '%Y-%m-%d', date: '$sentAt' } }
-//           },
-//           count: { $sum: 1 }
-//         }
-//       },
-//       {
-//         $group: {
-//           _id: {
-//             rcsType: '$_id.rcsType',
-//             date: '$_id.date'
-//           },
-//           totalMessages: { $sum: '$count' },
-//           successfulMessages: {
-//             $sum: {
-//               $cond: [{ $eq: ['$_id.success', true] }, '$count', 0]
-//             }
-//           },
-//           failedMessages: {
-//             $sum: {
-//               $cond: [{ $eq: ['$_id.success', false] }, '$count', 0]
-//             }
-//           }
-//         }
-//       },
-//       { $sort: { '_id.date': -1 } }
-//     ]);
-
-//     // Get summary statistics
-//     const summary = await RCSLog.aggregate([
-//       { $match: matchFilter },
-//       {
-//         $group: {
-//           _id: null,
-//           totalSent: { $sum: 1 },
-//           totalSuccess: { $sum: { $cond: ['$success', 1, 0] } },
-//           totalFailed: { $sum: { $cond: ['$success', 0, 1] } },
-//           avgResponseTime: { $avg: '$responseTime' }
-//         }
-//       }
-//     ]);
-
-//     // Get lender-wise breakdown
-//     const lenderBreakdown = await RCSLog.aggregate([
-//       { $match: matchFilter },
-//       {
-//         $group: {
-//           _id: '$lenderName',
-//           totalSent: { $sum: 1 },
-//           successful: { $sum: { $cond: ['$success', 1, 0] } },
-//           failed: { $sum: { $cond: ['$success', 0, 1] } }
-//         }
-//       },
-//       { $sort: { totalSent: -1 } }
-//     ]);
-
-//     res.json({
-//       status: 'success',
-//       data: {
-//         analytics,
-//         summary: summary[0] || { totalSent: 0, totalSuccess: 0, totalFailed: 0 },
-//         lenderBreakdown,
-//         filters: { startDate, endDate, rcsType, lenderName }
-//       }
-//     });
-//   } catch (error) {
-//     console.error('Error getting RCS analytics:', error);
-//     res.status(500).json({
-//       status: 'error',
-//       message: error.message
-//     });
-//   }
-// };
 
 /**
  * Update RCS configuration for a source
@@ -270,17 +138,24 @@ exports.updateRCSConfig = async (req, res) => {
       }
     }
 
-    const distributionRule = await DistributionRule.findOneAndUpdate(
-      { source },
-      { 
-        $set: { 
-          rcsConfig,
-          lastUpdated: new Date(),
-          lastUpdatedBy: req.user?.id || 'api'
-        }
-      },
-      { new: true, upsert: true }
-    );
+    // Update or create distribution rule
+    const existingRule = await DistributionRule.findBySource(source);
+    
+    let distributionRule;
+    if (existingRule) {
+      distributionRule = await DistributionRule.updateBySource(source, {
+        rcsConfig,
+        lastUpdatedBy: req.user?.id || 'api'
+      });
+    } else {
+      distributionRule = await DistributionRule.create({
+        source,
+        rcsConfig,
+        rules: { immediate: [], delayed: [] },
+        active: true,
+        lastUpdatedBy: req.user?.id || 'api'
+      });
+    }
 
     res.json({
       status: 'success',
@@ -304,7 +179,7 @@ exports.getRCSConfig = async (req, res) => {
   try {
     const { source } = req.params;
 
-    const distributionRule = await DistributionRule.findOne({ source, active: true });
+    const distributionRule = await DistributionRule.findActiveBySource(source);
 
     if (!distributionRule) {
       return res.status(404).json({
@@ -345,13 +220,12 @@ exports.cancelRCSForLead = async (req, res) => {
       });
     }
 
-    const result = await RCSQueue.updateMany(
-      { leadId, status: 'PENDING' },
-      { 
-        $set: { 
-          status: 'CANCELLED',
-          failureReason: 'Cancelled by user'
-        }
+    const result = await RCSQueue.updateManyByLeadIdAndStatus(
+      leadId,
+      'PENDING',
+      {
+        status: 'CANCELLED',
+        failureReason: 'Cancelled by user'
       }
     );
 
@@ -451,17 +325,13 @@ exports.rescheduleFailedRCS = async (req, res) => {
   try {
     const { maxAttempts = 3 } = req.body;
 
-    const result = await RCSQueue.updateMany(
-      { 
-        status: 'FAILED',
-        attempts: { $lt: maxAttempts }
-      },
-      { 
-        $set: { 
-          status: 'PENDING',
-          scheduledTime: new Date(),
-          failureReason: null
-        }
+    const result = await RCSQueue.updateManyByStatusAndAttempts(
+      'FAILED',
+      maxAttempts,
+      {
+        status: 'PENDING',
+        scheduledTime: new Date().toISOString(),
+        failureReason: null
       }
     );
 

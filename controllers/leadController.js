@@ -1,26 +1,26 @@
 const Lead = require('../models/leadModel');
 const ExcelLead = require('../models/ExcelLeadModel');
 const { readFile, deleteFile } = require("../utils/readFile");
-const smlResponseLog = require('../models/smlResponseLogModel');
-const freoResponseLog = require('../models/freoResponseLogModel');
-const APIFeatures = require('../utils/apiFeatures');
+const SMLResponseLog = require('../models/smlResponseLogModel');
+const FreoResponseLog = require('../models/freoResponseLogModel');
 const axios = require('axios');
-const ovlyResponseLog = require('../models/ovlyResponseLog');
-const leadUAT = require('../models/leadUATModel');
-const LeadingPlateResponseLog = require('../models/leadingPlateResponseLog');
+const OvlyResponseLog = require('../models/ovlyResponseLog');
+const LeadUAT = require('../models/leadUATModel');
+const LendingPlateResponseLog = require('../models/leadingPlateResponseLog');
 const FintifiResponseLog = require('../models/fintifiResponseLog');
 const ZypeResponseLog = require('../models/ZypeResponseLogModel');
-const fatakPayResponseLog = require('../models/fatakPayResponseLog');
-const ramFinCropLog = require('../models/ramFinCropLogModel');
-const vrindaLog = require('../models/VrindaFintechResponseLog');
+const FatakPayResponseLog = require('../models/fatakPayResponseLog');
+const RamFinCropLog = require('../models/ramFinCropLogModel');
+// const vrindaLog = require('../models/VrindaFintechResponseLog');
 const DistributionRule = require('../models/distributionRuleModel');
-const mmmResponseLog = require('../models/mmmResponseLog');
-const leadSuccess = require('../models/leadSuccessModel');
+const MMMResponseLog = require('../models/mmmResponseLog');
+const LeadSuccess = require('../models/leadSuccessModel');
 const rcsService = require('../services/rcsService');
 const xlsx = require('xlsx');
 const path = require('path');
 const crypto = require('crypto');
-const indiaLendsResponseLog = require('../models/indiaLendsResponseLog');
+const IndiaLendsResponseLog = require('../models/indiaLendsResponseLog');
+const MpokketResponseLog = require('../models/mpokketResponseLog');
 
 
 // Helper Function to get a random residenceType
@@ -157,7 +157,6 @@ function readExcelFile() {
 
 const pinCodeData = readExcelFile();
 
-
 // Create a lead
 exports.createLead = async (req, res) => {
   const {
@@ -167,45 +166,81 @@ exports.createLead = async (req, res) => {
   } = req.body;
 
   if (!source || !fullName || !phone || !email || !panNumber || consent === undefined) {
-    return res.status(400).json({ message: 'Source, fullName, phone, email, panNumber, and consent are required.' });
+    return res.status(400).json({ 
+      message: 'Source, fullName, phone, email, panNumber, and consent are required.' 
+    });
   }
 
+  // Full name length validation
   if (fullName.length < 2 || fullName.length > 100) {
-    return res.status(400).json({ message: 'Full name must be between 2 and 100 characters.' });
+    return res.status(400).json({ 
+      message: 'Full name must be between 2 and 100 characters.' 
+    });
   }
 
+  // Email validation
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/;
   if (!emailRegex.test(email)) {
     return res.status(400).json({ message: 'Invalid email format.' });
   }
 
+  // PAN validation
   const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
   if (!panRegex.test(panNumber)) {
-    return res.status(400).json({ message: 'Invalid PAN number format. Must match ABCDE1234F.' });
+    return res.status(400).json({ 
+      message: 'Invalid PAN number format. Must match ABCDE1234F.' 
+    });
   }
 
+  // Date of birth validation
   const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) && !isNaN(Date.parse(dateOfBirth));
   if (dateOfBirth && (!isValidDate || new Date(dateOfBirth) > new Date())) {
-    return res.status(400).json({ message: 'Invalid date of birth or date cannot be in the future.' });
+    return res.status(400).json({ 
+      message: 'Invalid date of birth or date cannot be in the future.' 
+    });
   }
 
+  // Set defaults
   const finalSalary = salary || '50000';
   const finalJobType = jobType || 'SALARIED';
 
   try {
-    const lead = new Lead({
-      source, fullName, firstName, lastName, phone, email,
-      age, dateOfBirth, gender, panNumber, jobType: finalJobType,
-      businessType, salary: finalSalary, creditScore, cibilScore,
-      address, pincode, consent,
-    });
+    // Create lead data object
+    const leadData = {
+      source,
+      fullName,
+      firstName,
+      lastName,
+      phone,
+      email,
+      age,
+      dateOfBirth,
+      gender,
+      panNumber,
+      jobType: finalJobType,
+      businessType,
+      salary: finalSalary,
+      creditScore,
+      cibilScore,
+      address,
+      pincode,
+      consent
+    };
 
-    const savedLead = await lead.save();
+    // Create lead using DynamoDB model
+    const savedLead = await Lead.create(leadData);
 
+    // Get distribution rules (your existing function)
     const distributionRules = await getDistributionRules(source);
 
-    const immediateSuccessfulLenders = await processLenders(savedLead, distributionRules.immediate, 'immediate');
+    // Process immediate lenders (your existing function)
+    const immediateSuccessfulLenders = await processLenders(
+      savedLead, 
+      distributionRules.immediate, 
+      'immediate'
+    );
 
+    // Schedule delayed lenders (your existing function)
     scheduleDelayedLenders(savedLead, distributionRules.delayed);
 
     res.status(201).json({
@@ -214,12 +249,37 @@ exports.createLead = async (req, res) => {
         lead: savedLead,
       },
     });
+
   } catch (error) {
     console.log(error);
-    if (error.code === 11000) {
-      return res.status(409).json({ message: 'Duplicate PAN number' });
+
+    // Handle duplicate phone error
+    if (error.code === 'DUPLICATE_PHONE') {
+      return res.status(409).json({ 
+        message: 'Phone number already exists' 
+      });
     }
-    res.status(500).json({ message: 'Server error', error: error.message });
+
+    // Handle duplicate PAN error
+    if (error.code === 'DUPLICATE_PAN') {
+      return res.status(409).json({ 
+        message: 'Duplicate PAN number' 
+      });
+    }
+
+    // Handle validation errors
+    if (error.errors) {
+      return res.status(400).json({ 
+        message: 'Validation failed', 
+        errors: error.errors 
+      });
+    }
+
+    // Generic server error
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
 
@@ -241,7 +301,7 @@ async function processLenders(lead, lenders, type) {
         }
         
         // Log successful distribution
-        console.log(`Lead ${lead._id} sent to ${lenderName} (${type})`);
+        console.log(`Lead ${lead.leadId} sent to ${lenderName} (${type})`);
       } catch (error) {
         console.error(`Error sending lead to ${lenderName}:`, error.message);
       }
@@ -249,11 +309,18 @@ async function processLenders(lead, lenders, type) {
   }
 
   // Store successful lenders for RCS scheduling
-  if (type === 'immediate') {
-    // Store immediate successful lenders in lead for later processing
-    await Lead.findByIdAndUpdate(lead._id, { 
-      $set: { immediateSuccessfulLenders: successfulLenders }
-    });
+  if (type === 'immediate' && successfulLenders.length > 0) {
+
+    // Update lead with immediate successful lenders
+    if (Lead && lead.leadId) {
+      try {
+        await Lead.updateById(lead.leadId, { 
+          immediateSuccessfulLenders: successfulLenders 
+        });
+      } catch (error) {
+        console.error(`Error updating lead with successful lenders:`, error.message);
+      }
+    }
   }
   
   return successfulLenders;
@@ -273,10 +340,10 @@ function scheduleDelayedLenders(lead, delayedLenders) {
           const result = await sendToLender(lead, lenderConfig.lender);
           
           if (isLenderSuccess(result, lenderConfig.lender)) {
-            console.log(`Delayed lender ${lenderConfig.lender} succeeded for lead ${lead._id}`);
+            console.log(`Delayed lender ${lenderConfig.lender} succeeded for lead ${lead.leadId}`);
           }
           
-          console.log(`Delayed lead ${lead._id} sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
+          console.log(`Delayed lead ${lead.leadId} sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
         } catch (error) {
           console.error(`Error sending delayed lead to ${lenderConfig.lender}:`, error.message);
         } finally {
@@ -285,18 +352,19 @@ function scheduleDelayedLenders(lead, delayedLenders) {
           
           // When all delayed lenders are processed, schedule RCS
           if (completedLendersCount === totalDelayedLenders) {
-            await scheduleRCSAfterAllLenders(lead._id);
+            // Use the DynamoDB primary key (leadId) instead of Mongo-style _id
+            await scheduleRCSAfterAllLenders(lead.leadId);
           }
         }
       }, delayMs);
 
-      console.log(`Scheduled lead ${lead._id} to be sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
+      console.log(`Scheduled lead ${lead.leadId} to be sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
     }
   }
 
   // If no delayed lenders, schedule RCS immediately after processing immediate lenders
   if (totalDelayedLenders === 0) {
-    setTimeout(() => scheduleRCSAfterAllLenders(lead._id), 5000); // 5 second delay
+    setTimeout(() => scheduleRCSAfterAllLenders(lead.leadId), 5000); // 5 second delay
   }
 }
 
@@ -314,7 +382,8 @@ async function sendToLender(lead, lender) {
     'FATAKPAY': sendToFATAKPAY,
     'RAMFINCROP': sendToRAMFINCROP,
     "MyMoneyMantra": sendToMyMoneyMantra,
-    "INDIALENDS": sendToIndiaLends
+    "INDIALENDS": sendToIndiaLends,
+    "MPOKKET": sendToMpokket,
   };
 
   // Call the appropriate handler for the lender
@@ -327,13 +396,13 @@ async function sendToLender(lead, lender) {
 
 async function getDistributionRules(source) {
   try {
-    const dbRules = await DistributionRule.findOne({ source, active: true });
-    console.log(dbRules);
-
+    const dbRules = await DistributionRule.findActiveBySource(source);
+    console.log("Get DBrules", dbRules);
+    
     if (dbRules) {
       return dbRules.rules;
     }
-
+    
     const defaultRules = {
       FREO: {
         immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'INDIALENDS'],
@@ -378,11 +447,10 @@ async function getDistributionRules(source) {
         ]
       }
     };
-
+    
     return defaultRules[source] || defaultRules.default;
   } catch (error) {
     console.error('Error fetching distribution rules:', error);
-
     return {
       immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'INDIALENDS'],
       delayed: [
@@ -437,101 +505,97 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
   
   try {
     // Check SML
-    const smlResult = await smlResponseLog.findOne({ 
-      leadId, 
-      'responseBody.message': 'Lead created successfully'
-    });
+    const smlResults = await SMLResponseLog.findByLeadId(leadId);
+    const smlResult = smlResults.find(log => 
+      log.responseBody?.message === 'Lead created successfully'
+    );
     if (smlResult) successfulLenders.push('SML');
 
     // Check FREO  
-    const freoResult = await freoResponseLog.findOne({ 
-      leadId, 
-      'responseBody.success': true
-    });
+    const freoResults = await FreoResponseLog.findByLeadId(leadId);
+    const freoResult = freoResults.find(log => 
+      log.responseBody?.success === true
+    );
     if (freoResult) successfulLenders.push('FREO');
 
     // Check OVLY
-    const ovlyResult = await ovlyResponseLog.findOne({ 
-      leadId, 
-      responseStatus: 'success'
-    });
+    const ovlyResults = await OvlyResponseLog.findByLeadId(leadId);
+    const ovlyResult = ovlyResults.find(log => 
+      log.responseStatus === 'success'
+    );
     if (ovlyResult) successfulLenders.push('OVLY');
 
     // Check LendingPlate
-    const lpResult = await LeadingPlateResponseLog.findOne({ 
-      leadId, 
-      responseStatus: 'Success'
-    });
+    const lpResults = await LendingPlateResponseLog.findByLeadId(leadId);
+    const lpResult = lpResults.find(log => 
+      log.responseStatus === 'Success'
+    );
     if (lpResult) successfulLenders.push('LendingPlate');
 
     // Check ZYPE
-    const zygeResult = await ZypeResponseLog.findOne({ 
-      leadId, 
-      $or: [
-        { responseStatus: 'ACCEPT' },
-        { 'responseBody.status': 'ACCEPT' }
-      ]
-    });
+    const zygeResults = await ZypeResponseLog.findByLeadId(leadId);
+    const zygeResult = zygeResults.find(log => 
+      log.responseStatus === 'ACCEPT' || log.responseBody?.status === 'ACCEPT'
+    );
     if (zygeResult) successfulLenders.push('ZYPE');
 
     // Check FINTIFI
-    const fintifiResult = await FintifiResponseLog.findOne({ 
-      leadId, 
-      responseStatus: 200
-    });
+    const fintifiResults = await FintifiResponseLog.findByLeadId(leadId);
+    const fintifiResult = fintifiResults.find(log => 
+      log.responseStatus === 200
+    );
     if (fintifiResult) successfulLenders.push('FINTIFI');
 
     // Check FATAKPAY
-    const fatakResult = await fatakPayResponseLog.findOne({ 
-      leadId, 
-      $or: [
-        { responseStatus: 200 },
-        { responseStatus: '200' }
-      ]
-    });
+    const fatakResults = await FatakPayResponseLog.findByLeadId(leadId);
+    const fatakResult = fatakResults.find(log => 
+      log.responseStatus === 200 || log.responseStatus === '200'
+    );
     if (fatakResult) successfulLenders.push('FATAKPAY');
 
     // Check RAMFINCROP
-    const ramResult = await ramFinCropLog.findOne({ 
-      leadId, 
-      responseStatus: 'success'
-    });
+    const ramResults = await RamFinCropLog.findByLeadId(leadId);
+    const ramResult = ramResults.find(log => 
+      log.responseStatus === 'success'
+    );
     if (ramResult) successfulLenders.push('RAMFINCROP');
 
     // Check MyMoneyMantra
-    const mmmResult = await mmmResponseLog.findOne({ 
-      leadId, 
-      $or: [
-        { responseStatus: 200 },
-        { responseStatus: 201 }
-      ]
-    });
+    const mmmResults = await MMMResponseLog.findByLeadId(leadId);
+    const mmmResult = mmmResults.find(log => 
+      log.responseStatus === 200 || log.responseStatus === 201
+    );
     if (mmmResult) successfulLenders.push('MyMoneyMantra');
 
     // --- Create entry in leadSuccess ---
-    // const lead = await Lead.findById(leadId);
-    // if (lead) {
-    //   // Prepare lender flags
-    //   const lenderFlags = {};
-    //   successfulLenders.forEach(lender => {
-    //     lenderFlags[lender] = true;
-    //   });
+    if (lead && successfulLenders.length > 0) {
+      // Prepare lender flags
+      const lenderFlags = {};
+      successfulLenders.forEach(lender => {
+        lenderFlags[lender] = true;
+      });
 
-    //   // Create new record
-    //   await leadSuccess.create({
-    //     leadId,
-    //     source: lead.source,
-    //     phone: lead.phone,
-    //     email: lead.email,
-    //     panNumber: lead.panNumber,
-    //     fullName: lead.fullName,
-    //     ...lenderFlags
-    //   });
-    // }
+      // Find or create lead success record
+      const { record, created } = await LeadSuccess.findOrCreate({
+        leadId,
+        source: lead.source,
+        phone: lead.phone,
+        email: lead.email,
+        panNumber: lead.panNumber,
+        fullName: lead.fullName,
+        ...lenderFlags
+      });
+
+      // If record already exists, update it with new successful lenders
+      if (!created) {
+        await LeadSuccess.updateByLeadId(leadId, lenderFlags);
+      }
+    }
 
   } catch (error) {
     console.error('Error getting successful lenders:', error);
   }
+
   console.log("RCS lenders list:", successfulLenders);
   return successfulLenders;
 }
@@ -539,12 +603,15 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 // Individual lender handlers
 async function sendToSML(lead) {
   const {
-    _id, fullName, phone, email, dateOfBirth,
+    leadId, fullName, phone, email, dateOfBirth,
     gender, panNumber, jobType, salary, pincode, source
   } = lead;
 
-  const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
+  // Use whichever ID field exists
+  const leadIdValue = leadId;
 
+  const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
+  
   const payload = {
     mobile_number: String(phone),
     first_name: fullName.split(' ')[0],
@@ -570,21 +637,21 @@ async function sendToSML(lead) {
 
     console.log("SML response:", apiResponse.data);
 
-    // Save API response to the new collection
-    const responseLog = new smlResponseLog({
-      leadId: _id,
+    // Save API response using DynamoDB
+    const responseLog = await SMLResponseLog.create({
+      leadId: leadIdValue,
       source: source,
       requestPayload: payload,
       responseStatus: apiResponse.status,
       responseBody: apiResponse.data,
     });
 
-    await responseLog.save();
     return responseLog;
   } catch (error) {
     console.error('Error sending lead to SML API:', error);
-    const errorLog = await smlResponseLog.create({
-      leadId: _id,
+
+    const errorLog = await SMLResponseLog.create({
+      leadId: leadIdValue,
       source: source,
       requestPayload: payload,
       responseStatus: error.response?.status || 500,
@@ -597,14 +664,13 @@ async function sendToSML(lead) {
 async function sendToFreo(lead) {
   console.log("FREO", lead);
   const {
-    _id, fullName, phone, email, dateOfBirth,
+    leadId, fullName, phone, email, dateOfBirth,
     gender, panNumber, jobType, salary, address, pincode, source
   } = lead;
-
   const baseUrl = process.env.DEV_URL;
   const accessToken = await getAccessToken();
-
-  // Construct payload for MoneyTap API
+  
+  // Construct payload for Freo API
   const payload = {
     emailId: email,
     phone,
@@ -640,26 +706,26 @@ async function sendToFreo(lead) {
       }
     );
 
-    // Save API response to the new collection
-    const responseLog = new freoResponseLog({
-      leadId: _id,
+    // Save API response using DynamoDB model
+    const responseLog = await FreoResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: payload,
       responseStatus: apiResponse.status,
       responseBody: apiResponse.data,
     });
-
-    await responseLog.save();
+    
     return responseLog;
   } catch (error) {
     console.error('Error sending lead to Freo API:', error.message);
-    const errorLog = await freoResponseLog.create({
-      leadId: _id,
+    const errorLog = await FreoResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: payload,
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
     });
+    
     return errorLog;
   }
 }
@@ -667,15 +733,13 @@ async function sendToFreo(lead) {
 async function sendToOVLY(lead) {
   console.log("OVLY", lead);
   const {
-    _id, fullName, phone, email, dateOfBirth,
+    leadId, fullName, phone, email, dateOfBirth,
     gender, panNumber, jobType, salary, pincode, source
   } = lead;
-
   const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
   const createLeadApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/create';
   const clientId = process.env.OVLY_CLIENT_ID;
   const clientKey = process.env.OVLY_CLIENT_KEY;
-
   const dedupPayload = new URLSearchParams({
     phone_number: phone,
     pan: panNumber,
@@ -684,7 +748,6 @@ async function sendToOVLY(lead) {
     net_monthly_income: `${salary}`,
     name_as_per_pan: fullName,
   });
-
   const dedupPayloadDB = {
     phone_number: phone,
     pan: panNumber,
@@ -693,7 +756,6 @@ async function sendToOVLY(lead) {
     net_monthly_income: `${salary}`,
     name_as_per_pan: fullName,
   };
-
   try {
     const dedupResponse = await axios.post(dedupApiUrl, dedupPayload, {
       headers: {
@@ -702,9 +764,7 @@ async function sendToOVLY(lead) {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
     });
-
     const dedupData = dedupResponse.data;
-
     // If lead is fresh (not a duplicate), push to OVLY Lead Create API
     if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
       const createLeadPayload = new URLSearchParams({
@@ -720,7 +780,6 @@ async function sendToOVLY(lead) {
         // date_of_birth: null,
         gender,
       });
-
       const createLeadPayloadDB = {
         phone_number: phone,
         pan: panNumber,
@@ -734,7 +793,6 @@ async function sendToOVLY(lead) {
         date_of_birth: null,
         gender,
       };
-
       const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
         headers: {
           'admin-api-client-id': clientId,
@@ -742,34 +800,29 @@ async function sendToOVLY(lead) {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
-
-      // Save lead response in DB
-      const ovlyLeadLog = new ovlyResponseLog({
-        leadId: _id,
+      // Save lead response using DynamoDB model
+      const ovlyLeadLog = await OvlyResponseLog.create({
+        leadId: leadId,
         source: source,
         requestPayload: createLeadPayloadDB,
         responseStatus: leadResponse.data.status,
         responseBody: leadResponse.data,
       });
-
-      await ovlyLeadLog.save();
       return ovlyLeadLog;
     } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
-      const ovlyLeadLog = new ovlyResponseLog({
-        leadId: _id,
+      const ovlyLeadLog = await OvlyResponseLog.create({
+        leadId: leadId,
         source: source,
         requestPayload: dedupPayloadDB,
         responseStatus: 'duplicate',
         responseBody: dedupData,
       });
-
-      await ovlyLeadLog.save();
       return ovlyLeadLog;
     }
   } catch (error) {
     console.error('Error in OVLY API integration:', error.response?.data || error.message);
-    const errorLog = await ovlyResponseLog.create({
-      leadId: _id,
+    const errorLog = await OvlyResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: dedupPayloadDB || {},
       responseStatus: error.response?.status || 500,
@@ -782,11 +835,9 @@ async function sendToOVLY(lead) {
 async function sendToLendingPlate(lead) {
   console.log("LP", lead);
   const {
-    _id, fullName, phone, panNumber, dateOfBirth, pincode, salary, source
+    leadId, fullName, phone, panNumber, dateOfBirth, pincode, salary, source
   } = lead;
-
   const isMobileValid = await checkMobileExists(phone);
-
   const loanPayload = {
     partner_id: process.env.LP_PARTNER_ID,
     ref_id: phone,
@@ -798,10 +849,9 @@ async function sendToLendingPlate(lead) {
     profession: "SAL",
     net_mothlyincome: salary,
   };
-
   if (!isMobileValid) {
-    const responseLog = await LeadingPlateResponseLog.create({
-      leadId: _id,
+    const responseLog = await LendingPlateResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: loanPayload,
       responseStatus: "Fail",
@@ -810,8 +860,8 @@ async function sendToLendingPlate(lead) {
     return responseLog;
   } else {
     const loanSuccess = await processLoanApplication(loanPayload);
-    const responseLog = await LeadingPlateResponseLog.create({
-      leadId: _id,
+    const responseLog = await LendingPlateResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: loanPayload,
       responseStatus: loanSuccess.Message,
@@ -824,18 +874,15 @@ async function sendToLendingPlate(lead) {
 async function sendToZYPE(lead) {
   console.log("ZYPE", lead);
   const {
-    _id, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary, source
+    leadId, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary, source
   } = lead;
-
   if (jobType === "SELF_EMPLOYED") {
     return;
   }
-
   const isEligible = await checkZypeEligibility(phone, panNumber);
-
   if (isEligible.message === 'REJECT') {
     const responseLog = await ZypeResponseLog.create({
-      leadId: _id,
+      leadId: leadId,
       source: source,
       requestPayload: {
         mobileNumber: phone,
@@ -859,10 +906,9 @@ async function sendToZYPE(lead) {
       partnerId: process.env.ZYPE_PARTNER_ID,
       bureauType: 3,
     };
-
     const zypeResponse = await processZypeApplication(zypePayload);
     const responseLog = await ZypeResponseLog.create({
-      leadId: _id,
+      leadId: leadId,
       source: source,
       requestPayload: zypePayload,
       responseStatus: zypeResponse?.status || "Unknown",
@@ -875,12 +921,10 @@ async function sendToZYPE(lead) {
 async function sendToFINTIFI(lead) {
   console.log("FINTIFI", lead);
   const {
-    _id, fullName, phone, email, dateOfBirth, gender, panNumber, jobType, salary, pincode, source
+    leadId, fullName, phone, email, dateOfBirth, gender, panNumber, jobType, salary, pincode, source
   } = lead;
-
   const apiKey = process.env.API_KEY_FINTIFI;
   const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
-
   const payload = {
     firstName: fullName.split(' ')[0],
     lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
@@ -893,7 +937,6 @@ async function sendToFINTIFI(lead) {
     pincode,
     jobType,
   };
-
   try {
     const apiResponse = await axios.post(externalApiUrl, payload, {
       headers: {
@@ -901,22 +944,19 @@ async function sendToFINTIFI(lead) {
         'Content-Type': 'application/json',
       },
     });
-
-    // Save API response to the new collection
-    const responseLog = new FintifiResponseLog({
-      leadId: _id,
+    // Save API response using DynamoDB model
+    const responseLog = await FintifiResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: payload,
       responseStatus: apiResponse.data.success,
       responseBody: apiResponse.data,
     });
-
-    await responseLog.save();
     return responseLog;
   } catch (error) {
     console.error('Error sending lead to FINTIFI API:', error);
     const errorLog = await FintifiResponseLog.create({
-      leadId: _id,
+      leadId: leadId,
       source: source,
       requestPayload: payload,
       responseStatus: error.success || 500,
@@ -929,17 +969,15 @@ async function sendToFINTIFI(lead) {
 async function sendToFATAKPAY(lead) {
   console.log("FATAKPAY", lead);
   const {
-    _id, fullName, firstName, lastName, phone, email, dateOfBirth,
+    leadId, fullName, firstName, lastName, phone, email, dateOfBirth,
     gender, address, pincode, jobType, panNumber, source
   } = lead;
-
   // Check if pincode is valid for FATAKPAY
   // const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
   // if (!validPincodes.includes(parseInt(pincode))) {
   //   console.log(`Pincode ${pincode} not valid for FATAKPAY. Skipping.`);
   //   return null;
   // }
-
   try {
     const tokenResponse = await axios.post(
       'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
@@ -948,9 +986,7 @@ async function sendToFATAKPAY(lead) {
         password: process.env.FATAKPAY_PASSWORD,
       }
     );
-
     const accessToken = tokenResponse.data.data.token;
-
     const eligibilityPayload = {
       mobile: phone,
       first_name: firstName || fullName.split(' ')[0],
@@ -965,7 +1001,6 @@ async function sendToFATAKPAY(lead) {
       consent: true,
       consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
     };
-
     const eligibilityResponse = await axios.post(
       'https://onboardingapi.fatakpay.com/external-api/v1/emi-insurance-eligibility',
       eligibilityPayload,
@@ -976,10 +1011,9 @@ async function sendToFATAKPAY(lead) {
         },
       }
     );
-
-    // Save Response in Database
-    const responseLog = await fatakPayResponseLog.create({
-      leadId: _id,
+    // Save Response using DynamoDB model
+    const responseLog = await FatakPayResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: eligibilityPayload,
       responseStatus: eligibilityResponse.data.status_code,
@@ -1002,9 +1036,8 @@ async function sendToFATAKPAY(lead) {
       consent: true,
       consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
     };
-
-    const errorLog = await fatakPayResponseLog.create({
-      leadId: _id,
+    const errorLog = await FatakPayResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: eligibilityPayload || {},
       responseStatus: error.response?.status || 500,
@@ -1016,7 +1049,7 @@ async function sendToFATAKPAY(lead) {
 
 async function sendToRAMFINCROP(lead) {
   const {
-    _id, fullName, phone, email, dateOfBirth, panNumber, jobType, salary, source
+    leadId, fullName, phone, email, dateOfBirth, panNumber, jobType, salary, source
   } = lead;
 
   const payload = {
@@ -1040,10 +1073,9 @@ async function sendToRAMFINCROP(lead) {
         }
       }
     );
-    console.log(response);
-
-    const responseLog = await ramFinCropLog.create({
-      leadId: _id,
+    console.log(response.data, response.status);
+    const responseLog = await RamFinCropLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: payload,
       responseStatus: response.status,
@@ -1052,8 +1084,8 @@ async function sendToRAMFINCROP(lead) {
     return responseLog;
   } catch (error) {
     console.error('Error creating lead for RAMFINCROP:', error.response ? error.response.data : error.message);
-    const errorLog = await ramFinCropLog.create({
-      leadId: _id,
+    const errorLog = await RamFinCropLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: payload,
       responseStatus: error.response?.status || 500,
@@ -1063,74 +1095,71 @@ async function sendToRAMFINCROP(lead) {
   }
 }
 
-async function sendToVrindaFintech(lead) {
-  const {
-    _id, fullName, phone, email, panNumber, pincode,
-    jobType, salary,
-  } = lead;
+// async function sendToVrindaFintech(lead) {
+//   const {
+//     _id, fullName, phone, email, panNumber, pincode,
+//     jobType, salary,
+//   } = lead;
 
-  const payload = {
-    full_name: fullName,
-    mobile: phone,
-    mobile_verification_flag: "0",
-    email,
-    pancard: panNumber,
-    pincode,
-    income_type: jobType,
-    purpose_of_loan: 'Purchase',
-    monthly_salary: salary,
-    loan_amount: salary,
-    customer_lead_id: _id.toString(),
-  };
+//   const payload = {
+//     full_name: fullName,
+//     mobile: phone,
+//     mobile_verification_flag: "0",
+//     email,
+//     pancard: panNumber,
+//     pincode,
+//     income_type: jobType,
+//     purpose_of_loan: 'Purchase',
+//     monthly_salary: salary,
+//     loan_amount: salary,
+//     customer_lead_id: _id.toString(),
+//   };
 
-  try {
-    const response = await axios.post(
-      'https://preprod-api.vrindafintech.com/marketing-push-data/',
-      payload,
-      {
-        headers: {
-          'Auth': 'd95af2f34ac136f6941307556bda40f881c6349cfc380c07b010a068474f40e8',
-          'Username': 'RATECUT_30042025',
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+//   try {
+//     const response = await axios.post(
+//       'https://preprod-api.vrindafintech.com/marketing-push-data/',
+//       payload,
+//       {
+//         headers: {
+//           'Auth': 'd95af2f34ac136f6941307556bda40f881c6349cfc380c07b010a068474f40e8',
+//           'Username': 'RATECUT_30042025',
+//           'Accept': 'application/json',
+//           'Content-Type': 'application/json'
+//         }
+//       }
+//     );
 
-    const responseLog = await vrindaLog.create({
-      leadId: _id,
-      requestPayload: payload,
-      responseStatus: response.status,
-      responseBody: response.data,
-    });
+//     const responseLog = await vrindaLog.create({
+//       leadId: _id,
+//       requestPayload: payload,
+//       responseStatus: response.status,
+//       responseBody: response.data,
+//     });
 
-    return responseLog;
-  } catch (error) {
-    console.error('Error creating lead for VrindaFintech:', error.response?.data || error.message);
-    const errorLog = await vrindaLog.create({
-      leadId: _id,
-      requestPayload: payload,
-      responseStatus: error.response?.status || 500,
-      responseBody: error.response?.data || { message: 'Unknown error' },
-    });
+//     return responseLog;
+//   } catch (error) {
+//     console.error('Error creating lead for VrindaFintech:', error.response?.data || error.message);
+//     const errorLog = await vrindaLog.create({
+//       leadId: _id,
+//       requestPayload: payload,
+//       responseStatus: error.response?.status || 500,
+//       responseBody: error.response?.data || { message: 'Unknown error' },
+//     });
 
-    return errorLog;
-  }
-}
+//     return errorLog;
+//   }
+// }
 
 async function sendToMyMoneyMantra(lead) {
   console.log("MyMoneyMantra API Call899", lead);
-
   const {
-    _id, fullName, phone, email, dateOfBirth,
+    leadId, fullName, phone, email, dateOfBirth,
     gender, pincode, jobType, panNumber, salary, source
   } = lead;
-
   try {
     // Step 1: Get Access Token
     const correlationId = `MMM_${Date.now()}`;
     console.log("correlationId:909", correlationId);
-
     const authResponse = await axios.post(
       'https://api2.mymoneymantra.com/api/jwt/v1/authenticate',
       {
@@ -1146,9 +1175,7 @@ async function sendToMyMoneyMantra(lead) {
       }
     );
     console.log("925", authResponse.data);
-
     const { accessToken } = authResponse.data;
-
     // Step 2: Prepare Lead Payload
     const leadPayload = {
       personal: {
@@ -1191,9 +1218,7 @@ async function sendToMyMoneyMantra(lead) {
         }
       ],
     };
-
     // Step 3: Send Lead to MMM    
-
     const leadResponse = await axios.post(
       'https://api2.mymoneymantra.com/orchestration/api/affiliate/lead',
       leadPayload,
@@ -1211,23 +1236,19 @@ async function sendToMyMoneyMantra(lead) {
         }
       }
     );
-
-    // Step 4: Save Response in Database
-    const responseLog = await mmmResponseLog.create({
-      leadId: _id,
+    // Step 4: Save Response using DynamoDB model
+    const responseLog = await MMMResponseLog.create({
+      leadId: leadId,
       source: source,
       correlationId: correlationId,
       requestPayload: leadPayload,
       responseStatus: leadResponse.status,
       responseBody: leadResponse.data
     });
-
     console.log('MyMoneyMantra Lead Created:', leadResponse.data);
     return responseLog;
-
   } catch (error) {
     console.error('Error in MyMoneyMantra API:', error.response?.data || error.message);
-
     // Prepare payload for error logging
     const leadPayload = {
       personal: {
@@ -1239,10 +1260,9 @@ async function sendToMyMoneyMantra(lead) {
       },
       pincode: pincode
     };
-
     // Save error log
-    const errorLog = await mmmResponseLog.create({
-      leadId: _id,
+    const errorLog = await MMMResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: leadPayload,
       responseStatus: error.response?.status || 500,
@@ -1256,7 +1276,6 @@ async function sendToMyMoneyMantra(lead) {
         stack: error.stack
       }
     });
-
     return errorLog;
   }
 }
@@ -1288,7 +1307,7 @@ async function sendToIndiaLends(lead) {
   console.log("IndiaLends API Call", lead);
 
   const {
-    _id,
+    leadId,
     fullName,
     phone,
     email,
@@ -1309,8 +1328,8 @@ async function sendToIndiaLends(lead) {
       null,
       {
         params: {
-          email: process.env.INDIALENDS_EMAIL || 'RateCut@indialends.com',
-          password: process.env.INDIALENDS_PASSWORD || 'raiNdL@211125$#'
+          email: 'RateCut@indialends.com',
+          password: 'raiNdL@211125$#'
         }
       }
     );
@@ -1346,8 +1365,8 @@ async function sendToIndiaLends(lead) {
 
     // If IsDedupe is "1" or "2", save as duplicate and return
     if (isDedupe === "1" || isDedupe === "2") {
-      const duplicateLog = await indiaLendsResponseLog.create({
-        leadId: _id,
+      const duplicateLog = await IndiaLendsResponseLog.create({
+        leadId: leadId,
         source: source,
         requestPayload: { MobileNumber: mobileHash },
         responseStatus: dedupResponse.status,
@@ -1396,8 +1415,8 @@ async function sendToIndiaLends(lead) {
     console.log("Credit Report Response:", creditReportResponse.data);
 
     // Step 4: Save Response in Database
-    const responseLog = await indiaLendsResponseLog.create({
-      leadId: _id,
+    const responseLog = await IndiaLendsResponseLog.create({
+      leadId: leadId,
       source: source,
       accessToken: accessToken,
       dedupCheck: dedupResponse.data,
@@ -1424,8 +1443,8 @@ async function sendToIndiaLends(lead) {
     };
 
     // Save error log
-    const errorLog = await indiaLendsResponseLog.create({
-      leadId: _id,
+    const errorLog = await IndiaLendsResponseLog.create({
+      leadId: leadId,
       source: source,
       requestPayload: errorPayload,
       responseStatus: error.response?.status || 500,
@@ -1480,541 +1499,239 @@ function mapJobTypeToEmploymentType(jobType) {
   return jobTypeMap[jobType?.toLowerCase()] || 'salaried';
 }
 
-// exports.createLead = async (req, res) => {
-//   const { source, fullName, firstName, lastName, phone, email, age, dateOfBirth, gender, panNumber, jobType, businessType, salary, creditScore, cibilScore, address, pincode, consent, } = req.body;
+async function sendToMpokket(lead) {
+  const {
+    leadId,
+    fullName, firstName, lastName, phone, email, dateOfBirth,
+    gender, pincode, jobType, businessType, panNumber, salary, 
+    address, consent, createdAt, source
+  } = lead;
 
-//   // Input validation
-//   if (!source || !fullName || !phone || !email || !panNumber || consent === undefined) {
-//     return res.status(400).json({ message: 'Source, fullName, phone, email, panNumber, and consent are required.' });
-//   }
+  // Use whichever ID field exists
+  const leadIdValue = leadId;
 
-//   // Full Name validation
-//   if (fullName.length < 2 || fullName.length > 100) {
-//     return res.status(400).json({ message: 'Full name must be between 2 and 100 characters.' });
-//   }
+  try {
 
-//   // Email validation
-//   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/;
-//   if (!emailRegex.test(email)) {
-//     return res.status(400).json({ message: 'Invalid email format.' });
-//   }
+    const dedupePayload = {
+      email_id: email,
+      mobile_number: phone
+    };
 
-//   // PAN number validation
-//   const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-//   if (!panRegex.test(panNumber)) {
-//     return res.status(400).json({ message: 'Invalid PAN number format. Must match ABCDE1234F.' });
-//   }
+    const dedupeResponse = await axios.post(
+      'https://stg-api.mpkt.in/acquisition-affiliate/v1/dedupe/check',
+      dedupePayload,
+      {
+        headers: {
+          'api-key': process.env.MPOKKET_API_KEY || '49AC55BC2D67447892A5BFF7A5D33',
+          'Content-Type': 'application/json'
+        }
+      }
+    );
 
-//   // Date of Birth validation
-//   const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) && !isNaN(Date.parse(dateOfBirth));
-//   if (dateOfBirth && (!isValidDate || new Date(dateOfBirth) > new Date())) {
-//     return res.status(400).json({ message: 'Invalid date of birth or date cannot be in the future.' });
-//   }
+    console.log("Mpokket Dedupe Response:", dedupeResponse.data);
 
-//   // Conditional defaults for salary and jobType
-//   const finalSalary = salary || '50000';
-//   const finalJobType = jobType || 'SALARIED';
+    // Check if dedupe passed
+    if (!dedupeResponse.data.success) {
+      console.log("Mpokket Dedupe check failed - Lead already exists");
+      
+      // Save dedupe failure log
+      const dedupeFailLog = await MpokketResponseLog.create({
+        leadId: leadIdValue,
+        source: source,
+        requestPayload: dedupePayload,
+        responseStatus: dedupeResponse.status,
+        responseBody: dedupeResponse.data,
+        step: 'dedupe_check',
+        status: 'duplicate'
+      });
 
-//   try {
-//     // Create and save the lead
-//     const lead = new Lead({
-//       source, fullName, firstName, lastName, phone, email,
-//       age,
-//       dateOfBirth,
-//       gender,
-//       panNumber,
-//       jobType: finalJobType,
-//       businessType,
-//       salary: finalSalary,
-//       creditScore,
-//       cibilScore,
-//       address,
-//       pincode,
-//       consent,
-//     });
+      return dedupeFailLog;
+    }
 
-//     const savedLead = await lead.save();
+    // Step 2: Send Lead to Mpokket (if dedupe passed)
+    const leadPayload = {
+      email_id: email,
+      mobile_no: phone,
+      Full_name: fullName,
+      first_name: firstName || fullName.split(' ')[0],
+      middle_name: "", // Optional - extract if needed
+      last_name: lastName || fullName.split(' ').slice(1).join(' '),
+      date_of_birth: formatDateToDDMMYYYY(dateOfBirth),
+      gender: mapGenderToMpokket(gender),
+      profession: mapJobTypeToMpokket(jobType),
+      additional_info: {
+        consent_timestamp: formatConsentTimestamp(createdAt),
+        api_consent: consent ? "Yes" : "No",
+        loan_amount: "", // Add if available in lead data
+        loan_tenure: "", // Add if available in lead data
+        company_type: businessType || "",
+        industry_type: "", // Add if available
+        company_name: "", // Add if available
+        current_designation: "", // Add if available
+        company_address: address || "",
+        company_pincode: pincode || "",
+        company_city: "", // Extract from pincode if needed
+        company_state: "", // Extract from pincode if needed
+        current_company_working_years: "", // Add if available
+        net_monthly_income: salary || "",
+        salary_mode: "", // Add if available
+        bank_name: "", // Add if available
+        pancard: panNumber,
+        enter_fname_as_per_pancard: firstName || "",
+        enter_lname_as_per_pancard: lastName || "",
+        current_address: address || "",
+        current_pincode: pincode || "",
+        current_city: "", // Extract if needed
+        current_state: "", // Extract if needed
+        current_residence_type: "", // Add if available
+        years_stayed_in_current_address: "", // Add if available
+        education_qualification: "", // Add if available
+        marital_status: "", // Add if available
+        father_name: "", // Add if available
+        mother_name: "", // Add if available
+        current_total_emi_paid_per_month: "", // Add if available
+        active_creditcard_holder: "", // Add if available
+        offical_email_id: email,
+        college_name: "", // Add if available
+        college_pincode: "", // Add if available
+        college_city: "", // Add if available
+        college_state: "", // Add if available
+        college_strength: "", // Add if available
+        degree_type: "", // Add if available
+        degree_name: "", // Add if available
+        degree_specialisation: "", // Add if available
+        degree_attendance_type: "", // Add if available
+        degree_start_date: "", // Add if available
+        degree_end_date: "" // Add if available
+      }
+    };
 
-//     // If source is not "SML", send lead to external API
-//     if (source !== 'SML') {
-//       const vendorName = process.env.VENDOR_NAME_SML;
-//       const apiKey = process.env.API_KEY_SML;
-//       const externalApiUrl = `https://nucleus.switchmyloan.in/vendor/${vendorName}/createLead`;
+    const leadResponse = await axios.post(
+      'https://stg-api.mpkt.in/acquisition-affiliate/v1/user',
+      leadPayload,
+      {
+        headers: {
+          'api-key': process.env.MPOKKET_API_KEY || '49AC55BC2D67447892A5BFF7A5D33',
+          'Content-Type': 'application/json'
+        }
+      }
+    );
 
-//       const payload = {
-//         name: fullName,
-//         phone,
-//         email,
-//         panNumber,
-//         dob: dateOfBirth,
-//         gender,
-//         salary: `${finalSalary}`,
-//         pincode,
-//         jobType: finalJobType,
-//       };
+    console.log("Mpokket Lead Response:", leadResponse.data);
 
-//       try {
-//         const apiResponse = await axios.post(externalApiUrl, payload, {
-//           headers: {
-//             'x-api-key': apiKey,
-//             'Content-Type': 'application/json',
-//           },
-//         });
+    // Step 3: Save Success Response in Database
+    const responseLog = await MpokketResponseLog.create({
+      leadId: leadIdValue,
+      source: source,
+      requestPayload: {
+        dedupePayload,
+        leadPayload
+      },
+      responseStatus: leadResponse.status,
+      responseBody: leadResponse.data,
+      step: 'lead_submission',
+      status: 'success'
+    });
 
-//         // Save API response to the new collection
-//         const responseLog = new smlResponseLog({
-//           leadId: savedLead._id,
-//           requestPayload: payload,
-//           responseStatus: apiResponse.status,
-//           responseBody: apiResponse.data,
-//         });
+    console.log('Mpokket Lead Created:', leadResponse.data);
+    return responseLog;
 
-//         await responseLog.save();
-//       } catch (error) {
-//         console.error('Error sending lead to external API:', error.message);
-//         await smlResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: payload,
-//           responseStatus: error.response?.status || 500,
-//           responseBody: error.response?.data || { message: 'Unknown error' },
-//         });
-//       }
-//     }
+  } catch (error) {
+    console.error('Error in Mpokket API:', error.response?.data || error.message);
 
-//     // If source is not "Freo", send lead to external API
-//     if (source !== 'FREO') {
-//       const baseUrl = process.env.DEV_URL;
-//       const accessToken = await getAccessToken();
+    // Prepare payload for error logging
+    const errorPayload = {
+      email_id: email,
+      mobile_no: phone,
+      Full_name: fullName,
+      pancard: panNumber
+    };
 
-//       // Construct payload for MoneyTap API
-//       const payload = {
-//         emailId: email,
-//         phone,
-//         name: fullName,
-//         panNumber,
-//         dateOfBirth,
-//         gender,
-//         jobType: finalJobType,
-//         homeAddress: {
-//           addressLine1: address || '',
-//           pincode,
-//         },
-//         residenceType: getRandomResidenceType(),
-//         officeAddress: {
-//           addressLine1: address || '',
-//           pincode,
-//         },
-//         incomeInfo: {
-//           declared: finalSalary
-//         },
-//       };
+    // Save error log
+    const errorLog = await MpokketResponseLog.create({
+      leadId: leadIdValue,
+      source: source,
+      requestPayload: errorPayload,
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || {
+        message: error.message || 'Unknown error',
+        error: true
+      },
+      errorDetails: {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      },
+      step: error.config?.url?.includes('dedupe') ? 'dedupe_check' : 'lead_submission',
+      status: 'error'
+    });
 
-//       try {
-//         const apiResponse = await axios.post(
-//           `${baseUrl}/v3/partner/lead/create`,
-//           payload,
-//           {
-//             headers: {
-//               Accept: 'application/json',
-//               'Content-Type': 'application/json',
-//               Authorization: `Bearer ${accessToken}`,
-//             },
-//           }
-//         );
+    return errorLog;
+  }
+}
 
-//         // Save API response to the new collection
-//         const responseLog = new freoResponseLog({
-//           leadId: savedLead._id,
-//           requestPayload: payload,
-//           responseStatus: apiResponse.status,
-//           responseBody: apiResponse.data,
-//         });
+// Helper Functions
+function formatDateToDDMMYYYY(date) {
+  if (!date) return "";
+  const d = new Date(date);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}-${month}-${year}`;
+}
 
-//         await responseLog.save();
-//       } catch (error) {
-//         console.error('Error sending lead to MoneyTap API:', error.message);
-//         await freoResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: payload,
-//           responseStatus: error.response?.status || 500,
-//           responseBody: error.response?.data || { message: 'Unknown error' },
-//         });
-//       }
-//     }
+function formatConsentTimestamp(date) {
+  if (!date) return "";
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const seconds = String(d.getSeconds()).padStart(2, '0');
+  const milliseconds = String(d.getMilliseconds()).padStart(3, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+}
 
-//     // If source is not "OVLY", send lead to external API
-//     if (source !== 'OVLY') {
-//       const dedupApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/dedup';
-//       const createLeadApiUrl = 'https://leads.smartcoin.co.in/partner/ratecut/lead/create';
-//       const clientId = process.env.OVLY_CLIENT_ID;
-//       const clientKey = process.env.OVLY_CLIENT_KEY;
+function mapGenderToMpokket(gender) {
+  if (!gender) return "";
+  const g = gender.toLowerCase();
+  if (g === 'male' || g === 'm') return 'male';
+  if (g === 'female' || g === 'f') return 'female';
+  return gender;
+}
 
-//       const dedupPayload = new URLSearchParams({
-//         phone_number: phone,
-//         pan: panNumber,
-//         date_of_birth: dateOfBirth,
-//         employement_type: finalJobType,
-//         net_monthly_income: `${finalSalary}`,
-//         name_as_per_pan: fullName,
-//       });
+function mapJobTypeToMpokket(jobType) {
+  if (!jobType) return "";
+  const j = jobType.toLowerCase();
+  if (j.includes('salaried') || j.includes('employee')) return 'salaried';
+  if (j.includes('self') || j.includes('business')) return 'self-employed';
+  if (j.includes('student')) return 'student';
+  return jobType;
+}
 
-//       const dedupPayloadDB = {
-//         phone_number: phone,
-//         pan: panNumber,
-//         date_of_birth: dateOfBirth,
-//         employement_type: finalJobType,
-//         net_monthly_income: `${finalSalary}`,
-//         name_as_per_pan: fullName,
-//       };
+//////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////
 
-//       try {
-//         const dedupResponse = await axios.post(dedupApiUrl, dedupPayload, {
-//           headers: {
-//             'admin-api-client-id': clientId,
-//             'admin-api-client-key': clientKey,
-//             'Content-Type': 'application/x-www-form-urlencoded',
-//           },
-//         });
-
-//         const dedupData = dedupResponse.data;
-//         console.log("Ovly:", dedupData);
-//         // If lead is fresh (not a duplicate), push to OVLY Lead Create API
-//         if (dedupData.isDuplicateLead === "false" && dedupData.status === "success") {
-//           console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
-//           const createLeadPayload = new URLSearchParams({
-//             phone_number: phone,
-//             pan: panNumber,
-//             email,
-//             employement_type: finalJobType,
-//             net_monthly_income: `${finalSalary}`,
-//             mode_of_salary: 'ONLINE',
-//             bank_name: 'HDFC',
-//             name_as_per_pan: fullName,
-//             current_residence_pin_code: pincode,
-//             date_of_birth: dateOfBirth,
-//             gender,
-//           });
-
-//           const createLeadPayloadDB = {
-//             phone_number: phone,
-//             pan: panNumber,
-//             email,
-//             employement_type: finalJobType,
-//             net_monthly_income: `${finalSalary}`,
-//             mode_of_salary: 'ONLINE',
-//             bank_name: 'HDFC',
-//             name_as_per_pan: fullName,
-//             current_residence_pin_code: pincode,
-//             date_of_birth: dateOfBirth,
-//             gender,
-//           };
-
-//           const leadResponse = await axios.post(createLeadApiUrl, createLeadPayload, {
-//             headers: {
-//               'admin-api-client-id': clientId,
-//               'admin-api-client-key': clientKey,
-//               'Content-Type': 'application/x-www-form-urlencoded',
-//             },
-//           });
-
-//           console.log('Lead successfully pushed:', leadResponse.data);
-//           // Save lead response in DB
-//           const ovlyLeadLog = new ovlyResponseLog({
-//             leadId: savedLead._id,
-//             requestPayload: createLeadPayloadDB,
-//             responseStatus: leadResponse.data.status,
-//             responseBody: leadResponse.data,
-//           });
-
-//           await ovlyLeadLog.save();
-
-//         } else if (dedupData.isDuplicateLead === "true" && dedupData.status === "success") {
-//           console.log("Ovly:", dedupData.isDuplicateLead, dedupData.status);
-//           const ovlyLeadLog = new ovlyResponseLog({
-//             leadId: savedLead._id,
-//             requestPayload: dedupPayloadDB,
-//             responseStatus: 'duplicate',
-//             responseBody: dedupData,
-//           });
-
-//           await ovlyLeadLog.save();
-//         }
-//       } catch (error) {
-//         console.error('Error in OVLY API integration:', error.response?.data || error.message);
-//         await ovlyResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: dedupPayloadDB,
-//           responseStatus: error.response?.status,
-//           responseBody: error.response?.data || { message: 'Unknown error' },
-//         });
-//       }
-//     }
-
-//     // If source is not "LendingPlate", send lead to external API
-//     if (source !== 'LendingPlate') {
-//       const isMobileValid = await checkMobileExists(phone);
-//       if (!isMobileValid) {
-//         const loanPayload = {
-//           partner_id: process.env.LP_PARTNER_ID,
-//           ref_id: phone,
-//           mobile: phone,
-//           customer_name: fullName,
-//           pancard: panNumber,
-//           dob: formatDate(dateOfBirth),
-//           pincode,
-//           profession: "SAL",
-//           net_mothlyincome: finalSalary,
-//         };
-
-//         await LeadingPlateResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: loanPayload,
-//           responseStatus: "Fail",
-//           responseBody: { "status": "Failed" }
-//         });
-//       } else if (isMobileValid) {
-//         const loanPayload = {
-//           partner_id: process.env.LP_PARTNER_ID,
-//           ref_id: phone,
-//           mobile: phone,
-//           customer_name: fullName,
-//           pancard: panNumber,
-//           dob: formatDate(dateOfBirth),
-//           pincode,
-//           profession: "SAL",
-//           net_mothlyincome: finalSalary,
-//         };
-
-//         const loanSuccess = await processLoanApplication(loanPayload);
-
-//         await LeadingPlateResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: loanPayload,
-//           responseStatus: loanSuccess.Message,
-//           responseBody: loanSuccess
-//         });
-//       }
-//     }
-
-//     // If source is not "ZYPE", send lead to external API
-//     if (source !== 'ZYPE') {
-//       const isEligible = await checkZypeEligibility(phone, panNumber);
-//       console.log(isEligible);
-//       if (isEligible.message === 'REJECT') {
-//         await ZypeResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: {
-//             mobileNumber: phone,
-//             panNumber,
-//             partnerId: process.env.ZYPE_PARTNER_ID,
-//           },
-//           responseStatus: "REJECTED",
-//           responseBody: { status: "REJECTED" },
-//         });
-//       } else if (isEligible.status === 'ACCEPT') {
-//         const zypePayload = {
-//           mobileNumber: phone,
-//           email,
-//           panNumber,
-//           name: fullName,
-//           dob: dateOfBirth,
-//           income: parseInt(finalSalary, 10),
-//           employmentType: 'salaried',
-//           orgName: businessType || "",
-//           partnerId: process.env.ZYPE_PARTNER_ID,
-//           bureauType: 3,
-//         };
-
-//         const zypeResponse = await processZypeApplication(zypePayload);
-//         // console.log(zypeResponse);
-
-
-//         await ZypeResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: zypePayload,
-//           responseStatus: zypeResponse?.status || "Unknown",
-//           responseBody: zypeResponse,
-//         });
-//       }
-//     }
-
-//     // If source is not "FINTIFI", send lead to external API
-//     if (source !== 'FINTIFI') {
-//       const apiKey = process.env.API_KEY_FINTIFI;
-//       const externalApiUrl = `https://nucleus.fintifi.in/api/lead/ratecut`;
-
-//       const payload = {
-//         firstName: fullName.split(' ')[0],
-//         lastName: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
-//         phone,
-//         email,
-//         panNumber,
-//         dob: dateOfBirth,
-//         gender,
-//         salary: `${finalSalary}`,
-//         pincode,
-//         jobType: finalJobType,
-//       };
-
-//       try {
-//         const apiResponse = await axios.post(externalApiUrl, payload, {
-//           headers: {
-//             'x-api-key': apiKey,
-//             'Content-Type': 'application/json',
-//           },
-//         });
-
-//         // Save API response to the new collection
-//         const responseLog = new FintifiResponseLog({
-//           leadId: savedLead._id,
-//           requestPayload: payload,
-//           responseStatus: apiResponse.data.success,
-//           responseBody: apiResponse.data,
-//         });
-
-//         await responseLog.save();
-//       } catch (error) {
-//         console.error('Error sending lead to external API:', error);
-//         await FintifiResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: payload,
-//           responseStatus: error.success || 500,
-//           responseBody: error.error || { message: 'Unknown error' },
-//         });
-//       }
-//     }
-
-//     // If source is not "FATAKPAY", send lead to external API
-//     const validPincodes = pinCodeData.map((row) => parseInt(row.Pincode, 10));
-//     // console.log(validPincodes);
-
-//     if (source !== 'FATAKPAY' && validPincodes.includes(parseInt(pincode))) {
-//       try {
-//         const tokenResponse = await axios.post(
-//           'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
-//           {
-//             username: process.env.FATAKPAY_USERNAME,
-//             password: process.env.FATAKPAY_PASSWORD,
-//           }
-//         );
-
-//         const accessToken = tokenResponse.data.data.token;
-
-//         const eligibilityPayload = {
-//           mobile: phone,
-//           first_name: firstName || fullName.split(' ')[0],
-//           last_name: lastName || fullName.split(' ')[1] || '',
-//           email,
-//           employment_type_id: finalJobType,
-//           pan: panNumber,
-//           dob: dateOfBirth,
-//           pincode,
-//           home_address: address || '',
-//           office_address: address || '',
-//           consent: true,
-//           consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
-//         };
-
-//         const eligibilityResponse = await axios.post(
-//           'https://onboardingapi.fatakpay.com/external-api/v1/emi-insurance-eligibility',
-//           eligibilityPayload,
-//           {
-//             headers: {
-//               Authorization: `Token ${accessToken}`,
-//               'Content-Type': 'application/json',
-//             },
-//           }
-//         );
-
-//         // Step 3: Save Response in Database
-//         await fatakPayResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: eligibilityPayload,
-//           responseStatus: eligibilityResponse.data.status_code,
-//           responseBody: eligibilityResponse.data,
-//         });
-
-//       } catch (error) {
-//         console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
-
-//         await fatakPayResponseLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: eligibilityPayload,
-//           responseStatus: error.response?.status || 500,
-//           responseBody: error.response?.data || { message: 'Unknown error' },
-//         });
-//       }
-//     }
-
-//     if (source !== 'RAMFINCROP') {
-//       const payload = {
-//         mobile: phone,
-//         name: fullName,
-//         loanAmount: finalSalary,
-//         email: email,
-//         employeeType: jobType,
-//         dob: dateOfBirth,
-//         pancard: panNumber
-//       }
-
-//       try {
-//         const response = await axios.post(
-//           'https://www.ramfincorp.com/loanapply/ramfincorp_api/lead_gen/api/v1/create_lead',
-//           payload,
-//           {
-//             headers: {
-//               'Content-Type': 'application/json',
-//               'Authorization': 'Basic cmFtZmluXzQ3YTVjZDcyNWNmYTMwNjA5NGY0MWM2MzNlMWZjNDE2OjRjNzBlYzc1NTc1OGYwMTYxOTVmODM5NzgxMDRhNjAzM2ZhNGExYTU='
-//             }
-//           }
-//         );
-
-//         await ramFinCropLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: payload,
-//           responseStatus: response.data.status,
-//           responseBody: response.data,
-//         });
-
-//         console.log(response.data);
-//       } catch (error) {
-//         console.error('Error creating lead:', error.response ? error.response.data : error.message);
-//         await ramFinCropLog.create({
-//           leadId: savedLead._id,
-//           requestPayload: payload,
-//           responseStatus: error.response?.data.status || 500,
-//           responseBody: error.response?.data || { message: 'Unknown error' },
-//         });
-//       }
-//     }
-
-//     res.status(201).json({
-//       status: 'success',
-//       data: {
-//         lead: savedLead,
-//       },
-//     });
-//   } catch (error) {
-//     console.log(error);
-//     if (error.code === 11000) {
-//       return res.status(409).json({ message: 'Duplicate PAN number' });
-//     }
-//     res.status(500).json({ message: 'Server error', error: error.message });
-//   }
-// };
-
-// Create a lead
 exports.createUATLead = async (req, res) => {
-  const { source, fullName, firstName, lastName, phone, email, age, dateOfBirth, gender, panNumber, jobType, businessType, salary, creditScore, address, pincode, consent, } = req.body;
+  const { 
+    source, fullName, firstName, lastName, phone, email, 
+    age, dateOfBirth, gender, panNumber, jobType, businessType, 
+    salary, creditScore, address, pincode, consent 
+  } = req.body;
 
   // Input validation
   if (!source || !fullName || !phone || !email || !panNumber || consent === undefined) {
-    return res.status(400).json({ message: 'Source, fullName, phone, email, panNumber, and consent are required.' });
+    return res.status(400).json({ 
+      message: 'Source, fullName, phone, email, panNumber, and consent are required.' 
+    });
   }
 
   // Full Name validation
   if (fullName.length < 2 || fullName.length > 100) {
-    return res.status(400).json({ message: 'Full name must be between 2 and 100 characters.' });
+    return res.status(400).json({ 
+      message: 'Full name must be between 2 and 100 characters.' 
+    });
   }
 
   // Email validation
@@ -2026,13 +1743,17 @@ exports.createUATLead = async (req, res) => {
   // PAN number validation
   const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
   if (!panRegex.test(panNumber)) {
-    return res.status(400).json({ message: 'Invalid PAN number format. Must match ABCDE1234F.' });
+    return res.status(400).json({ 
+      message: 'Invalid PAN number format. Must match ABCDE1234F.' 
+    });
   }
 
   // Date of Birth validation
   const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) && !isNaN(Date.parse(dateOfBirth));
   if (dateOfBirth && (!isValidDate || new Date(dateOfBirth) > new Date())) {
-    return res.status(400).json({ message: 'Invalid date of birth or date cannot be in the future.' });
+    return res.status(400).json({ 
+      message: 'Invalid date of birth or date cannot be in the future.' 
+    });
   }
 
   // Conditional defaults for salary and jobType
@@ -2040,9 +1761,14 @@ exports.createUATLead = async (req, res) => {
   const finalJobType = jobType || 'SALARIED';
 
   try {
-    // Create and save the lead
-    const lead = new leadUAT({
-      source, fullName, firstName, lastName, phone, email,
+    // Create lead data object
+    const leadData = {
+      source,
+      fullName,
+      firstName,
+      lastName,
+      phone,
+      email,
       age,
       dateOfBirth,
       gender,
@@ -2053,10 +1779,11 @@ exports.createUATLead = async (req, res) => {
       creditScore,
       address,
       pincode,
-      consent,
-    });
+      consent
+    };
 
-    const savedLead = await lead.save();
+    // Create lead using DynamoDB model
+    const savedLead = await LeadUAT.create(leadData);
 
     res.status(201).json({
       status: 'success',
@@ -2064,21 +1791,33 @@ exports.createUATLead = async (req, res) => {
         lead: savedLead,
       },
     });
+
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(409).json({ message: 'Duplicate PAN number or phone' });
+    // Handle duplicate PAN error
+    if (error.code === 'DUPLICATE_PAN') {
+      return res.status(409).json({ 
+        message: 'Duplicate PAN number or phone' 
+      });
     }
-    res.status(500).json({ message: 'Server error', error: error.message });
+
+    // Handle validation errors
+    if (error.errors) {
+      return res.status(400).json({ 
+        message: 'Validation failed', 
+        errors: error.errors 
+      });
+    }
+
+    // Generic server error
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
 
-
-// Function to process file
-const convertExcelDateToJSDate = (excelDate, PAN) => {
-  console.log(excelDate, PAN);
-  const jsDate = new Date((excelDate - 25569) * 86400 * 1000);
-  return jsDate.toISOString().split("T")[0];
-};
+////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////
 
 // Bulk lead passing function
 const sendLeadsToLender = async (lender, leads) => {
@@ -2115,31 +1854,38 @@ exports.processFile = async (req, res) => {
 
     const filePath = req.file.path;
     const leads = readFile(filePath);
-
     console.log(`📊 Total leads found: ${leads.length}`);
     console.log(leads[0]);
 
-    // Save leads to MongoDB
-    const savedLeads = await ExcelLead.insertMany(
-      leads.map((lead) => ({
-        source: req.body.source,
-        fullName: `${lead.fullName}`,
-        phone: `${lead.phone}`,
-        email: lead.email,
-        dateOfBirth: lead.dateOfBirth,
-        gender: lead.gender,
-        panNumber: lead.panNumber,
-        jobType: lead.jobType,
-        salary: `${lead.salary}`,
-        address: `${lead.address}`,
-        pincode: `${lead.pincode}`,
-        consent: true
-      }))
-    );
+    // Prepare leads data for DynamoDB
+    const leadsData = leads.map((lead) => ({
+      source: req.body.source,
+      fullName: `${lead.fullName}`,
+      phone: `${lead.phone}`,
+      email: lead.email,
+      dateOfBirth: lead.dateOfBirth,
+      gender: lead.gender,
+      panNumber: lead.panNumber,
+      jobType: lead.jobType,
+      salary: `${lead.salary}`,
+      address: `${lead.address}`,
+      pincode: `${lead.pincode}`,
+      consent: true
+    }));
+
+    // Save leads to DynamoDB using bulk insert
+    const bulkResult = await ExcelLead.createBulk(leadsData);
+    
+    const savedLeads = bulkResult.successful;
+    const failedLeads = bulkResult.failed;
+
+    console.log(`✅ Successfully saved: ${savedLeads.length} leads`);
+    if (failedLeads.length > 0) {
+      console.log(`❌ Failed to save: ${failedLeads.length} leads`);
+    }
 
     // Send leads to selected lenders individually
     const allResponses = {};
-
     for (const lender of lenders) {
       console.log(`📤 Sending ${savedLeads.length} leads to ${lender}`);
       try {
@@ -2163,33 +1909,116 @@ exports.processFile = async (req, res) => {
 
     res.status(200).json({
       message: "Leads processed successfully",
-      totalLeads: savedLeads.length,
+      totalLeads: leads.length,
+      successfulLeads: savedLeads.length,
+      failedLeads: failedLeads.length,
+      savedLeads: savedLeads,
+      failedLeadsDetails: failedLeads,
       lenderResponses: allResponses
     });
 
   } catch (error) {
     console.error("Error processing leads:", error);
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: "Internal server error", error: error.message });
   }
 };
 
-// Fetch all leads
-exports.getLeads = async (req, res) => {
-  try {
-    // excute query
-    const features = new APIFeatures(Lead.find({}, 'source fullName phone email panNumber salary createdAt'), req.query)
-      .filter()
-      .sort()
-      .limitFields()
-      .paginate();
+///////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////
 
-    const leads = await features.query;
+// Get lead by ID
+exports.getLead = async (req, res) => {
+  try {
+    const lead = await Lead.findById(req.params.id);
+    
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { lead }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Get lead by phone
+exports.getLeadByPhone = async (req, res) => {
+  try {
+    const lead = await Lead.findByPhone(req.params.phone);
+    
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { lead }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Get lead by PAN
+exports.getLeadByPan = async (req, res) => {
+  try {
+    const lead = await Lead.findByPanNumber(req.params.panNumber);
+    
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { lead }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Get all leads by source
+exports.getLeadsBySource = async (req, res) => {
+  try {
+    const { source } = req.params;
+    const { startDate, endDate, limit = 100 } = req.query;
+
+    const leads = await Lead.findBySource(source, {
+      startDate,
+      endDate,
+      limit: parseInt(limit),
+      sortAscending: false
+    });
 
     res.status(200).json({
       status: 'success',
       results: leads.length,
-      data: {
-        leads
+      data: { leads }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Get all leads (paginated)
+exports.getAllLeads = async (req, res) => {
+  try {
+    const { limit = 100, lastEvaluatedKey } = req.query;
+
+    const result = await Lead.findAll({
+      limit: parseInt(limit),
+      lastEvaluatedKey: lastEvaluatedKey ? JSON.parse(lastEvaluatedKey) : undefined
+    });
+
+    res.status(200).json({
+      status: 'success',
+      results: result.items.length,
+      data: { 
+        leads: result.items,
+        lastEvaluatedKey: result.lastEvaluatedKey 
       }
     });
   } catch (error) {
@@ -2197,20 +2026,96 @@ exports.getLeads = async (req, res) => {
   }
 };
 
-// Fetch lead by ID
-exports.getLeadById = async (req, res) => {
-  const { id } = req.params;
-
+// Update lead
+exports.updateLead = async (req, res) => {
   try {
-    const lead = await Lead.findById(id).lean();
-    if (!lead) {
+    const updates = req.body;
+    
+    // Remove fields that shouldn't be updated
+    delete updates.leadId;
+    delete updates.createdAt;
+
+    const updatedLead = await Lead.updateById(req.params.id, updates);
+
+    res.status(200).json({
+      status: 'success',
+      data: { lead: updatedLead }
+    });
+  } catch (error) {
+    if (error.message === 'Lead not found') {
       return res.status(404).json({ message: 'Lead not found' });
     }
-    res.status(200).json(lead);
+    if (error.code === 'DUPLICATE_PHONE') {
+      return res.status(409).json({ message: 'Phone number already exists' });
+    }
+    if (error.code === 'DUPLICATE_PAN') {
+      return res.status(409).json({ message: 'PAN number already exists' });
+    }
+    if (error.errors) {
+      return res.status(400).json({ 
+        message: 'Validation failed', 
+        errors: error.errors 
+      });
+    }
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Delete lead
+exports.deleteLead = async (req, res) => {
+  try {
+    await Lead.deleteById(req.params.id);
+
+    res.status(204).json({
+      status: 'success',
+      data: null
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
+
+// Search leads by multiple filters
+exports.searchLeads = async (req, res) => {
+  try {
+    const filters = {};
+    const { gender, jobType, businessType, limit = 100 } = req.query;
+
+    if (gender) filters.gender = gender;
+    if (jobType) filters.jobType = jobType;
+    if (businessType) filters.businessType = businessType;
+
+    const leads = await Lead.findByFilters(filters, { 
+      limit: parseInt(limit) 
+    });
+
+    res.status(200).json({
+      status: 'success',
+      results: leads.length,
+      data: { leads }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Count leads by source
+exports.countLeadsBySource = async (req, res) => {
+  try {
+    const { source } = req.params;
+    const count = await Lead.countBySource(source);
+
+    res.status(200).json({
+      status: 'success',
+      data: { source, count }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+///////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////
 
 // const pushLeadsToLender = async (req, res) => {
 //   try {

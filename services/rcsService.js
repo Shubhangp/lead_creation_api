@@ -199,10 +199,9 @@ class RCSService {
    */
   async queueRCS(leadId, phone, rcsType, lenderName = null, priority = null, delayDays = 0) {
     try {
-      const distributionRule = await DistributionRule.findOne({
-        source: { $exists: true },
-        active: true
-      });
+      // Find any active distribution rule
+      const allRules = await DistributionRule.findAll();
+      const distributionRule = allRules.items.find(rule => rule.active);
 
       const operatingHours = distributionRule?.rcsConfig?.operatingHours || {
         startTime: '10:00',
@@ -222,7 +221,7 @@ class RCSService {
         scheduledTime = this.getNextBusinessDayStart(operatingHours.startTime);
       }
 
-      const rcsQueueEntry = new RCSQueue({
+      const rcsQueueEntry = await RCSQueue.create({
         leadId,
         phone,
         rcsType,
@@ -232,7 +231,6 @@ class RCSService {
         status: 'PENDING'
       });
 
-      await rcsQueueEntry.save();
       console.log(`RCS queued for lead ${leadId}, scheduled at ${scheduledTime}`);
 
       return rcsQueueEntry;
@@ -243,120 +241,126 @@ class RCSService {
   }
 
   /**
-   * Process pending RCS messages
+   * Process pending RCS messages with DynamoDB
+   * Note: DynamoDB doesn't support atomic findAndModify like MongoDB
+   * This implementation processes messages in batches
    */
-  /**
- * Process pending RCS messages with atomic locking
- */
   async processPendingRCS() {
     try {
       const now = new Date();
 
-      // Atomic claim: Find and update in one operation to prevent race conditions
-      // This works even with multiple app instances
-      const claimedMessages = [];
+      // Get pending messages
+      const pendingMessages = await RCSQueue.findByStatusAndScheduledTime(
+        'PENDING',
+        now,
+        { limit: 50 }
+      );
 
-      // Process messages one at a time with atomic updates
-      let hasMore = true;
-      while (hasMore && claimedMessages.length < 50) { // Limit batch size
-        const message = await RCSQueue.findOneAndUpdate(
-          {
-            status: 'PENDING',
-            scheduledTime: { $lte: now },
-            attempts: { $lt: 1 }
-          },
-          {
-            $set: {
-              status: 'PROCESSING',
-              processingStartedAt: new Date()
-            },
-            $inc: { attempts: 1 }
-          },
-          {
-            new: true,
-            sort: { scheduledTime: 1, priority: 1 } // Process oldest/highest priority first
-          }
-        ).populate('leadId');
+      console.log(`Found ${pendingMessages.length} pending RCS messages`);
 
-        if (message) {
-          claimedMessages.push(message);
-        } else {
-          hasMore = false;
-        }
-      }
-
-      console.log(`Claimed ${claimedMessages.length} RCS messages for processing`);
-
-      // Now process the claimed messages
-      for (const message of claimedMessages) {
+      // Process messages
+      for (const message of pendingMessages) {
         try {
+          // Check if attempts limit reached
+          if (message.attempts >= 1) {
+            continue;
+          }
+
+          // Update to PROCESSING status
+          await RCSQueue.update(message.queueId, {
+            status: 'PROCESSING',
+            processingStartedAt: new Date().toISOString(),
+            attempts: (message.attempts || 0) + 1
+          });
+
+          // Get lead data (you'll need to implement Lead model for DynamoDB)
+          const Lead = require('../models/leadModel');
+          const lead = await Lead.findById(message.leadId);
+
+          if (!lead) {
+            await RCSQueue.update(message.queueId, {
+              status: 'FAILED',
+              failureReason: 'Lead not found'
+            });
+            continue;
+          }
+
           let payload;
 
           if (message.rcsType === 'LENDER_SUCCESS') {
             payload = this.generateLenderSuccessPayload(
               message.phone,
               message.lenderName,
-              message.leadId
+              lead
             );
           } else if (message.rcsType === 'ZET_CAMPAIGN') {
             payload = this.generateZetCampaignPayload(
               message.phone,
-              message.leadId
+              lead
             );
           }
-
-          // Update queue entry with payload
-          message.rcsPayload = payload;
 
           const result = await this.sendRCS(payload);
 
           if (result.success) {
-            message.status = 'SENT';
-            message.sentAt = new Date();
-            message.rcsResponse = result.data;
+            await RCSQueue.update(message.queueId, {
+              status: 'SENT',
+              sentAt: new Date().toISOString(),
+              rcsPayload: payload,
+              rcsResponse: result.data
+            });
 
-            console.log(`RCS sent successfully for lead ${message.leadId._id}`);
+            console.log(`RCS sent successfully for lead ${message.leadId}`);
           } else {
-            if (message.attempts >= 3) {
-              message.status = 'FAILED';
-              message.failureReason = result.error;
+            const updateData = {
+              rcsPayload: payload,
+              rcsResponse: result.error
+            };
+
+            if (message.attempts >= 1) {
+              updateData.status = 'FAILED';
+              updateData.failureReason = JSON.stringify(result.error);
             } else {
-              // Reset to PENDING for retry
-              message.status = 'PENDING';
+              updateData.status = 'PENDING';
             }
-            message.rcsResponse = result.error;
 
-            console.error(`RCS failed for lead ${message.leadId._id}:`, result.error);
+            await RCSQueue.update(message.queueId, updateData);
+
+            console.error(`RCS failed for lead ${message.leadId}:`, result.error);
           }
-
-          await message.save();
         } catch (error) {
-          console.error(`Error processing RCS for lead ${message.leadId._id}:`, error);
+          console.error(`Error processing RCS for message ${message.queueId}:`, error);
 
-          if (message.attempts >= 3) {
-            message.status = 'FAILED';
-            message.failureReason = error.message;
+          const updateData = {};
+          if (message.attempts >= 1) {
+            updateData.status = 'FAILED';
+            updateData.failureReason = error.message;
           } else {
-            // Reset to PENDING for retry
-            message.status = 'PENDING';
+            updateData.status = 'PENDING';
           }
-          await message.save();
+
+          await RCSQueue.update(message.queueId, updateData);
         }
       }
 
-      console.log(`Processed ${claimedMessages.length} RCS messages`);
+      console.log(`Processed ${pendingMessages.length} RCS messages`);
 
-      // Clean up any stuck PROCESSING messages (older than 10 minutes)
-      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
-      await RCSQueue.updateMany(
-        {
-          status: 'PROCESSING',
-          processingStartedAt: { $lt: tenMinutesAgo }
-        },
-        {
-          $set: { status: 'PENDING' }
+      // Clean up stuck PROCESSING messages (older than 10 minutes)
+      // Note: This requires a scan operation in DynamoDB
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const allMessages = await RCSQueue.findAll({ limit: 1000 });
+      
+      for (const message of allMessages.items) {
+        if (
+          message.status === 'PROCESSING' && 
+          message.processingStartedAt && 
+          message.processingStartedAt < tenMinutesAgo
+        ) {
+          await RCSQueue.update(message.queueId, {
+            status: 'PENDING'
+          });
         }
-      );
+      }
 
     } catch (error) {
       console.error('Error processing pending RCS:', error);
@@ -368,15 +372,14 @@ class RCSService {
    */
   async scheduleRCSForLead(leadId, successfulLenders) {
     try {
-      const lead = await require('../models/leadModel').findById(leadId);
+      const Lead = require('../models/leadModel');
+      const lead = await Lead.findById(leadId);
+      
       if (!lead) {
         throw new Error('Lead not found');
       }
 
-      const distributionRule = await DistributionRule.findOne({
-        source: lead.source,
-        active: true
-      });
+      const distributionRule = await DistributionRule.findActiveBySource(lead.source);
 
       if (!distributionRule?.rcsConfig?.enabled) {
         console.log('RCS disabled for source:', lead.source);
@@ -418,16 +421,6 @@ class RCSService {
           .sort((a, b) => a.priority - b.priority)
           .slice(0, 2);
 
-        // for (const lenderConfig of sortedSuccessfulLenders) {
-        //   await this.queueRCS(
-        //     leadId,
-        //     lead.phone,
-        //     'LENDER_SUCCESS',
-        //     lenderConfig.lender,
-        //     lenderConfig.priority,
-        //     lenderConfig.rcsDayDelay
-        //   );
-        // }
         // Multiple successful lenders - adjust priorities and delays
         for (let i = 0; i < Math.min(sortedSuccessfulLenders.length, 2); i++) {
           const lenderConfig = sortedSuccessfulLenders[i];

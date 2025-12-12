@@ -3,12 +3,12 @@ const DistributionRule = require('../models/distributionRuleModel');
 // Get all distribution rules
 exports.getAllDistributionRules = async (req, res) => {
   try {
-    const rules = await DistributionRule.find({});
+    const result = await DistributionRule.findAll();
     res.status(200).json({
       status: 'success',
-      results: rules.length,
+      results: result.items.length,
       data: {
-        rules
+        rules: result.items
       }
     });
   } catch (error) {
@@ -24,7 +24,7 @@ exports.getAllDistributionRules = async (req, res) => {
 exports.getDistributionRuleBySource = async (req, res) => {
   try {
     const { source } = req.params;
-    const rule = await DistributionRule.findOne({ source: source });
+    const rule = await DistributionRule.findBySource(source);
     
     if (!rule) {
       return res.status(404).json({
@@ -62,7 +62,7 @@ exports.createDistributionRule = async (req, res) => {
     }
     
     // Check if rule already exists
-    const existingRule = await DistributionRule.findOne({ source: source });
+    const existingRule = await DistributionRule.findBySource(source);
     if (existingRule) {
       return res.status(409).json({
         status: 'fail',
@@ -112,14 +112,9 @@ exports.updateDistributionRule = async (req, res) => {
     if (active !== undefined) updateData.active = active;
     if (rcsConfig) updateData.rcsConfig = rcsConfig;
     
-    updateData.lastUpdated = Date.now();
     updateData.lastUpdatedBy = req.user ? req.user.email : 'system';
     
-    const updatedRule = await DistributionRule.findOneAndUpdate(
-      { source: source },
-      updateData,
-      { new: true, runValidators: true }
-    );
+    const updatedRule = await DistributionRule.updateBySource(source, updateData);
     
     if (!updatedRule) {
       return res.status(404).json({
@@ -147,7 +142,7 @@ exports.updateDistributionRule = async (req, res) => {
 exports.deleteDistributionRule = async (req, res) => {
   try {
     const { source } = req.params;
-    const deletedRule = await DistributionRule.findOneAndDelete({ source: source });
+    const deletedRule = await DistributionRule.deleteBySource(source);
     
     if (!deletedRule) {
       return res.status(404).json({

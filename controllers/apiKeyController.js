@@ -10,21 +10,15 @@ exports.createApiKey = async (req, res) => {
   }
 
   try {
-    const existingApiKey = await ApiKey.findOne({ sourceName });
-
+    const existingApiKey = await ApiKey.findBySourceName(sourceName);
     if (existingApiKey) {
       return res.status(400).json({ message: 'API key already exists for this source.' });
     }
-
     const apiKey = crypto.randomBytes(32).toString('hex');
-
-    const newApiKey = new ApiKey({
+    const newApiKey = await ApiKey.create({
       sourceName,
       apiKey,
     });
-
-    await newApiKey.save();
-
     res.status(201).json({
       status: 'success',
       data: { sourceName, apiKey },
@@ -43,21 +37,16 @@ exports.createApiKeyUAT = async (req, res) => {
   }
 
   try {
-    const existingApiKey = await ApiKeyUAT.findOne({ sourceName });
-
+    const existingApiKey = await ApiKeyUAT.findBySourceName(sourceName);
     if (existingApiKey) {
       return res.status(400).json({ message: 'API key already exists for this source.' });
     }
 
     const apiKey = crypto.randomBytes(32).toString('hex');
-
-    const newApiKey = new ApiKeyUAT({
+    const newApiKey = await ApiKeyUAT.create({
       sourceName,
       apiKey,
     });
-
-    await newApiKey.save();
-
     res.status(201).json({
       status: 'success',
       data: { sourceName, apiKey },

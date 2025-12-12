@@ -10,7 +10,7 @@ exports.createLead = async (req, res) => {
   }
 
   try {
-    const storedApiKey = await ApiKey.findOne({ sourceName: source });
+    const storedApiKey = await ApiKey.findBySourceName(source);
 
     if (!storedApiKey) {
       return res.status(404).json({ error: 'Invalid source' });

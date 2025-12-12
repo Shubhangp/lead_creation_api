@@ -1,4 +1,3 @@
-const ApiKey = require('../models/apiKeyModel');
 const ApiKeyUAT = require('../models/apiKeyUATModel');
 
 // API Key Authentication Middleware
@@ -11,7 +10,7 @@ const apiKeyUATAuth = async (req, res, next) => {
   }
 
   try {
-    const storedApiKey = await ApiKeyUAT.findOne({ sourceName: source });
+    const storedApiKey = await ApiKeyUAT.findBySourceName(source);
 
     if (!storedApiKey) {
       return res.status(404).json({ message: 'Source not found or invalid API key.' });

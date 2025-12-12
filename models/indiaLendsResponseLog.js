@@ -1,119 +1,189 @@
-const mongoose = require('mongoose');
+const { docClient } = require('../dynamodb');
+const { PutCommand, GetCommand, QueryCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
+const { v4: uuidv4 } = require('uuid');
 
-const indiaLendsResponseLogSchema = new mongoose.Schema(
-  {
-    leadId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Lead',
-      required: true,
-      index: true
-    },
-    source: {
-      type: String,
-      required: true
-    },
-    accessToken: {
-      type: String,
-      default: null
-    },
-    dedupCheck: {
-      type: mongoose.Schema.Types.Mixed,
-      default: null
-    },
-    isDuplicate: {
-      type: Boolean,
-      default: false,
-      index: true
-    },
-    duplicateStatus: {
-      type: String,
-      enum: ['0', '1', '2'],
-      default: '0'
-    },
-    requestPayload: {
-      type: mongoose.Schema.Types.Mixed,
-      required: true
-    },
-    responseStatus: {
-      type: Number,
-      required: true,
-      index: true
-    },
-    responseBody: {
-      type: mongoose.Schema.Types.Mixed,
-      required: true
-    },
-    errorDetails: {
-      message: { type: String },
-      code: { type: String },
-      stack: { type: String }
-    },
-    retryCount: {
-      type: Number,
-      default: 0
-    },
-    isSuccess: {
-      type: Boolean,
-      default: function() {
-        return this.responseStatus >= 200 && this.responseStatus < 300;
-      },
-      index: true
-    }
-  },
-  {
-    timestamps: true
+const TABLE_NAME = 'indialends_response_logs';
+
+class IndiaLendsResponseLog {
+  // Create log entry
+  static async create(logData) {
+    const responseStatus = logData.responseStatus || 500;
+    const isSuccess = responseStatus >= 200 && responseStatus < 300;
+
+    const item = {
+      logId: uuidv4(),
+      leadId: logData.leadId,
+      source: logData.source,
+      accessToken: logData.accessToken || null,
+      dedupCheck: logData.dedupCheck || null,
+      isDuplicate: String(logData.isDuplicate || false), // String for GSI
+      duplicateStatus: logData.duplicateStatus || '0',
+      requestPayload: logData.requestPayload,
+      responseStatus: responseStatus,
+      responseBody: logData.responseBody,
+      errorDetails: logData.errorDetails || null,
+      retryCount: logData.retryCount || 0,
+      isSuccess: String(isSuccess), // String for GSI
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await docClient.send(new PutCommand({
+      TableName: TABLE_NAME,
+      Item: item
+    }));
+
+    return item;
   }
-);
 
-// Index for efficient querying
-indiaLendsResponseLogSchema.index({ leadId: 1, createdAt: -1 });
-indiaLendsResponseLogSchema.index({ source: 1, createdAt: -1 });
-indiaLendsResponseLogSchema.index({ isDuplicate: 1, isSuccess: 1 });
+  // Find by ID
+  static async findById(logId) {
+    const result = await docClient.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { logId }
+    }));
 
-// Virtual for checking if verification was sent
-indiaLendsResponseLogSchema.virtual('verificationSent').get(function() {
-  return this.responseBody?.info?.message?.includes('Verification code sent');
-});
+    return result.Item || null;
+  }
 
-// Method to check if lead was successful
-indiaLendsResponseLogSchema.methods.isLeadSuccessful = function() {
-  return (
-    this.isSuccess &&
-    !this.isDuplicate &&
-    this.responseBody?.info?.status === 100
-  );
-};
+  // Find by leadId with date sorting
+  static async findByLeadId(leadId, options = {}) {
+    const { limit = 100, sortAscending = false } = options;
 
-// Static method to get duplicate leads
-indiaLendsResponseLogSchema.statics.getDuplicateLeads = function(startDate, endDate) {
-  return this.find({
-    isDuplicate: true,
-    createdAt: { $gte: startDate, $lte: endDate }
-  }).populate('leadId');
-};
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'leadId-createdAt-index',
+      KeyConditionExpression: 'leadId = :leadId',
+      ExpressionAttributeValues: { ':leadId': leadId },
+      ScanIndexForward: sortAscending,
+      Limit: limit
+    }));
 
-// Static method to get success rate
-indiaLendsResponseLogSchema.statics.getSuccessRate = async function(startDate, endDate) {
-  const total = await this.countDocuments({
-    createdAt: { $gte: startDate, $lte: endDate }
-  });
-  
-  const successful = await this.countDocuments({
-    createdAt: { $gte: startDate, $lte: endDate },
-    isSuccess: true,
-    isDuplicate: false
-  });
-  
-  return {
-    total,
-    successful,
-    successRate: total > 0 ? (successful / total) * 100 : 0
-  };
-};
+    return result.Items || [];
+  }
 
-const indiaLendsResponseLog = mongoose.model(
-  'IndiaLendsResponseLog',
-  indiaLendsResponseLogSchema
-);
+  // Find by source with date range
+  static async findBySource(source, options = {}) {
+    const { limit = 100, startDate, endDate, sortAscending = false } = options;
 
-module.exports = indiaLendsResponseLog;
+    let keyConditionExpression = 'source = :source';
+    const expressionAttributeValues = { ':source': source };
+
+    if (startDate && endDate) {
+      keyConditionExpression += ' AND createdAt BETWEEN :startDate AND :endDate';
+      expressionAttributeValues[':startDate'] = startDate;
+      expressionAttributeValues[':endDate'] = endDate;
+    } else if (startDate) {
+      keyConditionExpression += ' AND createdAt >= :startDate';
+      expressionAttributeValues[':startDate'] = startDate;
+    } else if (endDate) {
+      keyConditionExpression += ' AND createdAt <= :endDate';
+      expressionAttributeValues[':endDate'] = endDate;
+    }
+
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'source-createdAt-index',
+      KeyConditionExpression: keyConditionExpression,
+      ExpressionAttributeValues: expressionAttributeValues,
+      ScanIndexForward: sortAscending,
+      Limit: limit
+    }));
+
+    return result.Items || [];
+  }
+
+  // Get duplicate leads
+  static async getDuplicateLeads(startDate, endDate, options = {}) {
+    const { limit = 100 } = options;
+
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'isDuplicate-isSuccess-index',
+      KeyConditionExpression: 'isDuplicate = :isDuplicate',
+      FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
+      ExpressionAttributeValues: {
+        ':isDuplicate': 'true',
+        ':startDate': startDate,
+        ':endDate': endDate
+      },
+      Limit: limit
+    }));
+
+    return result.Items || [];
+  }
+
+  // Get success rate
+  static async getSuccessRate(startDate, endDate) {
+    // Get all logs in date range
+    const allLogsParams = {
+      TableName: TABLE_NAME,
+      FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
+      ExpressionAttributeValues: {
+        ':startDate': startDate,
+        ':endDate': endDate
+      }
+    };
+
+    const allLogs = await docClient.send(new ScanCommand(allLogsParams));
+    const total = allLogs.Items?.length || 0;
+
+    // Get successful logs
+    const successfulLogsParams = {
+      TableName: TABLE_NAME,
+      FilterExpression: 'createdAt BETWEEN :startDate AND :endDate AND isSuccess = :isSuccess AND isDuplicate = :isDuplicate',
+      ExpressionAttributeValues: {
+        ':startDate': startDate,
+        ':endDate': endDate,
+        ':isSuccess': 'true',
+        ':isDuplicate': 'false'
+      }
+    };
+
+    const successfulLogs = await docClient.send(new ScanCommand(successfulLogsParams));
+    const successful = successfulLogs.Items?.length || 0;
+
+    return {
+      total,
+      successful,
+      successRate: total > 0 ? (successful / total) * 100 : 0
+    };
+  }
+
+  // Check if lead was successful
+  static isLeadSuccessful(log) {
+    return (
+      log.isSuccess === 'true' &&
+      log.isDuplicate === 'false' &&
+      log.responseBody?.info?.status === 100
+    );
+  }
+
+  // Check if verification was sent
+  static verificationSent(log) {
+    return log.responseBody?.info?.message?.includes('Verification code sent');
+  }
+
+  // Find all logs (paginated)
+  static async findAll(options = {}) {
+    const { limit = 100, lastEvaluatedKey } = options;
+
+    const params = {
+      TableName: TABLE_NAME,
+      Limit: limit
+    };
+
+    if (lastEvaluatedKey) {
+      params.ExclusiveStartKey = lastEvaluatedKey;
+    }
+
+    const result = await docClient.send(new ScanCommand(params));
+
+    return {
+      items: result.Items || [],
+      lastEvaluatedKey: result.LastEvaluatedKey
+    };
+  }
+}
+
+module.exports = IndiaLendsResponseLog;
