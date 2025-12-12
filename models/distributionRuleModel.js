@@ -110,38 +110,35 @@ class DistributionRule {
 
   // Update distribution rule by source
   static async updateBySource(source, updates) {
-    // First, find the rule by source
-    const existingRule = await this.findBySource(source);
+    // First find the item
+    const existing = await this.findBySource(source);
 
-    if (!existingRule) {
-      return null;
+    if (!existing || existing.length === 0) {
+      throw new Error('Distribution rule not found');
     }
 
-    // Sort lender priority if updating rcsConfig
-    if (updates.rcsConfig && updates.rcsConfig.lenderPriority) {
-      updates.rcsConfig.lenderPriority.sort((a, b) => a.priority - b.priority);
-    }
+    const distributionRuleId = existing[0].distributionRuleId;
 
-    const updateExpressions = [];
+    // Then update by ID
+    const updateExpression = [];
     const expressionAttributeNames = {};
     const expressionAttributeValues = {};
 
-    // Add updatedAt and lastUpdated
-    updates.updatedAt = new Date().toISOString();
-    updates.lastUpdated = new Date().toISOString();
-
     Object.keys(updates).forEach((key, index) => {
-      const placeholder = `#field${index}`;
-      const valuePlaceholder = `:value${index}`;
-      updateExpressions.push(`${placeholder} = ${valuePlaceholder}`);
-      expressionAttributeNames[placeholder] = key;
-      expressionAttributeValues[valuePlaceholder] = updates[key];
+      updateExpression.push(`#field${index} = :value${index}`);
+      expressionAttributeNames[`#field${index}`] = key;
+      expressionAttributeValues[`:value${index}`] = updates[key];
     });
+
+    // Add timestamp
+    updateExpression.push(`#updatedAt = :updatedAt`);
+    expressionAttributeNames[`#updatedAt`] = 'updatedAt';
+    expressionAttributeValues[`:updatedAt`] = new Date().toISOString();
 
     const result = await docClient.send(new UpdateCommand({
       TableName: TABLE_NAME,
-      Key: { ruleId: existingRule.ruleId },
-      UpdateExpression: `SET ${updateExpressions.join(', ')}`,
+      Key: { distributionRuleId },
+      UpdateExpression: `SET ${updateExpression.join(', ')}`,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
       ReturnValues: 'ALL_NEW'
