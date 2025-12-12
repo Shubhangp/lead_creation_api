@@ -50,7 +50,10 @@ class DistributionRule {
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'source-index',
-      KeyConditionExpression: 'source = :source',
+      KeyConditionExpression: '#src = :source',  // FIXED: Use alias
+      ExpressionAttributeNames: {
+        '#src': 'source'  // FIXED: Map reserved keyword
+      },
       ExpressionAttributeValues: { ':source': source }
     }));
 
@@ -113,11 +116,11 @@ class DistributionRule {
     // First find the item
     const existing = await this.findBySource(source);
 
-    if (!existing || existing.length === 0) {
+    if (!existing) {  // FIXED: Changed condition
       throw new Error('Distribution rule not found');
     }
 
-    const distributionRuleId = existing[0].distributionRuleId;
+    const ruleId = existing.ruleId;  // FIXED: Use ruleId, not distributionRuleId
 
     // Then update by ID
     const updateExpression = [];
@@ -137,7 +140,7 @@ class DistributionRule {
 
     const result = await docClient.send(new UpdateCommand({
       TableName: TABLE_NAME,
-      Key: { distributionRuleId },
+      Key: { ruleId },  // FIXED: Use ruleId
       UpdateExpression: `SET ${updateExpression.join(', ')}`,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
