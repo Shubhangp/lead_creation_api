@@ -8,6 +8,7 @@ const distributionRuleRouter = require('./routes/distributionRuleRoutes');
 const rcsRouter = require('./routes/rcsRoutes');
 const rcsScheduler = require('./scheduler/rcsScheduler');
 // const ivrRoutes = require('./routes/ivrRoutes');
+const exportRoutes = require('./routes/exportRoutes');
 
 const app = express();
 if (process.env.NODE_ENV === 'development') {
@@ -35,6 +36,7 @@ app.use('/api/v1/loan-form', formRouter);
 app.use('/api/v1/distribution-rules', distributionRuleRouter);
 app.use('/api/v1/rcs', rcsRouter);
 // app.use('/api/v1/ivr', ivrRoutes);
+app.use('/api/v1/export', exportRoutes);
 
 rcsScheduler.init();
 

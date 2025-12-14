@@ -8,7 +8,7 @@ class RCSQueue {
   // Create RCS queue entry
   static async create(queueData) {
     const item = {
-      queueId: uuidv4(),
+      rcs_queue: uuidv4(),
       leadId: queueData.leadId,
       phone: queueData.phone,
       rcsType: queueData.rcsType,
@@ -39,7 +39,7 @@ class RCSQueue {
   static async findById(queueId) {
     const result = await docClient.send(new GetCommand({
       TableName: RCS_QUEUE_TABLE,
-      Key: { queueId }
+      Key: { rcs_queue: queueId }
     }));
 
     return result.Item || null;
@@ -172,7 +172,7 @@ class RCSQueue {
 
     const result = await docClient.send(new UpdateCommand({
       TableName: RCS_QUEUE_TABLE,
-      Key: { queueId },
+      Key: { rcs_queue: queueId },
       UpdateExpression: `SET ${updateExpressions.join(', ')}`,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
@@ -192,7 +192,7 @@ class RCSQueue {
     
     // Update each item
     for (const item of matchingItems) {
-      await this.update(item.queueId, updates);
+      await this.update(item.rcs_queue, updates);
       modifiedCount++;
     }
 
@@ -230,7 +230,7 @@ class RCSQueue {
   static async delete(queueId) {
     await docClient.send(new DeleteCommand({
       TableName: RCS_QUEUE_TABLE,
-      Key: { queueId }
+      Key: { rcs_queue: queueId }
     }));
 
     return { deleted: true };
