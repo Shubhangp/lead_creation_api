@@ -1518,7 +1518,7 @@ async function sendToMpokket(lead) {
     };
 
     const dedupeResponse = await axios.post(
-      'https://stg-api.mpkt.in/acquisition-affiliate/v1/dedupe/check',
+      'https://api.mpkt.in/acquisition-affiliate/v1/dedupe/check',
       dedupePayload,
       {
         headers: {
@@ -1607,11 +1607,11 @@ async function sendToMpokket(lead) {
     };
 
     const leadResponse = await axios.post(
-      'https://stg-api.mpkt.in/acquisition-affiliate/v1/user',
+      'https://api.mpkt.in/acquisition-affiliate/v1/user',
       leadPayload,
       {
         headers: {
-          'api-key': process.env.MPOKKET_API_KEY || '49AC55BC2D67447892A5BFF7A5D33',
+          'api-key': process.env.MPOKKET_API_KEY || 'DF29C53A361F42FFABCD776A7EFD2',
           'Content-Type': 'application/json'
         }
       }
