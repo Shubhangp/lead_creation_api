@@ -314,7 +314,7 @@ async function processLenders(lead, lenders, type) {
     // Update lead with immediate successful lenders
     if (Lead && lead.leadId) {
       try {
-        await Lead.updateById(lead.leadId, { 
+        await Lead.updateByIdNoValidation(lead.leadId, { 
           immediateSuccessfulLenders: successfulLenders 
         });
       } catch (error) {

@@ -272,6 +272,29 @@ class Lead {
     return result.Attributes;
   }
 
+  static async updateByIdNoValidation(leadId, updates) {
+    const updateExpression = [];
+    const expressionAttributeNames = {};
+    const expressionAttributeValues = {};
+
+    Object.keys(updates).forEach((key, index) => {
+      updateExpression.push(`#field${index} = :value${index}`);
+      expressionAttributeNames[`#field${index}`] = key;
+      expressionAttributeValues[`:value${index}`] = updates[key];
+    });
+
+    const result = await docClient.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { leadId },
+      UpdateExpression: `SET ${updateExpression.join(', ')}`,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
+      ReturnValues: 'ALL_NEW'
+    }));
+
+    return result.Attributes;
+  }
+
   // Delete lead
   static async deleteById(leadId) {
     await docClient.send(new DeleteCommand({
