@@ -1518,7 +1518,7 @@ async function sendToMpokket(lead) {
     };
 
     const dedupeResponse = await axios.post(
-      'https://stg-api.mpkt.in/acquisition-affiliate/v1/dedupe/check',
+      'https://api.mpkt.in/acquisition-affiliate/v1/dedupe/check',
       dedupePayload,
       {
         headers: {
@@ -1607,7 +1607,7 @@ async function sendToMpokket(lead) {
     };
 
     const leadResponse = await axios.post(
-      'https://stg-api.mpkt.in/acquisition-affiliate/v1/user',
+      'https://api.mpkt.in/acquisition-affiliate/v1/user',
       leadPayload,
       {
         headers: {
