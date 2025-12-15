@@ -1513,12 +1513,12 @@ async function sendToMpokket(lead) {
   try {
 
     const dedupePayload = {
-      email_id: email,
-      mobile_number: phone
+      email_id: Buffer.from(email).toString("base64"),
+      mobile_number: Buffer.from(phone).toString("base64")
     };
 
     const dedupeResponse = await axios.post(
-      'https://api.mpkt.in/acquisition-affiliate/v1/dedupe/check',
+      'https://stg-api.mpkt.in/acquisition-affiliate/v1/dedupe/check',
       dedupePayload,
       {
         headers: {
@@ -1561,7 +1561,7 @@ async function sendToMpokket(lead) {
       profession: mapJobTypeToMpokket(jobType),
       additional_info: {
         consent_timestamp: formatConsentTimestamp(createdAt),
-        api_consent: consent ? "Yes" : "No",
+        api_consent: "Yes",
         loan_amount: "", // Add if available in lead data
         loan_tenure: "", // Add if available in lead data
         company_type: businessType || "",
@@ -1607,7 +1607,7 @@ async function sendToMpokket(lead) {
     };
 
     const leadResponse = await axios.post(
-      'https://api.mpkt.in/acquisition-affiliate/v1/user',
+      'https://stg-api.mpkt.in/acquisition-affiliate/v1/user',
       leadPayload,
       {
         headers: {
