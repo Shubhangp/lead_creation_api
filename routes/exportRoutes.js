@@ -31,14 +31,12 @@ router.get('/tables', async (req, res) => {
   }
 });
 
-// Flatten object recursively with better null/undefined handling
+// Flatten object recursively
 function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
-  // Handle null or undefined at the root
   if (obj === null || obj === undefined) {
     return { [prefix || 'value']: '' };
   }
 
-  // Handle max depth
   if (currentDepth >= maxDepth) {
     return { [prefix]: JSON.stringify(obj) };
   }
@@ -46,19 +44,16 @@ function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
   const result = {};
   
   try {
-    // Handle primitive types
     if (typeof obj !== 'object' || obj === null) {
       result[prefix || 'value'] = obj === null ? '' : obj;
       return result;
     }
 
-    // Handle arrays
     if (Array.isArray(obj)) {
       result[prefix] = JSON.stringify(obj);
       return result;
     }
 
-    // Handle objects
     for (const key in obj) {
       if (!obj.hasOwnProperty(key)) continue;
       
@@ -78,7 +73,7 @@ function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
       }
     }
   } catch (error) {
-    console.error('Error flattening object:', error, 'Object:', obj);
+    console.error('Error flattening object:', error);
     result[prefix || 'error'] = `Error: ${error.message}`;
   }
   
@@ -100,15 +95,15 @@ router.post('/export', async (req, res) => {
     let lastEvaluatedKey = null;
     let scannedCount = 0;
 
-    // Build filter expression
+    // Build filter expression - CRITICAL: Filter out null/undefined values
     let filterExpression = '';
     const expressionAttributeNames = {};
     const expressionAttributeValues = {};
 
-    if (filters) {
+    if (filters && typeof filters === 'object') {
       const conditions = [];
 
-      // Date range filter
+      // Date range filter - only add if values exist
       if (filters.startDate && filters.endDate) {
         conditions.push(`#createdAt BETWEEN :startDate AND :endDate`);
         expressionAttributeNames['#createdAt'] = 'createdAt';
@@ -124,22 +119,22 @@ router.post('/export', async (req, res) => {
         expressionAttributeValues[':endDate'] = filters.endDate;
       }
 
-      // Response status filter
-      if (filters.responseStatus) {
+      // Response status filter - only add if value exists and is not empty
+      if (filters.responseStatus && filters.responseStatus !== '') {
         conditions.push(`#responseStatus = :responseStatus`);
         expressionAttributeNames['#responseStatus'] = 'responseStatus';
         expressionAttributeValues[':responseStatus'] = filters.responseStatus;
       }
 
-      // Source filter
-      if (filters.source) {
+      // Source filter - only add if value exists and is not empty
+      if (filters.source && filters.source !== '') {
         conditions.push(`#src = :source`);
         expressionAttributeNames['#src'] = 'source';
         expressionAttributeValues[':source'] = filters.source;
       }
 
-      // Lead ID filter
-      if (filters.leadId) {
+      // Lead ID filter - only add if value exists and is not empty
+      if (filters.leadId && filters.leadId !== '') {
         conditions.push(`#leadId = :leadId`);
         expressionAttributeNames['#leadId'] = 'leadId';
         expressionAttributeValues[':leadId'] = filters.leadId;
@@ -150,6 +145,9 @@ router.post('/export', async (req, res) => {
       }
     }
 
+    console.log('Filter expression:', filterExpression);
+    console.log('Expression attribute values:', expressionAttributeValues);
+
     // Scan table with filters
     do {
       const params = {
@@ -157,7 +155,8 @@ router.post('/export', async (req, res) => {
         ExclusiveStartKey: lastEvaluatedKey
       };
 
-      if (filterExpression) {
+      // Only add filter if we have conditions
+      if (filterExpression && Object.keys(expressionAttributeValues).length > 0) {
         params.FilterExpression = filterExpression;
         params.ExpressionAttributeNames = expressionAttributeNames;
         params.ExpressionAttributeValues = expressionAttributeValues;
@@ -166,7 +165,6 @@ router.post('/export', async (req, res) => {
       try {
         const result = await docClient.send(new ScanCommand(params));
         
-        // Filter out null/undefined items
         const validItems = (result.Items || []).filter(item => item !== null && item !== undefined);
         items = items.concat(validItems);
         
@@ -197,12 +195,9 @@ router.post('/export', async (req, res) => {
         if (item && typeof item === 'object') {
           const flattened = flattenObject(item);
           flattenedData.push(flattened);
-        } else {
-          console.warn(`Skipping invalid item at index ${i}:`, item);
         }
       } catch (flattenError) {
-        console.error(`Error flattening item ${i}:`, flattenError, items[i]);
-        // Add error item to show which record failed
+        console.error(`Error flattening item ${i}:`, flattenError);
         flattenedData.push({
           error: `Failed to flatten item ${i}`,
           errorMessage: flattenError.message
@@ -231,8 +226,7 @@ router.post('/export', async (req, res) => {
       console.error('CSV parsing error:', csvError);
       return res.status(500).json({ 
         error: 'Failed to generate CSV',
-        details: csvError.message,
-        sampleData: flattenedData.slice(0, 2)
+        details: csvError.message
       });
     }
   } catch (error) {
