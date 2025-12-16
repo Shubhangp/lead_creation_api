@@ -23,9 +23,9 @@ class Lead {
     if (!data.phone) errors.push('Phone is required');
     if (!data.email) errors.push('Email is required');
     if (!data.panNumber) errors.push('PAN number is required');
-    if (data.consent !== true && data.consent !== false) {
-      errors.push('Consent is required');
-    }
+    // if (data.consent !== true && data.consent !== false) {
+    //   errors.push('Consent is required');
+    // }
 
     // String length validations
     if (data.fullName && (data.fullName.length < 1 || data.fullName.length > 100)) {

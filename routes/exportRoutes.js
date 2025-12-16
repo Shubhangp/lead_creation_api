@@ -85,7 +85,7 @@ router.post('/export', async (req, res) => {
   try {
     const { tableName, filters } = req.body;
     
-    console.log('Export request:', { tableName, filters });
+    console.log('Export request received:', { tableName, filters });
     
     if (!tableName) {
       return res.status(400).json({ error: 'Table name is required' });
@@ -95,72 +95,78 @@ router.post('/export', async (req, res) => {
     let lastEvaluatedKey = null;
     let scannedCount = 0;
 
-    // Build filter expression - CRITICAL: Filter out null/undefined values
-    let filterExpression = '';
-    const expressionAttributeNames = {};
-    const expressionAttributeValues = {};
+    // Build scan parameters
+    const params = {
+      TableName: tableName
+    };
 
-    if (filters && typeof filters === 'object') {
+    // Only build filter if filters object exists and has values
+    if (filters && typeof filters === 'object' && Object.keys(filters).length > 0) {
       const conditions = [];
+      const expressionAttributeNames = {};
+      const expressionAttributeValues = {};
 
-      // Date range filter - only add if values exist
-      if (filters.startDate && filters.endDate) {
+      // Date range filter
+      if (filters.startDate && filters.endDate && 
+          filters.startDate !== '' && filters.endDate !== '' &&
+          filters.startDate !== null && filters.endDate !== null) {
         conditions.push(`#createdAt BETWEEN :startDate AND :endDate`);
         expressionAttributeNames['#createdAt'] = 'createdAt';
         expressionAttributeValues[':startDate'] = filters.startDate;
         expressionAttributeValues[':endDate'] = filters.endDate;
-      } else if (filters.startDate) {
+      } else if (filters.startDate && filters.startDate !== '' && filters.startDate !== null) {
         conditions.push(`#createdAt >= :startDate`);
         expressionAttributeNames['#createdAt'] = 'createdAt';
         expressionAttributeValues[':startDate'] = filters.startDate;
-      } else if (filters.endDate) {
+      } else if (filters.endDate && filters.endDate !== '' && filters.endDate !== null) {
         conditions.push(`#createdAt <= :endDate`);
         expressionAttributeNames['#createdAt'] = 'createdAt';
         expressionAttributeValues[':endDate'] = filters.endDate;
       }
 
-      // Response status filter - only add if value exists and is not empty
-      if (filters.responseStatus && filters.responseStatus !== '') {
+      // Response status filter
+      if (filters.responseStatus && filters.responseStatus !== '' && filters.responseStatus !== null) {
         conditions.push(`#responseStatus = :responseStatus`);
         expressionAttributeNames['#responseStatus'] = 'responseStatus';
         expressionAttributeValues[':responseStatus'] = filters.responseStatus;
       }
 
-      // Source filter - only add if value exists and is not empty
-      if (filters.source && filters.source !== '') {
+      // Source filter
+      if (filters.source && filters.source !== '' && filters.source !== null) {
         conditions.push(`#src = :source`);
         expressionAttributeNames['#src'] = 'source';
         expressionAttributeValues[':source'] = filters.source;
       }
 
-      // Lead ID filter - only add if value exists and is not empty
-      if (filters.leadId && filters.leadId !== '') {
+      // Lead ID filter
+      if (filters.leadId && filters.leadId !== '' && filters.leadId !== null) {
         conditions.push(`#leadId = :leadId`);
         expressionAttributeNames['#leadId'] = 'leadId';
         expressionAttributeValues[':leadId'] = filters.leadId;
       }
 
-      if (conditions.length > 0) {
-        filterExpression = conditions.join(' AND ');
+      // Only add filter expression if we have valid conditions
+      if (conditions.length > 0 && Object.keys(expressionAttributeValues).length > 0) {
+        params.FilterExpression = conditions.join(' AND ');
+        params.ExpressionAttributeNames = expressionAttributeNames;
+        params.ExpressionAttributeValues = expressionAttributeValues;
+        
+        console.log('Applied filters:', {
+          filterExpression: params.FilterExpression,
+          attributeNames: params.ExpressionAttributeNames,
+          attributeValues: params.ExpressionAttributeValues
+        });
       }
     }
 
-    console.log('Filter expression:', filterExpression);
-    console.log('Expression attribute values:', expressionAttributeValues);
-
     // Scan table with filters
     do {
-      const params = {
-        TableName: tableName,
-        ExclusiveStartKey: lastEvaluatedKey
-      };
-
-      // Only add filter if we have conditions
-      if (filterExpression && Object.keys(expressionAttributeValues).length > 0) {
-        params.FilterExpression = filterExpression;
-        params.ExpressionAttributeNames = expressionAttributeNames;
-        params.ExpressionAttributeValues = expressionAttributeValues;
+      // Add pagination key if exists
+      if (lastEvaluatedKey) {
+        params.ExclusiveStartKey = lastEvaluatedKey;
       }
+
+      console.log('Scanning with params:', JSON.stringify(params, null, 2));
 
       try {
         const result = await docClient.send(new ScanCommand(params));
@@ -174,8 +180,13 @@ router.post('/export', async (req, res) => {
         console.log(`Scanned ${scannedCount} items, filtered to ${items.length}...`);
       } catch (scanError) {
         console.error('Scan error:', scanError);
+        console.error('Scan params that caused error:', JSON.stringify(params, null, 2));
         throw scanError;
       }
+
+      // Remove ExclusiveStartKey for next iteration
+      delete params.ExclusiveStartKey;
+      
     } while (lastEvaluatedKey);
 
     if (items.length === 0) {
@@ -198,10 +209,6 @@ router.post('/export', async (req, res) => {
         }
       } catch (flattenError) {
         console.error(`Error flattening item ${i}:`, flattenError);
-        flattenedData.push({
-          error: `Failed to flatten item ${i}`,
-          errorMessage: flattenError.message
-        });
       }
     }
 
