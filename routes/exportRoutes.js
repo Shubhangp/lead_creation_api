@@ -31,27 +31,55 @@ router.get('/tables', async (req, res) => {
   }
 });
 
-// Flatten object recursively
+// Flatten object recursively with better null/undefined handling
 function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
+  // Handle null or undefined at the root
+  if (obj === null || obj === undefined) {
+    return { [prefix || 'value']: '' };
+  }
+
+  // Handle max depth
   if (currentDepth >= maxDepth) {
     return { [prefix]: JSON.stringify(obj) };
   }
 
   const result = {};
   
-  for (const key in obj) {
-    const value = obj[key];
-    const newKey = prefix ? `${prefix}.${key}` : key;
-    
-    if (value === null || value === undefined) {
-      result[newKey] = '';
-    } else if (Array.isArray(value)) {
-      result[newKey] = JSON.stringify(value);
-    } else if (typeof value === 'object' && value.constructor === Object) {
-      Object.assign(result, flattenObject(value, newKey, maxDepth, currentDepth + 1));
-    } else {
-      result[newKey] = value;
+  try {
+    // Handle primitive types
+    if (typeof obj !== 'object' || obj === null) {
+      result[prefix || 'value'] = obj === null ? '' : obj;
+      return result;
     }
+
+    // Handle arrays
+    if (Array.isArray(obj)) {
+      result[prefix] = JSON.stringify(obj);
+      return result;
+    }
+
+    // Handle objects
+    for (const key in obj) {
+      if (!obj.hasOwnProperty(key)) continue;
+      
+      const value = obj[key];
+      const newKey = prefix ? `${prefix}.${key}` : key;
+      
+      if (value === null || value === undefined) {
+        result[newKey] = '';
+      } else if (Array.isArray(value)) {
+        result[newKey] = JSON.stringify(value);
+      } else if (typeof value === 'object' && value.constructor === Object) {
+        Object.assign(result, flattenObject(value, newKey, maxDepth, currentDepth + 1));
+      } else if (typeof value === 'boolean') {
+        result[newKey] = value.toString();
+      } else {
+        result[newKey] = value;
+      }
+    }
+  } catch (error) {
+    console.error('Error flattening object:', error, 'Object:', obj);
+    result[prefix || 'error'] = `Error: ${error.message}`;
   }
   
   return result;
@@ -64,6 +92,10 @@ router.post('/export', async (req, res) => {
     
     console.log('Export request:', { tableName, filters });
     
+    if (!tableName) {
+      return res.status(400).json({ error: 'Table name is required' });
+    }
+
     let items = [];
     let lastEvaluatedKey = null;
     let scannedCount = 0;
@@ -72,7 +104,6 @@ router.post('/export', async (req, res) => {
     let filterExpression = '';
     const expressionAttributeNames = {};
     const expressionAttributeValues = {};
-    let filterIndex = 0;
 
     if (filters) {
       const conditions = [];
@@ -102,8 +133,8 @@ router.post('/export', async (req, res) => {
 
       // Source filter
       if (filters.source) {
-        conditions.push(`#source = :source`);
-        expressionAttributeNames['#source'] = 'source';
+        conditions.push(`#src = :source`);
+        expressionAttributeNames['#src'] = 'source';
         expressionAttributeValues[':source'] = filters.source;
       }
 
@@ -132,12 +163,21 @@ router.post('/export', async (req, res) => {
         params.ExpressionAttributeValues = expressionAttributeValues;
       }
 
-      const result = await docClient.send(new ScanCommand(params));
-      items = items.concat(result.Items || []);
-      lastEvaluatedKey = result.LastEvaluatedKey;
-      scannedCount += result.Count || 0;
-      
-      console.log(`Scanned ${scannedCount} items, filtered to ${items.length}...`);
+      try {
+        const result = await docClient.send(new ScanCommand(params));
+        
+        // Filter out null/undefined items
+        const validItems = (result.Items || []).filter(item => item !== null && item !== undefined);
+        items = items.concat(validItems);
+        
+        lastEvaluatedKey = result.LastEvaluatedKey;
+        scannedCount += result.Count || 0;
+        
+        console.log(`Scanned ${scannedCount} items, filtered to ${items.length}...`);
+      } catch (scanError) {
+        console.error('Scan error:', scanError);
+        throw scanError;
+      }
     } while (lastEvaluatedKey);
 
     if (items.length === 0) {
@@ -147,19 +187,60 @@ router.post('/export', async (req, res) => {
       });
     }
 
-    // Flatten all items
-    const flattenedData = items.map(item => flattenObject(item));
+    console.log(`Total items to flatten: ${items.length}`);
+
+    // Flatten all items with error handling
+    const flattenedData = [];
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const item = items[i];
+        if (item && typeof item === 'object') {
+          const flattened = flattenObject(item);
+          flattenedData.push(flattened);
+        } else {
+          console.warn(`Skipping invalid item at index ${i}:`, item);
+        }
+      } catch (flattenError) {
+        console.error(`Error flattening item ${i}:`, flattenError, items[i]);
+        // Add error item to show which record failed
+        flattenedData.push({
+          error: `Failed to flatten item ${i}`,
+          errorMessage: flattenError.message
+        });
+      }
+    }
+
+    if (flattenedData.length === 0) {
+      return res.status(500).json({ 
+        error: 'Failed to process any items',
+        totalItems: items.length
+      });
+    }
+
+    console.log(`Successfully flattened ${flattenedData.length} items`);
 
     // Convert to CSV
-    const parser = new Parser();
-    const csv = parser.parse(flattenedData);
+    try {
+      const parser = new Parser();
+      const csv = parser.parse(flattenedData);
 
-    res.header('Content-Type', 'text/csv');
-    res.attachment(`${tableName}_export_${new Date().toISOString().split('T')[0]}.csv`);
-    res.send(csv);
+      res.header('Content-Type', 'text/csv');
+      res.header('Content-Disposition', `attachment; filename="${tableName}_export_${new Date().toISOString().split('T')[0]}.csv"`);
+      res.send(csv);
+    } catch (csvError) {
+      console.error('CSV parsing error:', csvError);
+      return res.status(500).json({ 
+        error: 'Failed to generate CSV',
+        details: csvError.message,
+        sampleData: flattenedData.slice(0, 2)
+      });
+    }
   } catch (error) {
     console.error('Export error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
