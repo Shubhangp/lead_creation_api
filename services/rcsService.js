@@ -267,7 +267,7 @@ class RCSService {
           }
 
           // Update to PROCESSING status
-          await RCSQueue.update(message.queueId, {
+          await RCSQueue.update(message.rcs_queue, {
             status: 'PROCESSING',
             processingStartedAt: new Date().toISOString(),
             attempts: (message.attempts || 0) + 1
@@ -278,7 +278,7 @@ class RCSService {
           const lead = await Lead.findById(message.leadId);
 
           if (!lead) {
-            await RCSQueue.update(message.queueId, {
+            await RCSQueue.update(message.rcs_queue, {
               status: 'FAILED',
               failureReason: 'Lead not found'
             });
@@ -303,7 +303,7 @@ class RCSService {
           const result = await this.sendRCS(payload);
 
           if (result.success) {
-            await RCSQueue.update(message.queueId, {
+            await RCSQueue.update(message.rcs_queue, {
               status: 'SENT',
               sentAt: new Date().toISOString(),
               rcsPayload: payload,
@@ -324,12 +324,12 @@ class RCSService {
               updateData.status = 'PENDING';
             }
 
-            await RCSQueue.update(message.queueId, updateData);
+            await RCSQueue.update(message.rcs_queue, updateData);
 
             console.error(`RCS failed for lead ${message.leadId}:`, result.error);
           }
         } catch (error) {
-          console.error(`Error processing RCS for message ${message.queueId}:`, error);
+          console.error(`Error processing RCS for message ${message.rcs_queue}:`, error);
 
           const updateData = {};
           if (message.attempts >= 1) {
@@ -339,7 +339,7 @@ class RCSService {
             updateData.status = 'PENDING';
           }
 
-          await RCSQueue.update(message.queueId, updateData);
+          await RCSQueue.update(message.rcs_queue, updateData);
         }
       }
 
@@ -356,7 +356,7 @@ class RCSService {
           message.processingStartedAt && 
           message.processingStartedAt < tenMinutesAgo
         ) {
-          await RCSQueue.update(message.queueId, {
+          await RCSQueue.update(message.rcs_queue, {
             status: 'PENDING'
           });
         }

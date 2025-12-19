@@ -240,6 +240,12 @@ exports.createLead = async (req, res) => {
       'immediate'
     );
 
+    if (immediateSuccessfulLenders.length > 0) {
+      setTimeout(async () => {
+        await scheduleRCSAfterAllLenders(savedLead.leadId);
+      }, 5000);
+    }
+
     // Schedule delayed lenders (your existing function)
     scheduleDelayedLenders(savedLead, distributionRules.delayed);
 
@@ -338,9 +344,11 @@ function scheduleDelayedLenders(lead, delayedLenders) {
       setTimeout(async () => {
         try {
           const result = await sendToLender(lead, lenderConfig.lender);
+            console.log("scheduleDelayedLenders: 341 line", result, lenderConfig.lender);
           
           if (isLenderSuccess(result, lenderConfig.lender)) {
             console.log(`Delayed lender ${lenderConfig.lender} succeeded for lead ${lead.leadId}`);
+            console.log("scheduleDelayedLenders: 344 line", result, lenderConfig.lender);
           }
           
           console.log(`Delayed lead ${lead.leadId} sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
@@ -483,12 +491,14 @@ function isLenderSuccess(result, lenderName) {
 
 // Schedule RCS after all lenders have been processed
 async function scheduleRCSAfterAllLenders(leadId) {
+  console.log("LC scheduleRCSAfterAllLenders : 486 line", leadId);
   try {
     const lead = await Lead.findById(leadId);
     if (!lead) return;
 
     // Get all successful lenders from database logs
     const allSuccessfulLenders = await getAllSuccessfulLendersForLead(leadId, lead);
+    console.log("LC scheduleRCSAfterAllLenders : 493 line", allSuccessfulLenders);
     
     // Schedule RCS based on results
     await rcsService.scheduleRCSForLead(leadId, allSuccessfulLenders);
@@ -502,6 +512,7 @@ async function scheduleRCSAfterAllLenders(leadId) {
 // Helper function to get successful lenders from all log collections
 async function getAllSuccessfulLendersForLead(leadId, lead) {
   const successfulLenders = [];
+  console.log("LC getAllSuccessfulLendersForLead : 507 line", leadId, lead, successfulLenders);
   
   try {
     // Check SML
@@ -567,6 +578,8 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     );
     if (mmmResult) successfulLenders.push('MyMoneyMantra');
 
+    console.log("LC getAllSuccessfulLendersForLead : 573 line", successfulLenders);
+
     // --- Create entry in leadSuccess ---
     if (lead && successfulLenders.length > 0) {
       // Prepare lender flags
@@ -574,6 +587,8 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
       successfulLenders.forEach(lender => {
         lenderFlags[lender] = true;
       });
+
+      console.log("LC getAllSuccessfulLendersForLead : 583 line", lenderFlags);
 
       // Find or create lead success record
       const { record, created } = await LeadSuccess.findOrCreate({
@@ -596,7 +611,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     console.error('Error getting successful lenders:', error);
   }
 
-  console.log("RCS lenders list:", successfulLenders);
+  console.log("RCS lenders list: line 606", successfulLenders);
   return successfulLenders;
 }
 

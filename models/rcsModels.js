@@ -14,11 +14,11 @@ class RCSQueue {
       rcsType: queueData.rcsType,
       lenderName: queueData.lenderName || null,
       priority: queueData.priority || null,
-      scheduledTime: queueData.scheduledTime instanceof Date 
-        ? queueData.scheduledTime.toISOString() 
+      scheduledTime: queueData.scheduledTime instanceof Date
+        ? queueData.scheduledTime.toISOString()
         : queueData.scheduledTime,
       status: queueData.status || 'PENDING',
-      attempts: queueData.attempts || 0,
+      attempts: String(queueData.attempts || 0),
       sentAt: queueData.sentAt || null,
       failureReason: queueData.failureReason || null,
       rcsPayload: queueData.rcsPayload || null,
@@ -36,10 +36,10 @@ class RCSQueue {
   }
 
   // Find by ID
-  static async findById(queueId) {
+  static async findById(rcs_queue) {
     const result = await docClient.send(new GetCommand({
       TableName: RCS_QUEUE_TABLE,
-      Key: { rcs_queue: queueId }
+      Key: { rcs_queue: rcs_queue }
     }));
 
     return result.Item || null;
@@ -82,8 +82,8 @@ class RCSQueue {
       },
       ExpressionAttributeValues: {
         ':status': status,
-        ':scheduledTime': scheduledTimeBefore instanceof Date 
-          ? scheduledTimeBefore.toISOString() 
+        ':scheduledTime': scheduledTimeBefore instanceof Date
+          ? scheduledTimeBefore.toISOString()
           : scheduledTimeBefore
       },
       Limit: limit
@@ -133,7 +133,7 @@ class RCSQueue {
     const result = await docClient.send(new ScanCommand({
       TableName: RCS_QUEUE_TABLE,
       Limit: limit,
-      ProjectionExpression: 'queueId, leadId, rcsType, #status, createdAt',
+      ProjectionExpression: 'rcs_queue, leadId, rcsType, #status, createdAt',
       ExpressionAttributeNames: {
         '#status': 'status'
       }
@@ -147,10 +147,14 @@ class RCSQueue {
   }
 
   // Update queue entry
-  static async update(queueId, updates) {
+  static async update(rcs_queue, updates) {
     const updateExpressions = [];
     const expressionAttributeNames = {};
     const expressionAttributeValues = {};
+
+    if (updates.attempts !== undefined) {
+      updates.attempts = String(updates.attempts);
+    }
 
     // Add updatedAt
     updates.updatedAt = new Date().toISOString();
@@ -159,20 +163,20 @@ class RCSQueue {
       const placeholder = `#field${index}`;
       const valuePlaceholder = `:value${index}`;
       updateExpressions.push(`${placeholder} = ${valuePlaceholder}`);
-      
+
       // Handle reserved keywords
       if (key === 'status') {
         expressionAttributeNames[placeholder] = 'status';
       } else {
         expressionAttributeNames[placeholder] = key;
       }
-      
+
       expressionAttributeValues[valuePlaceholder] = updates[key];
     });
 
     const result = await docClient.send(new UpdateCommand({
       TableName: RCS_QUEUE_TABLE,
-      Key: { rcs_queue: queueId },
+      Key: { rcs_queue },
       UpdateExpression: `SET ${updateExpressions.join(', ')}`,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
@@ -189,7 +193,7 @@ class RCSQueue {
     const matchingItems = items.filter(item => item.status === currentStatus);
 
     let modifiedCount = 0;
-    
+
     // Update each item
     for (const item of matchingItems) {
       await this.update(item.rcs_queue, updates);
@@ -219,7 +223,7 @@ class RCSQueue {
 
     // Update each item
     for (const item of items) {
-      await this.update(item.queueId, updates);
+      await this.update(item.rcs_queue, updates);
       modifiedCount++;
     }
 
@@ -227,10 +231,10 @@ class RCSQueue {
   }
 
   // Delete queue entry
-  static async delete(queueId) {
+  static async delete(rcs_queue) {
     await docClient.send(new DeleteCommand({
       TableName: RCS_QUEUE_TABLE,
-      Key: { rcs_queue: queueId }
+      Key: { rcs_queue: rcs_queue }
     }));
 
     return { deleted: true };
