@@ -12,6 +12,9 @@ const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 const FatakPayResponseLog = require('../models/fatakPayResponseLog');
 const RamFinCropLog = require('../models/ramFinCropLogModel');
 // const vrindaLog = require('../models/VrindaFintechResponseLog');
+const IndiaLendsResponseLog = require('../models/indiaLendsResponseLog');
+const MpokketResponseLog = require('../models/mpokketResponseLog');
+const CrmPaisaResponseLog = require('../models/crmPaisaResponseLogModel');
 const DistributionRule = require('../models/distributionRuleModel');
 const MMMResponseLog = require('../models/mmmResponseLog');
 const LeadSuccess = require('../models/leadSuccessModel');
@@ -19,8 +22,6 @@ const rcsService = require('../services/rcsService');
 const xlsx = require('xlsx');
 const path = require('path');
 const crypto = require('crypto');
-const IndiaLendsResponseLog = require('../models/indiaLendsResponseLog');
-const MpokketResponseLog = require('../models/mpokketResponseLog');
 
 
 // Helper Function to get a random residenceType
@@ -392,6 +393,7 @@ async function sendToLender(lead, lender) {
     "MyMoneyMantra": sendToMyMoneyMantra,
     "INDIALENDS": sendToIndiaLends,
     "MPOKKET": sendToMpokket,
+    "CRMPaisa": sendToCrmPaisa,
   };
 
   // Call the appropriate handler for the lender
@@ -482,7 +484,8 @@ function isLenderSuccess(result, lenderName) {
     'FINTIFI': (result) => result.responseStatus === 200,
     'FATAKPAY': (result) => result.responseStatus === 200 || result.responseStatus === '200',
     'RAMFINCROP': (result) => result.responseStatus === 'success',
-    'MyMoneyMantra': (result) => result.responseStatus === 200 || result.responseStatus === 201
+    "MPOKKET": (result) => result.responseStatus === 200,
+    'CRMPaisa': (result) => result.responseStatus === 1,
   };
 
   const checkSuccess = successCriteria[lenderName];
@@ -577,6 +580,13 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
       log.responseStatus === 200 || log.responseStatus === 201
     );
     if (mmmResult) successfulLenders.push('MyMoneyMantra');
+
+    // Check CRMPaisa
+    const CRMPaisaResults = await CrmPaisaResponseLog.findByLeadId(leadId);
+    const CRMPaisaResult = CRMPaisaResults.find(log => 
+      log.responseBody?.Message === 'Lead generated successfully.'
+    );
+    if (CRMPaisaResult) successfulLenders.push('CRMPaisa');
 
     console.log("LC getAllSuccessfulLendersForLead : 573 line", successfulLenders);
 
@@ -1724,6 +1734,186 @@ function mapJobTypeToMpokket(jobType) {
   if (j.includes('student')) return 'student';
   return jobType;
 }
+
+async function sendToCrmPaisa(lead) {
+  const {
+    leadId, fullName, phone, email, dateOfBirth,
+    panNumber, jobType, salary, pincode, source
+  } = lead;
+
+  // Validation 1: Pincode check
+  const validPincodes = pinCodeDataCRMPaisa.map((row) => parseInt(row.pincode, 10));
+  if (!validPincodes.includes(parseInt(pincode))) {
+    console.log(`Pincode ${pincode} not valid for CrmPaisa. Skipping.`);
+    
+    const validationLog = await CrmPaisaResponseLog.create({
+      leadId: leadId,
+      source: source,
+      requestPayload: {
+        mobile: String(phone),
+        first_name: fullName.split(' ')[0],
+        last_name: fullName.split(' ')[1] || fullName.split(' ')[0],
+        email: String(email),
+        employment_type: String(jobType),
+        pan: String(panNumber),
+        dob: formatToYYYYMMDD(dateOfBirth),
+        pincode: String(pincode),
+        monthly_income: String(salary),
+      },
+      responseStatus: 'not-valid',
+      responseBody: { message: 'Invalid pincode', reason: 'Pincode not in approved list' },
+    });
+    
+    return validationLog;
+  }
+
+  // Validation 2: Job type must be salaried
+  const normalizedJobType = String(jobType).toLowerCase().trim();
+  if (normalizedJobType !== 'salaried') {
+    console.log(`Job type "${jobType}" is not salaried. Skipping.`);
+    
+    const validationLog = await CrmPaisaResponseLog.create({
+      leadId: leadId,
+      source: source,
+      requestPayload: {
+        mobile: String(phone),
+        first_name: fullName.split(' ')[0],
+        last_name: fullName.split(' ')[1] || fullName.split(' ')[0],
+        email: String(email),
+        employment_type: String(jobType),
+        pan: String(panNumber),
+        dob: formatToYYYYMMDD(dateOfBirth),
+        pincode: String(pincode),
+        monthly_income: String(salary),
+      },
+      responseStatus: 'not-valid',
+      responseBody: { message: 'Invalid employment type', reason: 'Only salaried individuals are accepted' },
+    });
+    
+    return validationLog;
+  }
+
+  // Validation 3: Minimum salary requirement (₹30,000)
+  const monthlySalary = parseFloat(salary);
+  if (isNaN(monthlySalary) || monthlySalary < 30000) {
+    console.log(`Salary ${salary} does not meet minimum requirement of ₹30,000. Skipping.`);
+    
+    const validationLog = await CrmPaisaResponseLog.create({
+      leadId: leadId,
+      source: source,
+      requestPayload: {
+        mobile: String(phone),
+        first_name: fullName.split(' ')[0],
+        last_name: fullName.split(' ')[1] || fullName.split(' ')[0],
+        email: String(email),
+        employment_type: String(jobType),
+        pan: String(panNumber),
+        dob: formatToYYYYMMDD(dateOfBirth),
+        pincode: String(pincode),
+        monthly_income: String(salary),
+      },
+      responseStatus: 'not-valid',
+      responseBody: { message: 'Insufficient salary', reason: 'Minimum monthly salary requirement is ₹30,000' },
+    });
+    
+    return validationLog;
+  }
+
+  // Validation 4: Age requirement (25-50 years)
+  const dob = new Date(dateOfBirth);
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+    age--;
+  }
+
+  if (age < 25 || age > 50) {
+    console.log(`Age ${age} is outside the allowed range (25-50 years). Skipping.`);
+    
+    const validationLog = await CrmPaisaResponseLog.create({
+      leadId: leadId,
+      source: source,
+      requestPayload: {
+        mobile: String(phone),
+        first_name: fullName.split(' ')[0],
+        last_name: fullName.split(' ')[1] || fullName.split(' ')[0],
+        email: String(email),
+        employment_type: String(jobType),
+        pan: String(panNumber),
+        dob: formatToYYYYMMDD(dateOfBirth),
+        pincode: String(pincode),
+        monthly_income: String(salary),
+      },
+      responseStatus: 'not-valid',
+      responseBody: { message: 'Invalid age', reason: 'Age must be between 25 and 50 years', calculatedAge: age },
+    });
+    
+    return validationLog;
+  }
+
+  // All validations passed - proceed with API call
+  const leadIdValue = leadId;
+  const externalApiUrl = `https://api.crmpaisa.com/affiliates`;
+  const payload = {
+    mobile: String(phone),
+    first_name: fullName.split(' ')[0],
+    last_name: fullName.split(' ')[1] ? fullName.split(' ')[1] : fullName.split(' ')[0],
+    email: String(email),
+    employment_type: String(jobType),
+    pan: String(panNumber),
+    dob: formatToYYYYMMDD(dateOfBirth),
+    pincode: String(pincode),
+    monthly_income: String(salary),
+    utm_source: "Ratecut",
+    utm_campaign: "Ratecut",
+    utm_medium: "Ratecut",
+    utm_term: ""
+  };
+
+  try {
+    const apiResponse = await axios.post(externalApiUrl, payload, {
+      headers: { 
+        'Auth': 'ZTI4MTU1MzE4NWQ2MGQyZTFhNWM0NGU3M2UzMmM3MDM=', 
+        'Content-Type': 'application/json'
+      },
+    });
+    
+    console.log("CrmPaisa response:", apiResponse.data);
+
+    // Save API response using DynamoDB
+    const responseLog = await CrmPaisaResponseLog.create({
+      leadId: leadIdValue,
+      source: source,
+      requestPayload: payload,
+      responseStatus: apiResponse.status,
+      responseBody: apiResponse.data,
+    });
+
+    return responseLog;
+  } catch (error) {
+    console.error('Error sending lead to CrmPaisa API:', error);
+    
+    const errorLog = await CrmPaisaResponseLog.create({
+      leadId: leadIdValue,
+      source: source,
+      requestPayload: payload,
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || { message: 'Unknown error' },
+    });
+    
+    return errorLog;
+  }
+}
+
+function readExcelFileCRMPaisa() {
+  const workbook = xlsx.readFile(path.join(__dirname, './EP_pincode.xlsx'));
+  const sheetName = workbook.SheetNames[0];
+  return xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+}
+
+const pinCodeDataCRMPaisa = readExcelFileCRMPaisa();
 
 //////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////
