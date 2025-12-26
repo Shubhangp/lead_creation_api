@@ -1,12 +1,12 @@
 // models/leadModel.js
 const { docClient } = require('../dynamodb');
-const { 
-  PutCommand, 
-  GetCommand, 
-  QueryCommand, 
-  UpdateCommand, 
-  DeleteCommand, 
-  ScanCommand 
+const {
+  PutCommand,
+  GetCommand,
+  QueryCommand,
+  UpdateCommand,
+  DeleteCommand,
+  ScanCommand
 } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
@@ -167,7 +167,10 @@ class Lead {
   static async findBySource(source, options = {}) {
     const { limit = 100, startDate, endDate, sortAscending = false } = options;
 
-    let keyConditionExpression = 'source = :source';
+    let keyConditionExpression = '#source = :source';
+    const expressionAttributeNames = {
+      '#source': 'source'
+    };
     const expressionAttributeValues = { ':source': source };
 
     // Add date range if provided
@@ -187,6 +190,7 @@ class Lead {
       TableName: TABLE_NAME,
       IndexName: 'source-createdAt-index',
       KeyConditionExpression: keyConditionExpression,
+      ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
       ScanIndexForward: sortAscending,
       Limit: limit
@@ -308,7 +312,7 @@ class Lead {
   // Query by multiple filters (uses Scan - use sparingly)
   static async findByFilters(filters = {}, options = {}) {
     const { limit = 100 } = options;
-    
+
     const filterExpressions = [];
     const expressionAttributeNames = {};
     const expressionAttributeValues = {};
@@ -340,7 +344,10 @@ class Lead {
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'source-createdAt-index',
-      KeyConditionExpression: 'source = :source',
+      KeyConditionExpression: '#source = :source',
+      ExpressionAttributeNames: {
+        '#source': 'source'
+      },
       ExpressionAttributeValues: { ':source': source },
       Select: 'COUNT'
     }));
