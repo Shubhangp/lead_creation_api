@@ -28,7 +28,7 @@ app.use((req, res, next) => {
 
 // Root route to respond with "Hello from Rate Cut"
 app.get('/', (req, res) => {
-    res.status(200).send('Hello from Rate Cut');
+    res.status(200).send('Hello from Rate Cut!');
 });
 
 app.use('/api/v1/leads', leadsRouter);
