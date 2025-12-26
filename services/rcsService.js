@@ -80,6 +80,12 @@ class RCSService {
         imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1764403776/Ramfincorp_wfpetc.jpg',
         actionUrl: 'https://applyonline.ramfincorp.com/?utm_source=RateCut'
       },
+      'MPOKKET': {
+        title: 'mPokket: Instant loans upto 50k',
+        description: 'Mpokket Personal Loan Benefits\n\n1. Get Loan upto Rs 50000\n2. 100% Digital Journey\n3. Students can now enjoy instant loans with ease',
+        imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1766735469/mpokket_ddvhx2.jpg',
+        actionUrl: 'https://web.mpokket.in/?utm_source=ratecut&utm_medium=API'
+      },
       'default': {
         title: 'Loan Approved!',
         description: 'Your loan application has been approved✅\n\n🏦  Loans via RBI-registered lenders.\n\n📱Complete your application now!\n\nT&C Apply.',
