@@ -9,6 +9,7 @@ const rcsRouter = require('./routes/rcsRoutes');
 const rcsScheduler = require('./scheduler/rcsScheduler');
 // const ivrRoutes = require('./routes/ivrRoutes');
 const exportRoutes = require('./routes/exportRoutes');
+const distributionRoutes = require('./routes/distributionRoutes');
 
 const app = express();
 if (process.env.NODE_ENV === 'development') {
@@ -37,6 +38,7 @@ app.use('/api/v1/distribution-rules', distributionRuleRouter);
 app.use('/api/v1/rcs', rcsRouter);
 // app.use('/api/v1/ivr', ivrRoutes);
 app.use('/api/v1/export', exportRoutes);
+app.use('/api/v1/distribution', distributionRoutes);
 
 rcsScheduler.init();
 
