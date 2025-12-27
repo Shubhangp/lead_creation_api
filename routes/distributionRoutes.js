@@ -2,13 +2,17 @@ const express = require('express');
 const router = express.Router();
 const {
   streamLeadsToLender,
+  startBackgroundDistribution,
   getBatchStats,
   getAllBatches,
   getLenderStats,
   getLeadsPreview
 } = require('../controllers/leadDistributionController');
 
-// Stream leads to lender (with real-time progress)
+// Start distribution in background (Fire and forget - continues even if frontend closes)
+router.post('/start', startBackgroundDistribution);
+
+// Stream leads to lender (with real-time SSE progress - job continues even if connection drops)
 router.post('/stream', streamLeadsToLender);
 
 // Get preview of leads that match filters
