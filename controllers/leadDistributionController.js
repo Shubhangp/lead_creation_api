@@ -1,3 +1,4 @@
+// controllers/leadDistributionController.js
 const Lead = require('../models/leadModel');
 const LeadDistributionStats = require('../models/leadDistributionStatsModel');
 
@@ -124,45 +125,81 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
   const sendFunction = getLenderSendFunction(lender);
   
   try {
-    // Query ALL leads with pagination
+    // Query ALL leads with proper pagination
     let allLeads = [];
+    
+    console.log(`[Batch ${batchId}] Starting lead collection...`);
     
     if (filters.sources && filters.sources.length > 0) {
       // Query each source with pagination
       for (const source of filters.sources) {
+        console.log(`[Batch ${batchId}] Querying source: ${source}`);
         let lastEvaluatedKey = null;
+        let sourceCount = 0;
+        
         do {
-          const result = await Lead.findBySource(source, {
+          const queryOptions = {
             limit: 1000,
             startDate: filters.startDate,
-            endDate: filters.endDate,
-            lastEvaluatedKey
-          });
+            endDate: filters.endDate
+          };
           
-          // Handle both array and object response
-          const leads = Array.isArray(result) ? result : result.items || [];
+          if (lastEvaluatedKey) {
+            queryOptions.lastEvaluatedKey = lastEvaluatedKey;
+          }
+          
+          const result = await Lead.findBySource(source, queryOptions);
+          
+          // Handle both array and object response formats
+          let leads = [];
+          if (Array.isArray(result)) {
+            leads = result;
+            lastEvaluatedKey = null; // Arrays don't have pagination info
+          } else {
+            leads = result.items || [];
+            lastEvaluatedKey = result.lastEvaluatedKey || null;
+          }
+          
+          sourceCount += leads.length;
           allLeads = allLeads.concat(leads);
           
-          lastEvaluatedKey = result.lastEvaluatedKey;
+          console.log(`[Batch ${batchId}] Source ${source}: fetched ${leads.length} leads (total so far: ${allLeads.length})`);
+          
+          // Small delay to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
         } while (lastEvaluatedKey);
+        
+        console.log(`[Batch ${batchId}] Source ${source} complete: ${sourceCount} leads`);
       }
     } else {
       // Scan ALL leads with pagination
+      console.log(`[Batch ${batchId}] Scanning all leads...`);
       let lastEvaluatedKey = null;
+      
       do {
         const result = await Lead.findAll({ 
           limit: 1000,
           lastEvaluatedKey 
         });
+        
         allLeads = allLeads.concat(result.items);
         lastEvaluatedKey = result.lastEvaluatedKey;
+        
+        console.log(`[Batch ${batchId}] Fetched ${result.items.length} leads (total so far: ${allLeads.length})`);
+        
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
       } while (lastEvaluatedKey);
     }
+
+    console.log(`[Batch ${batchId}] Total leads fetched: ${allLeads.length}`);
 
     // Apply additional filters
     const filteredLeads = allLeads.filter(lead => filterLead(lead, filters));
 
-    console.log(`[Batch ${batchId}] Found ${filteredLeads.length} leads matching filters`);
+    console.log(`[Batch ${batchId}] After filtering: ${filteredLeads.length} leads match criteria`);
 
     // Update batch with total leads
     await LeadDistributionStats.updateBatchStats(batchId, {
@@ -176,31 +213,58 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
       });
     }
 
-    // Process leads in batches
+    if (filteredLeads.length === 0) {
+      await LeadDistributionStats.updateBatchStats(batchId, {
+        status: 'COMPLETED',
+        completedAt: new Date().toISOString()
+      });
+      console.log(`[Batch ${batchId}] No leads to process`);
+      return;
+    }
+
+    // Process leads in batches with throttling
     let processedCount = 0;
     let successCount = 0;
     let failCount = 0;
+    let processingRecords = [];
 
     for (let i = 0; i < filteredLeads.length; i += batchSize) {
       const batchLeads = filteredLeads.slice(i, i + batchSize);
       
       // Process batch in parallel
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         batchLeads.map(async (lead) => {
           try {
             await sendFunction(lead);
             
-            // Update lead with push status
-            await Lead.updateByIdNoValidation(lead.leadId, {
-              [`pushedTo.${lender}`]: {
-                batchId: batchId,
-                pushedAt: new Date().toISOString(),
-                status: 'success'
+            // Update lead with push status (with retry logic)
+            let retries = 3;
+            while (retries > 0) {
+              try {
+                await Lead.updateByIdNoValidation(lead.leadId, {
+                  [`pushedTo.${lender}`]: {
+                    batchId: batchId,
+                    pushedAt: new Date().toISOString(),
+                    status: 'success'
+                  }
+                });
+                break;
+              } catch (updateError) {
+                if (updateError.name === 'ProvisionedThroughputExceededException' && retries > 1) {
+                  retries--;
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                } else {
+                  throw updateError;
+                }
               }
-            });
+            }
 
-            // Update batch stats
-            await LeadDistributionStats.addLeadToBatch(batchId, lead.leadId, true);
+            // Queue for batch recording
+            processingRecords.push({
+              batchId,
+              leadId: lead.leadId,
+              status: 'success'
+            });
             
             successCount++;
             processedCount++;
@@ -219,18 +283,40 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
 
             return { success: true, leadId: lead.leadId };
           } catch (error) {
-            // Update lead with error status
-            await Lead.updateByIdNoValidation(lead.leadId, {
-              [`pushedTo.${lender}`]: {
-                batchId: batchId,
-                pushedAt: new Date().toISOString(),
-                status: 'failed',
-                error: error.message
+            // Update lead with error status (with retry logic)
+            let retries = 3;
+            while (retries > 0) {
+              try {
+                await Lead.updateByIdNoValidation(lead.leadId, {
+                  [`pushedTo.${lender}`]: {
+                    batchId: batchId,
+                    pushedAt: new Date().toISOString(),
+                    status: 'failed',
+                    error: error.message
+                  }
+                });
+                break;
+              } catch (updateError) {
+                if (updateError.name === 'ProvisionedThroughputExceededException' && retries > 1) {
+                  retries--;
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                } else {
+                  // If we can't update lead, just log it
+                  console.error(`Failed to update lead ${lead.leadId}:`, updateError.message);
+                  break;
+                }
               }
+            }
+
+            // Queue for batch recording
+            processingRecords.push({
+              batchId,
+              leadId: lead.leadId,
+              status: 'failed',
+              errorMessage: error.message.substring(0, 500)
             });
 
-            // Update batch stats
-            await LeadDistributionStats.addLeadToBatch(batchId, lead.leadId, false);
+            // Add to error summary
             await LeadDistributionStats.addError(batchId, {
               message: `Lead ${lead.leadId}: ${error.message}`
             });
@@ -256,22 +342,45 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
         })
       );
 
+      // Batch record processing logs every 25 leads
+      if (processingRecords.length >= 25) {
+        await LeadDistributionStats.recordLeadProcessingBatch(processingRecords);
+        processingRecords = [];
+      }
+
+      // Update counters in batch stats (less frequently to avoid throughput issues)
+      if (processedCount % 50 === 0 || i + batchSize >= filteredLeads.length) {
+        await LeadDistributionStats.incrementCounters(batchId, {
+          processedLeads: batchLeads.length,
+          successfulLeads: batchLeads.filter((_, idx) => results[idx].status === 'fulfilled' && results[idx].value?.success).length,
+          failedLeads: batchLeads.filter((_, idx) => results[idx].status === 'rejected' || results[idx].value?.success === false).length
+        });
+      }
+
       // Log progress
       console.log(`[Batch ${batchId}] Progress: ${processedCount}/${filteredLeads.length} (Success: ${successCount}, Failed: ${failCount})`);
 
-      // Small delay between batches
+      // Delay between batches to prevent rate limiting
       if (i + batchSize < filteredLeads.length && delayMs > 0) {
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
     }
 
+    // Record any remaining processing logs
+    if (processingRecords.length > 0) {
+      await LeadDistributionStats.recordLeadProcessingBatch(processingRecords);
+    }
+
     // Update final batch status
     await LeadDistributionStats.updateBatchStats(batchId, {
       status: failCount === 0 ? 'COMPLETED' : (successCount === 0 ? 'FAILED' : 'PARTIAL'),
-      completedAt: new Date().toISOString()
+      completedAt: new Date().toISOString(),
+      processedLeads: processedCount,
+      successfulLeads: successCount,
+      failedLeads: failCount
     });
 
-    console.log(`[Batch ${batchId}] Completed: ${successCount} successful, ${failCount} failed`);
+    console.log(`[Batch ${batchId}] ✅ Completed: ${successCount} successful, ${failCount} failed out of ${processedCount} total`);
 
     if (progressCallback) {
       progressCallback({
@@ -285,7 +394,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
     }
 
   } catch (error) {
-    console.error(`[Batch ${batchId}] Error:`, error);
+    console.error(`[Batch ${batchId}] ❌ Fatal error:`, error);
     
     await LeadDistributionStats.updateBatchStats(batchId, {
       status: 'FAILED',
