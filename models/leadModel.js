@@ -170,10 +170,14 @@ class Lead {
       startDate,
       endDate,
       sortAscending = false,
-      lastEvaluatedKey = null  
+      lastEvaluatedKey = null
     } = options;
 
-    let keyConditionExpression = 'source = :source';
+    // Use ExpressionAttributeNames to handle 'source' reserved keyword
+    let keyConditionExpression = '#source = :source';
+    const expressionAttributeNames = {
+      '#source': 'source'
+    };
     const expressionAttributeValues = { ':source': source };
 
     // Add date range if provided
@@ -193,19 +197,20 @@ class Lead {
       TableName: TABLE_NAME,
       IndexName: 'source-createdAt-index',
       KeyConditionExpression: keyConditionExpression,
+      ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
       ScanIndexForward: sortAscending,
       Limit: limit
     };
 
-    // ✅ NEW: Add pagination token if provided
+    // Add pagination token if provided
     if (lastEvaluatedKey) {
       params.ExclusiveStartKey = lastEvaluatedKey;
     }
 
     const result = await docClient.send(new QueryCommand(params));
 
-    // ✅ NEW: Return object with items AND pagination token
+    // Return both items and pagination token
     return {
       items: result.Items || [],
       lastEvaluatedKey: result.LastEvaluatedKey || null,
