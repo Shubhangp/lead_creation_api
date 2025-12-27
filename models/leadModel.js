@@ -165,12 +165,15 @@ class Lead {
 
   // Find by source with date sorting
   static async findBySource(source, options = {}) {
-    const { limit = 100, startDate, endDate, sortAscending = false } = options;
+    const {
+      limit = 100,
+      startDate,
+      endDate,
+      sortAscending = false,
+      lastEvaluatedKey = null  
+    } = options;
 
-    let keyConditionExpression = '#source = :source';
-    const expressionAttributeNames = {
-      '#source': 'source'
-    };
+    let keyConditionExpression = 'source = :source';
     const expressionAttributeValues = { ':source': source };
 
     // Add date range if provided
@@ -186,17 +189,28 @@ class Lead {
       expressionAttributeValues[':endDate'] = endDate;
     }
 
-    const result = await docClient.send(new QueryCommand({
+    const params = {
       TableName: TABLE_NAME,
       IndexName: 'source-createdAt-index',
       KeyConditionExpression: keyConditionExpression,
-      ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
       ScanIndexForward: sortAscending,
       Limit: limit
-    }));
+    };
 
-    return result.Items || [];
+    // ✅ NEW: Add pagination token if provided
+    if (lastEvaluatedKey) {
+      params.ExclusiveStartKey = lastEvaluatedKey;
+    }
+
+    const result = await docClient.send(new QueryCommand(params));
+
+    // ✅ NEW: Return object with items AND pagination token
+    return {
+      items: result.Items || [],
+      lastEvaluatedKey: result.LastEvaluatedKey || null,
+      count: result.Count || 0
+    };
   }
 
   // Find all leads (paginated)
