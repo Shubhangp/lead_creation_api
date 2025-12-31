@@ -2,6 +2,7 @@ const express = require('express');
 const { docClient } = require('../dynamodb');
 const { ScanCommand } = require('@aws-sdk/lib-dynamodb');
 const { Parser } = require('json2csv');
+const { Writable } = require('stream');
 
 const router = express.Router();
 
@@ -9,22 +10,13 @@ const router = express.Router();
 router.get('/tables', async (req, res) => {
   try {
     const tables = [
-      'leads',
-      'excel_leads',
-      'leads_uat',
-      'sml_response_logs',
-      'freo_response_logs',
-      'ovly_response_logs',
-      'leadingplate_response_logs',
-      'zype_response_logs',
-      'fintifi_response_logs',
-      'fatakpay_response_logs',
-      'ramfincrop_logs',
-      'mpokket_response_logs',
-      'indialends_response_logs',
-      'lead_success'
+      'leads', 'excel_leads', 'leads_uat', 'sml_response_logs',
+      'freo_response_logs', 'ovly_response_logs', 'leadingplate_response_logs',
+      'zype_response_logs', 'fintifi_response_logs', 'fatakpay_response_logs',
+      'ramfincrop_logs', 'mpokket_response_logs', 'indialends_response_logs',
+      'crmPaisa_response_logs', 'lead_distribution_stats', 'lead_success',
+      'lead_distribution_processing'
     ];
-    
     res.json({ tables });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -80,168 +72,236 @@ function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
   return result;
 }
 
-// Export table with filters
+// Build scan parameters
+function buildScanParams(tableName, filters) {
+  const params = { TableName: tableName };
+
+  if (!filters || typeof filters !== 'object' || Object.keys(filters).length === 0) {
+    return params;
+  }
+
+  const conditions = [];
+  const expressionAttributeNames = {};
+  const expressionAttributeValues = {};
+
+  // Date range filter
+  if (filters.startDate && filters.endDate) {
+    conditions.push(`#createdAt BETWEEN :startDate AND :endDate`);
+    expressionAttributeNames['#createdAt'] = 'createdAt';
+    expressionAttributeValues[':startDate'] = filters.startDate;
+    expressionAttributeValues[':endDate'] = filters.endDate;
+  } else if (filters.startDate) {
+    conditions.push(`#createdAt >= :startDate`);
+    expressionAttributeNames['#createdAt'] = 'createdAt';
+    expressionAttributeValues[':startDate'] = filters.startDate;
+  } else if (filters.endDate) {
+    conditions.push(`#createdAt <= :endDate`);
+    expressionAttributeNames['#createdAt'] = 'createdAt';
+    expressionAttributeValues[':endDate'] = filters.endDate;
+  }
+
+  // Response status filter
+  if (filters.responseStatus) {
+    conditions.push(`#responseStatus = :responseStatus`);
+    expressionAttributeNames['#responseStatus'] = 'responseStatus';
+    expressionAttributeValues[':responseStatus'] = filters.responseStatus;
+  }
+
+  // Source filter
+  if (filters.source) {
+    conditions.push(`#src = :source`);
+    expressionAttributeNames['#src'] = 'source';
+    expressionAttributeValues[':source'] = filters.source;
+  }
+
+  // Lead ID filter
+  if (filters.leadId) {
+    conditions.push(`#leadId = :leadId`);
+    expressionAttributeNames['#leadId'] = 'leadId';
+    expressionAttributeValues[':leadId'] = filters.leadId;
+  }
+
+  if (conditions.length > 0) {
+    params.FilterExpression = conditions.join(' AND ');
+    params.ExpressionAttributeNames = expressionAttributeNames;
+    params.ExpressionAttributeValues = expressionAttributeValues;
+  }
+
+  return params;
+}
+
+// STREAMING EXPORT - Handles large datasets
 router.post('/export', async (req, res) => {
   try {
     const { tableName, filters } = req.body;
     
-    console.log('Export request received:', { tableName, filters });
+    console.log('Export request:', { tableName, filters });
     
     if (!tableName) {
       return res.status(400).json({ error: 'Table name is required' });
     }
 
-    let items = [];
+    // Set headers for streaming CSV
+    res.header('Content-Type', 'text/csv');
+    res.header('Content-Disposition', `attachment; filename="${tableName}_export_${new Date().toISOString().split('T')[0]}.csv"`);
+    res.header('Transfer-Encoding', 'chunked');
+
+    const params = buildScanParams(tableName, filters);
+    
     let lastEvaluatedKey = null;
-    let scannedCount = 0;
+    let totalProcessed = 0;
+    let headerWritten = false;
+    let allFields = new Set();
+    let buffer = [];
+    const BATCH_SIZE = 1000; // Process in batches
 
-    // Build scan parameters
-    const params = {
-      TableName: tableName
-    };
-
-    // Only build filter if filters object exists and has values
-    if (filters && typeof filters === 'object' && Object.keys(filters).length > 0) {
-      const conditions = [];
-      const expressionAttributeNames = {};
-      const expressionAttributeValues = {};
-
-      // Date range filter
-      if (filters.startDate && filters.endDate && 
-          filters.startDate !== '' && filters.endDate !== '' &&
-          filters.startDate !== null && filters.endDate !== null) {
-        conditions.push(`#createdAt BETWEEN :startDate AND :endDate`);
-        expressionAttributeNames['#createdAt'] = 'createdAt';
-        expressionAttributeValues[':startDate'] = filters.startDate;
-        expressionAttributeValues[':endDate'] = filters.endDate;
-      } else if (filters.startDate && filters.startDate !== '' && filters.startDate !== null) {
-        conditions.push(`#createdAt >= :startDate`);
-        expressionAttributeNames['#createdAt'] = 'createdAt';
-        expressionAttributeValues[':startDate'] = filters.startDate;
-      } else if (filters.endDate && filters.endDate !== '' && filters.endDate !== null) {
-        conditions.push(`#createdAt <= :endDate`);
-        expressionAttributeNames['#createdAt'] = 'createdAt';
-        expressionAttributeValues[':endDate'] = filters.endDate;
-      }
-
-      // Response status filter
-      if (filters.responseStatus && filters.responseStatus !== '' && filters.responseStatus !== null) {
-        conditions.push(`#responseStatus = :responseStatus`);
-        expressionAttributeNames['#responseStatus'] = 'responseStatus';
-        expressionAttributeValues[':responseStatus'] = filters.responseStatus;
-      }
-
-      // Source filter
-      if (filters.source && filters.source !== '' && filters.source !== null) {
-        conditions.push(`#src = :source`);
-        expressionAttributeNames['#src'] = 'source';
-        expressionAttributeValues[':source'] = filters.source;
-      }
-
-      // Lead ID filter
-      if (filters.leadId && filters.leadId !== '' && filters.leadId !== null) {
-        conditions.push(`#leadId = :leadId`);
-        expressionAttributeNames['#leadId'] = 'leadId';
-        expressionAttributeValues[':leadId'] = filters.leadId;
-      }
-
-      // Only add filter expression if we have valid conditions
-      if (conditions.length > 0 && Object.keys(expressionAttributeValues).length > 0) {
-        params.FilterExpression = conditions.join(' AND ');
-        params.ExpressionAttributeNames = expressionAttributeNames;
-        params.ExpressionAttributeValues = expressionAttributeValues;
-        
-        console.log('Applied filters:', {
-          filterExpression: params.FilterExpression,
-          attributeNames: params.ExpressionAttributeNames,
-          attributeValues: params.ExpressionAttributeValues
-        });
-      }
-    }
-
-    // Scan table with filters
     do {
-      // Add pagination key if exists
       if (lastEvaluatedKey) {
         params.ExclusiveStartKey = lastEvaluatedKey;
       }
 
-      console.log('Scanning with params:', JSON.stringify(params, null, 2));
+      const result = await docClient.send(new ScanCommand(params));
+      const items = (result.Items || []).filter(item => item && typeof item === 'object');
+      
+      // Flatten items
+      const flattenedBatch = items.map(item => flattenObject(item));
+      
+      // Collect all fields for consistent CSV columns
+      flattenedBatch.forEach(item => {
+        Object.keys(item).forEach(key => allFields.add(key));
+      });
 
-      try {
-        const result = await docClient.send(new ScanCommand(params));
-        
-        const validItems = (result.Items || []).filter(item => item !== null && item !== undefined);
-        items = items.concat(validItems);
-        
-        lastEvaluatedKey = result.LastEvaluatedKey;
-        scannedCount += result.Count || 0;
-        
-        console.log(`Scanned ${scannedCount} items, filtered to ${items.length}...`);
-      } catch (scanError) {
-        console.error('Scan error:', scanError);
-        console.error('Scan params that caused error:', JSON.stringify(params, null, 2));
-        throw scanError;
+      buffer = buffer.concat(flattenedBatch);
+      totalProcessed += items.length;
+
+      // Write batch when buffer is full or this is the last batch
+      if (buffer.length >= BATCH_SIZE || !result.LastEvaluatedKey) {
+        if (!headerWritten && buffer.length > 0) {
+          // Write CSV header
+          const header = Array.from(allFields).join(',') + '\n';
+          res.write(header);
+          headerWritten = true;
+        }
+
+        // Write CSV rows
+        buffer.forEach(row => {
+          const values = Array.from(allFields).map(field => {
+            const value = row[field];
+            if (value === null || value === undefined) return '';
+            // Escape commas and quotes in CSV
+            const stringValue = String(value);
+            if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
+              return `"${stringValue.replace(/"/g, '""')}"`;
+            }
+            return stringValue;
+          });
+          res.write(values.join(',') + '\n');
+        });
+
+        buffer = [];
       }
 
-      // Remove ExclusiveStartKey for next iteration
+      lastEvaluatedKey = result.LastEvaluatedKey;
+      console.log(`Processed ${totalProcessed} items...`);
+
       delete params.ExclusiveStartKey;
       
     } while (lastEvaluatedKey);
 
-    if (items.length === 0) {
-      return res.status(404).json({ 
-        error: 'No data found matching the filters',
-        scannedCount 
-      });
-    }
+    console.log(`Export complete: ${totalProcessed} items`);
+    res.end();
 
-    console.log(`Total items to flatten: ${items.length}`);
-
-    // Flatten all items with error handling
-    const flattenedData = [];
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const item = items[i];
-        if (item && typeof item === 'object') {
-          const flattened = flattenObject(item);
-          flattenedData.push(flattened);
-        }
-      } catch (flattenError) {
-        console.error(`Error flattening item ${i}:`, flattenError);
-      }
-    }
-
-    if (flattenedData.length === 0) {
-      return res.status(500).json({ 
-        error: 'Failed to process any items',
-        totalItems: items.length
-      });
-    }
-
-    console.log(`Successfully flattened ${flattenedData.length} items`);
-
-    // Convert to CSV
-    try {
-      const parser = new Parser();
-      const csv = parser.parse(flattenedData);
-
-      res.header('Content-Type', 'text/csv');
-      res.header('Content-Disposition', `attachment; filename="${tableName}_export_${new Date().toISOString().split('T')[0]}.csv"`);
-      res.send(csv);
-    } catch (csvError) {
-      console.error('CSV parsing error:', csvError);
-      return res.status(500).json({ 
-        error: 'Failed to generate CSV',
-        details: csvError.message
-      });
-    }
   } catch (error) {
     console.error('Export error:', error);
-    res.status(500).json({ 
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    } else {
+      res.end();
+    }
+  }
+});
+
+// ALTERNATIVE: Paginated Export for very large datasets
+router.post('/export-paginated', async (req, res) => {
+  try {
+    const { tableName, filters, page = 1, pageSize = 5000 } = req.body;
+    
+    if (!tableName) {
+      return res.status(400).json({ error: 'Table name is required' });
+    }
+
+    const params = buildScanParams(tableName, filters);
+    params.Limit = pageSize;
+
+    // Calculate pagination
+    let lastEvaluatedKey = null;
+    let currentPage = 1;
+    
+    // Skip to requested page
+    while (currentPage < page) {
+      const result = await docClient.send(new ScanCommand(params));
+      lastEvaluatedKey = result.LastEvaluatedKey;
+      if (!lastEvaluatedKey) break;
+      params.ExclusiveStartKey = lastEvaluatedKey;
+      currentPage++;
+    }
+
+    // Get current page data
+    const result = await docClient.send(new ScanCommand(params));
+    const items = (result.Items || []).filter(item => item && typeof item === 'object');
+    const flattenedData = items.map(item => flattenObject(item));
+
+    // Convert to CSV
+    const parser = new Parser();
+    const csv = parser.parse(flattenedData);
+
+    res.header('Content-Type', 'text/csv');
+    res.header('Content-Disposition', `attachment; filename="${tableName}_export_page${page}_${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send(csv);
+
+  } catch (error) {
+    console.error('Paginated export error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get estimate of total records (for progress indication)
+router.post('/export-estimate', async (req, res) => {
+  try {
+    const { tableName, filters } = req.body;
+    
+    if (!tableName) {
+      return res.status(400).json({ error: 'Table name is required' });
+    }
+
+    const params = buildScanParams(tableName, filters);
+    params.Select = 'COUNT';
+
+    let totalCount = 0;
+    let lastEvaluatedKey = null;
+
+    // Quick scan to count (limit to 10 iterations for estimate)
+    for (let i = 0; i < 10; i++) {
+      if (lastEvaluatedKey) {
+        params.ExclusiveStartKey = lastEvaluatedKey;
+      }
+
+      const result = await docClient.send(new ScanCommand(params));
+      totalCount += result.Count || 0;
+      lastEvaluatedKey = result.LastEvaluatedKey;
+
+      if (!lastEvaluatedKey) break;
+      delete params.ExclusiveStartKey;
+    }
+
+    res.json({ 
+      estimatedCount: totalCount,
+      isEstimate: !!lastEvaluatedKey 
     });
+
+  } catch (error) {
+    console.error('Estimate error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
