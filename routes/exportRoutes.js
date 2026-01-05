@@ -11,7 +11,7 @@ router.get('/tables', async (req, res) => {
   try {
     const tables = [
       'leads', 'excel_leads', 'leads_uat', 'sml_response_logs',
-      'freo_response_logs', 'ovly_response_logs', 'leadingplate_response_logs',
+      'freo_response_logs', 'ovly_response_logs', 'lending_plate_response_logs',
       'zype_response_logs', 'fintifi_response_logs', 'fatakpay_response_logs',
       'ramfincrop_logs', 'mpokket_response_logs', 'indialends_response_logs',
       'crmPaisa_response_logs', 'lead_distribution_stats', 'lead_success',
