@@ -99,7 +99,7 @@ function buildScanParams(tableName, filters) {
     expressionAttributeNames['#createdAt'] = 'createdAt';
     expressionAttributeValues[':endDate'] = filters.endDate;
   }
-
+ 
   // Response status filter
   if (filters.responseStatus) {
     conditions.push(`#responseStatus = :responseStatus`);
