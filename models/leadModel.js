@@ -373,6 +373,525 @@ class Lead {
 
     return result.Count || 0;
   }
+
+  // Add these stats functions to your existing Lead model (models/leadModel.js)
+
+  // ============================================================================
+  // STATS FUNCTIONS - Add to Lead class
+  // ============================================================================
+
+  // Calculate age from date of birth
+  static calculateAge(dateOfBirth) {
+    if (!dateOfBirth) return null;
+    const dob = new Date(dateOfBirth);
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const monthDiff = today.getMonth() - dob.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+      age--;
+    }
+    return age;
+  }
+
+  // Get age range category
+  static getAgeRange(age) {
+    if (!age || age < 18) return 'Below 18';
+    if (age >= 18 && age <= 25) return '18-25';
+    if (age >= 26 && age <= 35) return '26-35';
+    if (age >= 36 && age <= 45) return '36-45';
+    if (age >= 46 && age <= 55) return '46-55';
+    if (age >= 56 && age <= 65) return '56-65';
+    return 'Above 65';
+  }
+
+  // Get quick stats with optional date range
+  static async getQuickStats(source = null, startDate = null, endDate = null) {
+    try {
+      if (source && !startDate) {
+        // Get count for specific source using GSI
+        const count = await this.countBySource(source);
+        return {
+          totalLogs: count,
+          source: source,
+          isEstimate: false
+        };
+      } else if (startDate && endDate) {
+        // Quick count for date range
+        return this.getQuickStatsForDateRange(startDate, endDate);
+      } else {
+        // Use parallel scan for total count
+        return this.getQuickStatsParallel();
+      }
+    } catch (error) {
+      console.error('Error in getQuickStats:', error);
+      throw error;
+    }
+  }
+
+  // Quick count for date range (COUNT only)
+  static async getQuickStatsForDateRange(startDate, endDate) {
+    const segments = 8;
+    const startTime = Date.now();
+
+    try {
+      console.log(`[${TABLE_NAME}] Quick count for date range:`, startDate, 'to', endDate);
+
+      const countPromises = [];
+      for (let segment = 0; segment < segments; segment++) {
+        countPromises.push(this._countSegmentInRange(segment, segments, startDate, endDate));
+      }
+
+      const results = await Promise.all(countPromises);
+      const totalCount = results.reduce((sum, result) => sum + result.count, 0);
+      const elapsed = Date.now() - startTime;
+
+      console.log(`[${TABLE_NAME}] Quick count complete: ${totalCount} items in ${elapsed}ms`);
+
+      return {
+        totalLogs: totalCount,
+        isEstimate: false,
+        scannedInMs: elapsed,
+        method: 'parallel-count',
+        dateRange: { start: startDate, end: endDate }
+      };
+    } catch (error) {
+      console.error('Error in quick count:', error);
+      throw error;
+    }
+  }
+
+  // Helper: Count items in segment for date range
+  static async _countSegmentInRange(segment, totalSegments, startDate, endDate) {
+    let count = 0;
+    let lastKey = null;
+
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        Select: 'COUNT',
+        Segment: segment,
+        TotalSegments: totalSegments,
+        FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
+        ExpressionAttributeValues: {
+          ':startDate': startDate,
+          ':endDate': endDate
+        }
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      const result = await docClient.send(new ScanCommand(params));
+      count += result.Count || 0;
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    console.log(`Count segment ${segment}/${totalSegments}: ${count} items`);
+    return { segment, count };
+  }
+
+  // Parallel scan for total count
+  static async getQuickStatsParallel() {
+    const segments = 8;
+    const startTime = Date.now();
+
+    try {
+      console.log(`Starting parallel scan with ${segments} segments for ${TABLE_NAME}`);
+
+      const scanPromises = [];
+      for (let segment = 0; segment < segments; segment++) {
+        scanPromises.push(this._scanSegment(segment, segments));
+      }
+
+      const results = await Promise.all(scanPromises);
+      const totalCount = results.reduce((sum, result) => sum + result.count, 0);
+      const elapsed = Date.now() - startTime;
+
+      console.log(`Parallel scan complete: ${totalCount} items in ${elapsed}ms`);
+
+      return {
+        totalLogs: totalCount,
+        isEstimate: false,
+        scannedInMs: elapsed,
+        method: 'parallel'
+      };
+    } catch (error) {
+      console.error('Error in parallel scan:', error);
+      throw error;
+    }
+  }
+
+  // Helper method for parallel scanning
+  static async _scanSegment(segment, totalSegments) {
+    let count = 0;
+    let lastKey = null;
+
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        Select: 'COUNT',
+        Segment: segment,
+        TotalSegments: totalSegments
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      const result = await docClient.send(new ScanCommand(params));
+      count += result.Count || 0;
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    console.log(`Segment ${segment}/${totalSegments} complete: ${count} items`);
+    return { segment, count };
+  }
+
+  // Get comprehensive stats (OPTIMIZED for date ranges)
+  static async getStats(startDate = null, endDate = null) {
+    let allItems = [];
+    const startTime = Date.now();
+
+    console.log(`[${TABLE_NAME}] Starting stats fetch for date range:`, startDate, 'to', endDate);
+
+    try {
+      // Use parallel scan with date filter
+      if (startDate && endDate) {
+        const segments = 8;
+        const scanPromises = [];
+
+        for (let segment = 0; segment < segments; segment++) {
+          scanPromises.push(this._scanSegmentWithFilter(segment, segments, startDate, endDate));
+        }
+
+        const results = await Promise.all(scanPromises);
+        allItems = results.flat();
+
+        console.log(`[${TABLE_NAME}] Parallel filtered scan complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
+      } else {
+        // No date filter - regular scan
+        let lastKey = null;
+        do {
+          const params = {
+            TableName: TABLE_NAME,
+            Limit: 1000
+          };
+
+          if (lastKey) {
+            params.ExclusiveStartKey = lastKey;
+          }
+
+          const result = await docClient.send(new ScanCommand(params));
+          allItems = allItems.concat(result.Items || []);
+          lastKey = result.LastEvaluatedKey;
+        } while (lastKey);
+      }
+
+      // Track unique phones and PANs for duplicate detection
+      const seenPhones = new Set();
+      const seenPans = new Set();
+      const duplicatePhones = new Set();
+      const duplicatePans = new Set();
+
+      // First pass - identify duplicates
+      allItems.forEach(item => {
+        if (item.phone) {
+          if (seenPhones.has(item.phone)) {
+            duplicatePhones.add(item.phone);
+          }
+          seenPhones.add(item.phone);
+        }
+        if (item.panNumber) {
+          if (seenPans.has(item.panNumber)) {
+            duplicatePans.add(item.panNumber);
+          }
+          seenPans.add(item.panNumber);
+        }
+      });
+
+      // Initialize stats
+      const stats = {
+        totalLogs: allItems.length,
+        uniqueLeads: 0,
+        duplicateLeads: 0,
+        duplicateByPhone: duplicatePhones.size,
+        duplicateByPan: duplicatePans.size,
+        dateRange: {
+          start: startDate,
+          end: endDate
+        },
+        sourceBreakdown: {},
+        genderBreakdown: {
+          'Male': 0,
+          'Female': 0,
+          'Other': 0,
+          'Unknown': 0
+        },
+        ageRangeBreakdown: {
+          'Below 18': 0,
+          '18-25': 0,
+          '26-35': 0,
+          '36-45': 0,
+          '46-55': 0,
+          '56-65': 0,
+          'Above 65': 0,
+          'Unknown': 0
+        },
+        jobTypeBreakdown: {},
+        businessTypeBreakdown: {},
+        salaryRangeBreakdown: {
+          'Below 20k': 0,
+          '20k-40k': 0,
+          '40k-60k': 0,
+          '60k-80k': 0,
+          '80k-100k': 0,
+          'Above 100k': 0,
+          'Unknown': 0
+        },
+        creditScoreBreakdown: {
+          'Poor (300-579)': 0,
+          'Fair (580-669)': 0,
+          'Good (670-739)': 0,
+          'Very Good (740-799)': 0,
+          'Excellent (800-900)': 0,
+          'Unknown': 0
+        },
+        consentBreakdown: {
+          'true': 0,
+          'false': 0,
+          'unknown': 0
+        }
+      };
+
+      // Second pass - process stats
+      allItems.forEach(item => {
+        // Check if lead is duplicate
+        const isDuplicate = duplicatePhones.has(item.phone) || duplicatePans.has(item.panNumber);
+        if (isDuplicate) {
+          stats.duplicateLeads++;
+        } else {
+          stats.uniqueLeads++;
+        }
+
+        // Source breakdown
+        const source = item.source || 'unknown';
+        stats.sourceBreakdown[source] = (stats.sourceBreakdown[source] || 0) + 1;
+
+        // Gender breakdown
+        const gender = item.gender || 'Unknown';
+        if (stats.genderBreakdown[gender] !== undefined) {
+          stats.genderBreakdown[gender]++;
+        } else {
+          stats.genderBreakdown['Other']++;
+        }
+
+        // Age range breakdown (calculated from DOB)
+        let age = item.age;
+        if (!age && item.dateOfBirth) {
+          age = this.calculateAge(item.dateOfBirth);
+        }
+        const ageRange = age ? this.getAgeRange(age) : 'Unknown';
+        stats.ageRangeBreakdown[ageRange]++;
+
+        // Job type breakdown
+        if (item.jobType) {
+          stats.jobTypeBreakdown[item.jobType] = (stats.jobTypeBreakdown[item.jobType] || 0) + 1;
+        }
+
+        // Business type breakdown
+        if (item.businessType) {
+          stats.businessTypeBreakdown[item.businessType] = (stats.businessTypeBreakdown[item.businessType] || 0) + 1;
+        }
+
+        // Salary range breakdown
+        if (item.salary) {
+          const salary = parseInt(item.salary);
+          if (salary < 20000) {
+            stats.salaryRangeBreakdown['Below 20k']++;
+          } else if (salary < 40000) {
+            stats.salaryRangeBreakdown['20k-40k']++;
+          } else if (salary < 60000) {
+            stats.salaryRangeBreakdown['40k-60k']++;
+          } else if (salary < 80000) {
+            stats.salaryRangeBreakdown['60k-80k']++;
+          } else if (salary < 100000) {
+            stats.salaryRangeBreakdown['80k-100k']++;
+          } else {
+            stats.salaryRangeBreakdown['Above 100k']++;
+          }
+        } else {
+          stats.salaryRangeBreakdown['Unknown']++;
+        }
+
+        // Credit score breakdown
+        if (item.creditScore || item.cibilScore) {
+          const score = item.creditScore || item.cibilScore;
+          if (score < 580) {
+            stats.creditScoreBreakdown['Poor (300-579)']++;
+          } else if (score < 670) {
+            stats.creditScoreBreakdown['Fair (580-669)']++;
+          } else if (score < 740) {
+            stats.creditScoreBreakdown['Good (670-739)']++;
+          } else if (score < 800) {
+            stats.creditScoreBreakdown['Very Good (740-799)']++;
+          } else {
+            stats.creditScoreBreakdown['Excellent (800-900)']++;
+          }
+        } else {
+          stats.creditScoreBreakdown['Unknown']++;
+        }
+
+        // Consent breakdown
+        const consent = item.consent === true ? 'true' : item.consent === false ? 'false' : 'unknown';
+        stats.consentBreakdown[consent]++;
+      });
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[${TABLE_NAME}] Stats processing complete in ${elapsed}ms`);
+      stats.processingTimeMs = elapsed;
+
+      return stats;
+    } catch (error) {
+      console.error('Error in getStats:', error);
+      throw error;
+    }
+  }
+
+  // Helper: Parallel scan with date filter
+  static async _scanSegmentWithFilter(segment, totalSegments, startDate, endDate) {
+    let items = [];
+    let lastKey = null;
+
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        Segment: segment,
+        TotalSegments: totalSegments,
+        FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
+        ExpressionAttributeValues: {
+          ':startDate': startDate,
+          ':endDate': endDate
+        }
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      const result = await docClient.send(new ScanCommand(params));
+      items = items.concat(result.Items || []);
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    console.log(`Segment ${segment}/${totalSegments} complete: ${items.length} items`);
+    return items;
+  }
+
+  // Get stats grouped by date (OPTIMIZED)
+  static async getStatsByDate(startDate, endDate) {
+    const startTime = Date.now();
+    console.log(`[${TABLE_NAME}] Fetching stats by date:`, startDate, 'to', endDate);
+
+    try {
+      // Use parallel scan
+      const segments = 8;
+      const scanPromises = [];
+
+      for (let segment = 0; segment < segments; segment++) {
+        scanPromises.push(this._scanSegmentWithFilter(segment, segments, startDate, endDate));
+      }
+
+      const results = await Promise.all(scanPromises);
+      const allItems = results.flat();
+
+      console.log(`[${TABLE_NAME}] Fetched ${allItems.length} items in ${Date.now() - startTime}ms`);
+
+      // Group by date
+      const statsByDate = {};
+
+      allItems.forEach(item => {
+        const date = item.createdAt.split('T')[0];
+
+        if (!statsByDate[date]) {
+          statsByDate[date] = {
+            date,
+            total: 0,
+            uniquePhones: new Set(),
+            uniquePans: new Set(),
+            genders: { Male: 0, Female: 0, Other: 0, Unknown: 0 },
+            withConsent: 0,
+            withoutConsent: 0
+          };
+        }
+
+        statsByDate[date].total++;
+
+        if (item.phone) {
+          statsByDate[date].uniquePhones.add(item.phone);
+        }
+        if (item.panNumber) {
+          statsByDate[date].uniquePans.add(item.panNumber);
+        }
+
+        // Gender tracking
+        const gender = item.gender || 'Unknown';
+        if (statsByDate[date].genders[gender] !== undefined) {
+          statsByDate[date].genders[gender]++;
+        } else {
+          statsByDate[date].genders['Other']++;
+        }
+
+        // Consent tracking
+        if (item.consent === true) {
+          statsByDate[date].withConsent++;
+        } else {
+          statsByDate[date].withoutConsent++;
+        }
+      });
+
+      // Convert sets to counts
+      const result = Object.values(statsByDate).map(day => ({
+        date: day.date,
+        total: day.total,
+        uniquePhones: day.uniquePhones.size,
+        uniquePans: day.uniquePans.size,
+        genders: day.genders,
+        withConsent: day.withConsent,
+        withoutConsent: day.withoutConsent
+      })).sort((a, b) => a.date.localeCompare(b.date));
+
+      return result;
+    } catch (error) {
+      console.error('Error in getStatsByDate:', error);
+      throw error;
+    }
+  }
+
+  // Get logs by date range
+  static async findByDateRange(startDate, endDate, options = {}) {
+    const { limit = 100, lastEvaluatedKey } = options;
+
+    const params = {
+      TableName: TABLE_NAME,
+      FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
+      ExpressionAttributeValues: {
+        ':startDate': startDate,
+        ':endDate': endDate
+      },
+      Limit: limit
+    };
+
+    if (lastEvaluatedKey) {
+      params.ExclusiveStartKey = lastEvaluatedKey;
+    }
+
+    const result = await docClient.send(new ScanCommand(params));
+    return {
+      items: result.Items || [],
+      lastEvaluatedKey: result.LastEvaluatedKey
+    };
+  }
 }
 
 module.exports = Lead;

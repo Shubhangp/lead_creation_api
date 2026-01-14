@@ -11,6 +11,7 @@ const rcsScheduler = require('./scheduler/rcsScheduler');
 const exportRoutes = require('./routes/exportRoutes');
 const distributionRoutes = require('./routes/distributionRoutes');
 const lenderRequestRoutes = require('./routes/lenderRequestRoutes');
+const statsRoutes = require('./routes/statsRoutes');
 
 const app = express();
 if (process.env.NODE_ENV === 'development') {
@@ -41,6 +42,7 @@ app.use('/api/v1/rcs', rcsRouter);
 app.use('/api/v1/export', exportRoutes);
 app.use('/api/v1/distribution', distributionRoutes);
 app.use('/api/v1/lenderRequest', lenderRequestRoutes);
+app.use('/api/v1/unified-stats', statsRoutes);
 
 rcsScheduler.init();
 
