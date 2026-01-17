@@ -359,7 +359,7 @@ function isLenderSuccess(result, lenderName) {
     'LendingPlate': (result) => result.responseStatus === 'Success',
     'ZYPE': (result) => result.responseStatus === 'ACCEPT' || result.responseBody?.status === 'ACCEPT',
     'FINTIFI': (result) => result.responseStatus === 200,
-    'FATAKPAY': (result) => result.responseStatus === 200 || result.responseStatus === '200',
+    'FATAKPAY': (result) => result.responseBody.message === 'You are eligible.',
     'RAMFINCROP': (result) => result.responseStatus === 'success',
     "MPOKKET": (result) => result.responseStatus === 200,
     'CRMPaisa': (result) => result.responseStatus === 1,
@@ -424,11 +424,11 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     if (lpResult) successfulLenders.push('LendingPlate');
 
     // Check ZYPE
-    const zygeResults = await ZypeResponseLog.findByLeadId(leadId);
-    const zygeResult = zygeResults.find(log => 
+    const zypeResults = await ZypeResponseLog.findByLeadId(leadId);
+    const zypeResult = zypeResults.find(log => 
       log.responseStatus === 'ACCEPT' || log.responseBody?.status === 'ACCEPT'
     );
-    if (zygeResult) successfulLenders.push('ZYPE');
+    if (zypeResult) successfulLenders.push('ZYPE');
 
     // Check FINTIFI
     const fintifiResults = await FintifiResponseLog.findByLeadId(leadId);
@@ -440,7 +440,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     // Check FATAKPAY
     const fatakResults = await FatakPayResponseLog.findByLeadId(leadId);
     const fatakResult = fatakResults.find(log => 
-      log.responseStatus === 200 || log.responseStatus === '200'
+      log.responseBody.message === 'You are eligible.'
     );
     if (fatakResult) successfulLenders.push('FATAKPAY');
 

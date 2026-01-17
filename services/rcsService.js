@@ -86,6 +86,12 @@ class RCSService {
         imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1766735469/mpokket_ddvhx2.jpg',
         actionUrl: 'https://web.mpokket.in/?utm_source=ratecut&utm_medium=API'
       },
+      'CRMPaisa': {
+        title: 'Get up to 1Lakh Instant Loan in 10 min',
+        description: '• Quick 10-minute disbursal\n• Lightning-fast approval\n• No CIBIL score required\n• Collateral-free loans\n• Apply from anywhere, anytime\nT&C Apply.',
+        imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1768536755/RCS_Emergency_Paisa_o3xvcl.jpg',
+        actionUrl: 'https://emergencypaisa.com/apply-now?utm_source=RCut&utm_medium=Medium1&utm_campaign=Medium2'
+      },
       'default': {
         title: 'Loan Approved!',
         description: 'Your loan application has been approved✅\n\n🏦  Loans via RBI-registered lenders.\n\n📱Complete your application now!\n\nT&C Apply.',
