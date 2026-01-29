@@ -7,11 +7,13 @@ const formRouter = require('./routes/formRoutes');
 const distributionRuleRouter = require('./routes/distributionRuleRoutes');
 const rcsRouter = require('./routes/rcsRoutes');
 const rcsScheduler = require('./scheduler/rcsScheduler');
+const continuousScheduler = require('./scheduler/continuousScheduler');
 // const ivrRoutes = require('./routes/ivrRoutes');
 const exportRoutes = require('./routes/exportRoutes');
 const distributionRoutes = require('./routes/distributionRoutes');
 const lenderRequestRoutes = require('./routes/lenderRequestRoutes');
 const statsRoutes = require('./routes/statsRoutes');
+const pendingLeadRoutes = require('./routes/pendingLeadsRoutes');
 
 const app = express();
 if (process.env.NODE_ENV === 'development') {
@@ -43,7 +45,18 @@ app.use('/api/v1/export', exportRoutes);
 app.use('/api/v1/distribution', distributionRoutes);
 app.use('/api/v1/lenderRequest', lenderRequestRoutes);
 app.use('/api/v1/unified-stats', statsRoutes);
+app.use('/api/v1/pending-leads', pendingLeadRoutes);
 
 rcsScheduler.init();
+// Start continuous scheduler when server starts
+continuousScheduler.start();
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  continuousScheduler.stop();
+  server.close(() => {
+    process.exit(0);
+  });
+});
 
 module.exports = app;
