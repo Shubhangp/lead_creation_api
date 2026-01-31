@@ -87,10 +87,16 @@ class RCSService {
         actionUrl: 'https://web.mpokket.in/?utm_source=ratecut&utm_medium=API'
       },
       'CRMPaisa': {
-        title: 'Get up to 1Lakh Instant Loan in 10 min',
-        description: '• Quick 10-minute disbursal\n• Lightning-fast approval\n• No CIBIL score required\n• Collateral-free loans\n• Apply from anywhere, anytime\nT&C Apply.',
+        title: 'Get up to 15Lakh Instant Loan in 10 min',
+        description: '• Quick 10-minute disbursal\n• Lightning-fast approval\n• Collateral-free loans\n• Apply from anywhere, anytime\nT&C Apply.',
         imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1768536755/RCS_Emergency_Paisa_o3xvcl.jpg',
         actionUrl: 'https://emergencypaisa.com/apply-now?utm_source=RCut&utm_medium=Medium1&utm_campaign=Medium2'
+      },
+      'INDIALENDS': {
+        title: 'InstantLoans with IndiaLends',
+        description: 'How It Works?\n\nProvide Basic Details:\nCheck eligibility for pre-qualified offers from 70+ RBI approved lenders\n\nChoose From Best Offers\nCompare and choose from multiple pre-qualified loan offers tailored for your credit profile\n\nComplete Application Online\nApply for your selected loan offer with a 100% online and digital process\n\nGet Money in Your Bank\nGet the approved loan amount disbursed to your bank account',
+        imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1769841253/RCS_IL_q5njgw.png',
+        actionUrl: 'https://partners.indialends.com/RateCut?sub_source=IND&ref_id=77D908AB-7C2E-4E26'
       },
       'default': {
         title: 'Loan Approved!',
