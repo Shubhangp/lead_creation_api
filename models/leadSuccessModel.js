@@ -123,7 +123,7 @@ class LeadSuccess {
   static async updateLenderStatus(successId, lenderName, status) {
     const validLenders = [
       'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI', 
-      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra'
+      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
     ];
 
     if (!validLenders.includes(lenderName)) {
@@ -194,7 +194,7 @@ class LeadSuccess {
   static async getLenderStats(lenderName, startDate, endDate) {
     const validLenders = [
       'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI', 
-      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra'
+      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
     ];
 
     if (!validLenders.includes(lenderName)) {
@@ -227,7 +227,7 @@ class LeadSuccess {
   static async getAllLenderStats(startDate, endDate) {
     const lenders = [
       'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI', 
-      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra'
+      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
     ];
 
     const stats = {};
