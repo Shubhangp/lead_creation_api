@@ -1,7 +1,7 @@
 const Lead = require('../models/leadModel');
-const PendingLead = require('../models/pendingLeadModel');
+// const PendingLead = require('../models/pendingLeadModel');
 const DistributionRule = require('../models/distributionRuleModel');
-const timeUtils = require('../utils/timeutils');
+// const timeUtils = require('../utils/timeutils');
 const rcsService = require('../services/rcsService');
 
 // Import lender services
@@ -35,7 +35,7 @@ const CrmPaisaResponseLog = require('../models/crmPaisaResponseLogModel');
 const MMMResponseLog = require('../models/mmmResponseLog');
 const LeadSuccess = require('../models/leadSuccessModel');
 
-// Create a lead with optimized time-based distribution
+// Create a lead
 exports.createLead = async (req, res) => {
   const {
     source, fullName, firstName, lastName, phone, email,
@@ -43,24 +43,26 @@ exports.createLead = async (req, res) => {
     salary, creditScore, cibilScore, address, pincode, consent
   } = req.body;
 
-  // Validations
   if (!source || !fullName || !phone || !email || !panNumber || consent === undefined) {
     return res.status(400).json({ 
       message: 'Source, fullName, phone, email, panNumber, and consent are required.' 
     });
   }
 
+  // Full name length validation
   if (fullName.length < 2 || fullName.length > 100) {
     return res.status(400).json({ 
       message: 'Full name must be between 2 and 100 characters.' 
     });
   }
 
+  // Email validation
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,4}$/;
   if (!emailRegex.test(email)) {
     return res.status(400).json({ message: 'Invalid email format.' });
   }
 
+  // PAN validation
   const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
   if (!panRegex.test(panNumber)) {
     return res.status(400).json({ 
@@ -68,6 +70,7 @@ exports.createLead = async (req, res) => {
     });
   }
 
+  // Date of birth validation
   const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) && !isNaN(Date.parse(dateOfBirth));
   if (dateOfBirth && (!isValidDate || new Date(dateOfBirth) > new Date())) {
     return res.status(400).json({ 
@@ -75,6 +78,7 @@ exports.createLead = async (req, res) => {
     });
   }
 
+  // Set defaults
   const finalSalary = salary || '50000';
   const finalJobType = jobType || 'SALARIED';
 
@@ -101,171 +105,159 @@ exports.createLead = async (req, res) => {
       consent
     };
 
-    // Create lead in database
+    // Create lead using DynamoDB model
     const savedLead = await Lead.create(leadData);
 
-    // Get distribution rules
+    // Get distribution rules (your existing function)
     const distributionRules = await getDistributionRules(source);
 
-    // Process lenders with optimized approach
-    const {
-      sentImmediately,
-      pendingLenders,
-      immediateSuccessfulLenders
-    } = await processLendersOptimized(savedLead, distributionRules);
+    // Process immediate lenders (your existing function)
+    const immediateSuccessfulLenders = await processLenders(
+      savedLead, 
+      distributionRules.immediate, 
+      'immediate'
+    );
 
-    // Schedule RCS if any lenders were successful
     if (immediateSuccessfulLenders.length > 0) {
       setTimeout(async () => {
         await scheduleRCSAfterAllLenders(savedLead.leadId);
       }, 5000);
     }
 
+    // Schedule delayed lenders (your existing function)
+    scheduleDelayedLenders(savedLead, distributionRules.delayed);
+
     res.status(201).json({
       status: 'success',
       data: {
         lead: savedLead,
-        sentImmediately,
-        pendingLenders: pendingLenders.length,
-        immediateSuccessful: immediateSuccessfulLenders.length
       },
     });
 
   } catch (error) {
-    console.error('Error in createLead:', error);
+    console.log(error);
 
+    // Handle duplicate phone error
     if (error.code === 'DUPLICATE_PHONE') {
-      return res.status(409).json({ message: 'Phone number already exists' });
+      return res.status(409).json({ 
+        message: 'Phone number already exists' 
+      });
     }
 
+    // Handle duplicate PAN error
     if (error.code === 'DUPLICATE_PAN') {
-      return res.status(409).json({ message: 'Duplicate PAN number' });
+      return res.status(409).json({ 
+        message: 'Duplicate PAN number' 
+      });
     }
 
+    // Handle validation errors
     if (error.errors) {
-      return res.status(400).json({ message: 'Validation failed', errors: error.errors });
+      return res.status(400).json({ 
+        message: 'Validation failed', 
+        errors: error.errors 
+      });
     }
 
-    res.status(500).json({ message: 'Server error', error: error.message });
+    // Generic server error
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
 
-/**
- * Process lenders with optimized approach:
- * - Send immediately if within time range
- * - Collect all out-of-time lenders in ONE pending entry
- */
-async function processLendersOptimized(lead, distributionRules) {
-  const lendersToSendNow = [];
-  const lendersOutOfTime = [];
-  const immediateSuccessfulLenders = [];
+// Process lenders based on group (immediate or delayed)
+async function processLenders(lead, lenders, type) {
+  const successfulLenders = [];
+  
+  for (const lender of lenders) {
+    const lenderName = typeof lender === 'string' ? lender : lender.lender;
 
-  // Process immediate lenders
-  for (const lenderConfig of distributionRules.immediate) {
-    const lenderName = typeof lenderConfig === 'string' ? lenderConfig : lenderConfig.lender;
-    const timeRange = typeof lenderConfig === 'object' ? lenderConfig.timeRange : null;
-
-    // Skip if sending to self
-    if (lenderName === lead.source) continue;
-
-    // Check time range
-    const canSendNow = timeUtils.isWithinTimeRange(timeRange);
-
-    if (canSendNow) {
-      lendersToSendNow.push({ lenderName, lenderConfig });
-    } else {
-      lendersOutOfTime.push(lenderName);
-    }
-  }
-
-  // Process delayed lenders (will be handled by delayed mechanism)
-  scheduleDelayedLenders(lead, distributionRules.delayed);
-
-  // Send to lenders that are within time range NOW
-  for (const { lenderName } of lendersToSendNow) {
-    try {
-      const result = await sendToLender(lead, lenderName);
-      
-      if (isLenderSuccess(result, lenderName)) {
-        immediateSuccessfulLenders.push(lenderName);
-        console.log(`✓ Lead ${lead.leadId} sent to ${lenderName} immediately`);
+    // Don't send to the same lender that created the lead
+    if (lenderName !== lead.source) {
+      try {
+        const result = await sendToLender(lead, lenderName);
+        
+        // Check if lender API was successful
+        if (isLenderSuccess(result, lenderName)) {
+          successfulLenders.push(lenderName);
+        }
+        
+        // Log successful distribution
+        console.log(`Lead ${lead.leadId} sent to ${lenderName} (${type})`);
+      } catch (error) {
+        console.error(`Error sending lead to ${lenderName}:`, error.message);
       }
-    } catch (error) {
-      console.error(`✗ Error sending lead to ${lenderName}:`, error.message);
     }
   }
 
-  // Update lead with successful lenders
-  if (immediateSuccessfulLenders.length > 0) {
-    try {
-      await Lead.updateByIdNoValidation(lead.leadId, { 
-        immediateSuccessfulLenders 
-      });
-    } catch (error) {
-      console.error('Error updating lead with successful lenders:', error.message);
+  // Store successful lenders for RCS scheduling
+  if (type === 'immediate' && successfulLenders.length > 0) {
+
+    // Update lead with immediate successful lenders
+    if (Lead && lead.leadId) {
+      try {
+        await Lead.updateByIdNoValidation(lead.leadId, { 
+          immediateSuccessfulLenders: successfulLenders 
+        });
+      } catch (error) {
+        console.error(`Error updating lead with successful lenders:`, error.message);
+      }
     }
   }
-
-  // Create ONE pending entry with ALL out-of-time lenders
-  if (lendersOutOfTime.length > 0) {
-    await PendingLead.createOrUpdate(
-      lead.leadId,
-      lendersOutOfTime,
-      lead,
-      'immediate'
-    );
-    console.log(`Queued lead ${lead.leadId} for ${lendersOutOfTime.length} lenders: ${lendersOutOfTime.join(', ')}`);
-  }
-
-  return {
-    sentImmediately: lendersToSendNow.length,
-    pendingLenders: lendersOutOfTime,
-    immediateSuccessfulLenders
-  };
+  
+  return successfulLenders;
 }
 
-/**
- * Schedule delayed lenders
- */
+// Schedule delayed lenders using a job queue
 function scheduleDelayedLenders(lead, delayedLenders) {
+  let completedLendersCount = 0;
+  const totalDelayedLenders = delayedLenders.filter(lender => lender.lender !== lead.source).length;
+  
   for (const lenderConfig of delayedLenders) {
-    if (lenderConfig.lender === lead.source) continue;
+    if (lenderConfig.lender !== lead.source) {
+      const delayMs = lenderConfig.delayMinutes * 60 * 1000;
 
-    const delayMs = lenderConfig.delayMinutes * 60 * 1000;
-
-    setTimeout(async () => {
-      try {
-        const canSendNow = timeUtils.isWithinTimeRange(lenderConfig.timeRange);
-
-        if (canSendNow) {
+      setTimeout(async () => {
+        try {
           const result = await sendToLender(lead, lenderConfig.lender);
+            console.log("scheduleDelayedLenders: 341 line", result, lenderConfig.lender);
           
           if (isLenderSuccess(result, lenderConfig.lender)) {
-            console.log(`✓ Delayed lender ${lenderConfig.lender} succeeded for lead ${lead.leadId}`);
+            console.log(`Delayed lender ${lenderConfig.lender} succeeded for lead ${lead.leadId}`);
+            console.log("scheduleDelayedLenders: 344 line", result, lenderConfig.lender);
           }
-        } else {
-          // Add to pending entry
-          await PendingLead.createOrUpdate(
-            lead.leadId,
-            [lenderConfig.lender],
-            lead,
-            'delayed'
-          );
-          console.log(`Queued delayed lender ${lenderConfig.lender} for lead ${lead.leadId}`);
+          
+          console.log(`Delayed lead ${lead.leadId} sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
+        } catch (error) {
+          console.error(`Error sending delayed lead to ${lenderConfig.lender}:`, error.message);
+        } finally {
+          // Track completion
+          completedLendersCount++;
+          
+          // When all delayed lenders are processed, schedule RCS
+          if (completedLendersCount === totalDelayedLenders) {
+            // Use the DynamoDB primary key (leadId) instead of Mongo-style _id
+            await scheduleRCSAfterAllLenders(lead.leadId);
+          }
         }
-      } catch (error) {
-        console.error(`Error with delayed lender ${lenderConfig.lender}:`, error.message);
-      }
-    }, delayMs);
+      }, delayMs);
 
-    console.log(`Scheduled lead ${lead.leadId} to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
+      console.log(`Scheduled lead ${lead.leadId} to be sent to ${lenderConfig.lender} after ${lenderConfig.delayMinutes} minutes`);
+    }
+  }
+
+  // If no delayed lenders, schedule RCS immediately after processing immediate lenders
+  if (totalDelayedLenders === 0) {
+    setTimeout(() => scheduleRCSAfterAllLenders(lead.leadId), 5000); // 5 second delay
   }
 }
 
-/**
- * Send to specific lender
- */
+// Send lead to specific lender
 async function sendToLender(lead, lender) {
+
+  // Create handler map for all lenders
   const lenderHandlers = {
     'SML': sendToSML,
     'FREO': sendToFreo,
@@ -275,12 +267,13 @@ async function sendToLender(lead, lender) {
     'FINTIFI': sendToFINTIFI,
     'FATAKPAY': sendToFATAKPAY,
     'RAMFINCROP': sendToRAMFINCROP,
-    'MyMoneyMantra': sendToMyMoneyMantra,
-    'INDIALENDS': sendToIndiaLends,
-    'MPOKKET': sendToMpokket,
-    'CRMPaisa': sendToCrmPaisa,
+    "MyMoneyMantra": sendToMyMoneyMantra,
+    "INDIALENDS": sendToIndiaLends,
+    "MPOKKET": sendToMpokket,
+    "CRMPaisa": sendToCrmPaisa,
   };
 
+  // Call the appropriate handler for the lender
   if (lenderHandlers[lender]) {
     return await lenderHandlers[lender](lead);
   } else {
@@ -288,49 +281,74 @@ async function sendToLender(lead, lender) {
   }
 }
 
-/**
- * Get distribution rules
- */
 async function getDistributionRules(source) {
   try {
     const dbRules = await DistributionRule.findActiveBySource(source);
+    console.log("Get DBrules", dbRules);
     
-    if (dbRules && dbRules.rules) {
+    if (dbRules) {
       return dbRules.rules;
     }
     
-    // Default rules with time ranges
     const defaultRules = {
       FREO: {
-        immediate: [
-          { lender: 'ZYPE', timeRange: { start: '09:00', end: '17:00', timezone: 'Asia/Kolkata' } },
-          { lender: 'OVLY', timeRange: { start: '09:00', end: '17:00', timezone: 'Asia/Kolkata' } },
-          { lender: 'LendingPlate', timeRange: { start: '10:00', end: '18:00', timezone: 'Asia/Kolkata' } },
-          { lender: 'FATAKPAY', timeRange: { start: '09:00', end: '19:00', timezone: 'Asia/Kolkata' } },
-          { lender: 'INDIALENDS', timeRange: { start: '09:00', end: '17:00', timezone: 'Asia/Kolkata' } }
-        ],
-        delayed: []
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'INDIALENDS'],
+        delayed: [
+          { lender: 'SML', delayMinutes: 1440 }
+        ]
+      },
+      MyMoneyMantra: {
+        immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'INDIALENDS'],
+        delayed: [
+          { lender: 'SML', delayMinutes: 1440 }
+        ]
+      },
+      SML: {
+        immediate: ['FREO', 'OVLY', 'INDIALENDS'],
+        delayed: [
+          { lender: 'LendingPlate', delayMinutes: 1 },
+          { lender: 'ZYPE', delayMinutes: 1 },
+          { lender: 'FINTIFI', delayMinutes: 1 },
+          { lender: 'RAMFINCROP', delayMinutes: 1 },
+          { lender: 'FATAKPAY', delayMinutes: 1 }
+        ]
+      },
+      OVLY: {
+        immediate: ['FREO', 'SML', 'INDIALENDS'],
+        delayed: [
+          { lender: 'LendingPlate', delayMinutes: 1 },
+          { lender: 'ZYPE', delayMinutes: 1 },
+          { lender: 'FINTIFI', delayMinutes: 1 },
+          { lender: 'RAMFINCROP', delayMinutes: 1 },
+          { lender: 'FATAKPAY', delayMinutes: 1 }
+        ]
       },
       default: {
-        immediate: [
-          { lender: 'OVLY', timeRange: { start: '09:00', end: '17:00', timezone: 'Asia/Kolkata' } },
-          { lender: 'FATAKPAY', timeRange: { start: '09:00', end: '19:00', timezone: 'Asia/Kolkata' } },
-          { lender: 'INDIALENDS', timeRange: { start: '09:00', end: '17:00', timezone: 'Asia/Kolkata' } }
-        ],
-        delayed: []
+        immediate: ['FREO', 'SML', 'OVLY', 'INDIALENDS'],
+        delayed: [
+          { lender: 'LendingPlate', delayMinutes: 1 },
+          { lender: 'ZYPE', delayMinutes: 1 },
+          { lender: 'FINTIFI', delayMinutes: 1 },
+          { lender: 'RAMFINCROP', delayMinutes: 1 },
+          { lender: 'FATAKPAY', delayMinutes: 1 }
+        ]
       }
     };
     
     return defaultRules[source] || defaultRules.default;
   } catch (error) {
     console.error('Error fetching distribution rules:', error);
-    return { immediate: [], delayed: [] };
+    return {
+      immediate: ['ZYPE', 'OVLY', 'LendingPlate', 'FATAKPAY', 'RAMFINCROP', 'INDIALENDS'],
+      delayed: [
+        { lender: 'SML', delayMinutes: 1440 },
+        { lender: 'FINTIFI', delayMinutes: 1440 }
+      ]
+    };
   }
 }
 
-/**
- * Check if lender response indicates success
- */
+// If lender response indicates success
 function isLenderSuccess(result, lenderName) {
   if (!result) return false;
   
@@ -341,75 +359,139 @@ function isLenderSuccess(result, lenderName) {
     'LendingPlate': (result) => result.responseStatus === 'Success',
     'ZYPE': (result) => result.responseStatus === 'ACCEPT' || result.responseBody?.status === 'ACCEPT',
     'FINTIFI': (result) => result.responseStatus === 200,
-    'FATAKPAY': (result) => result.responseBody?.message === 'You are eligible.',
+    'FATAKPAY': (result) => result.responseBody.message === 'You are eligible.',
     'RAMFINCROP': (result) => result.responseStatus === 'success',
-    'MPOKKET': (result) => result.responseStatus === 200,
+    "MPOKKET": (result) => result.responseStatus === 200,
     'CRMPaisa': (result) => result.responseStatus === 1,
-    'INDIALENDS': (result) => result.responseStatus === 200 || result.responseStatus === 201,
   };
 
   const checkSuccess = successCriteria[lenderName];
   return checkSuccess ? checkSuccess(result) : false;
 }
 
-/**
- * Schedule RCS after all lenders processed
- */
+// Schedule RCS after all lenders have been processed
 async function scheduleRCSAfterAllLenders(leadId) {
+  console.log("LC scheduleRCSAfterAllLenders : 486 line", leadId);
   try {
     const lead = await Lead.findById(leadId);
     if (!lead) return;
 
+    // Get all successful lenders from database logs
     const allSuccessfulLenders = await getAllSuccessfulLendersForLead(leadId, lead);
+    console.log("LC scheduleRCSAfterAllLenders : 493 line", allSuccessfulLenders);
+    
+    // Schedule RCS based on results
     await rcsService.scheduleRCSForLead(leadId, allSuccessfulLenders);
     
     console.log(`RCS scheduled for lead ${leadId} with ${allSuccessfulLenders.length} successful lenders`);
   } catch (error) {
-    console.error('Error scheduling RCS:', error);
+    console.error('Error scheduling RCS after all lenders:', error);
   }
 }
 
-/**
- * Get all successful lenders from logs
- */
+// Helper function to get successful lenders from all log collections
 async function getAllSuccessfulLendersForLead(leadId, lead) {
   const successfulLenders = [];
+  console.log("LC getAllSuccessfulLendersForLead : 507 line", leadId, lead, successfulLenders);
   
   try {
-    // Check all lender logs
-    const checks = [
-      { log: SMLResponseLog, check: (l) => l.responseBody?.message === 'Lead created successfully', name: 'SML' },
-      { log: FreoResponseLog, check: (l) => l.responseBody?.success === true, name: 'FREO' },
-      { log: OvlyResponseLog, check: (l) => l.responseStatus === 'success', name: 'OVLY' },
-      { log: LendingPlateResponseLog, check: (l) => l.responseStatus === 'Success', name: 'LendingPlate' },
-      { log: ZypeResponseLog, check: (l) => l.responseStatus === 'ACCEPT' || l.responseBody?.status === 'ACCEPT', name: 'ZYPE' },
-      { log: FintifiResponseLog, check: (l) => l.responseStatus === 200, name: 'FINTIFI' },
-      { log: FatakPayResponseLog, check: (l) => l.responseBody?.message === 'You are eligible.', name: 'FATAKPAY' },
-      { log: RamFinCropLog, check: (l) => l.responseStatus === 'success', name: 'RAMFINCROP' },
-      { log: MMMResponseLog, check: (l) => l.responseStatus === 200 || l.responseStatus === 201, name: 'MyMoneyMantra' },
-      { log: IndiaLendsResponseLog, check: (l) => l.responseStatus === 200 || l.responseStatus === 201, name: 'INDIALENDS' },
-      { log: MpokketResponseLog, check: (l) => l.responseStatus === 200, name: 'MPOKKET' },
-      { log: CrmPaisaResponseLog, check: (l) => l.responseBody?.Message === 'Lead generated successfully.', name: 'CRMPaisa' }
-    ];
+    // Check SML
+    const smlResults = await SMLResponseLog.findByLeadId(leadId);
+    const smlResult = smlResults.find(log => 
+      log.responseBody?.message === 'Lead created successfully'
+    );
+    if (smlResult) successfulLenders.push('SML');
 
-    for (const { log, check, name } of checks) {
-      try {
-        const results = await log.findByLeadId(leadId);
-        if (results && results.find(check)) {
-          successfulLenders.push(name);
-        }
-      } catch (error) {
-        console.error(`Error checking ${name} log:`, error.message);
-      }
-    }
+    // Check FREO  
+    const freoResults = await FreoResponseLog.findByLeadId(leadId);
+    const freoResult = freoResults.find(log => 
+      log.responseBody?.success === true
+    );
+    if (freoResult) successfulLenders.push('FREO');
 
-    // Create/update lead success record
+    // Check OVLY
+    const ovlyResults = await OvlyResponseLog.findByLeadId(leadId);
+    const ovlyResult = ovlyResults.find(log => 
+      log.responseStatus === 'success'
+    );
+    if (ovlyResult) successfulLenders.push('OVLY');
+
+    // Check LendingPlate
+    const lpResults = await LendingPlateResponseLog.findByLeadId(leadId);
+    const lpResult = lpResults.find(log => 
+      log.responseStatus === 'Success'
+    );
+    if (lpResult) successfulLenders.push('LendingPlate');
+
+    // Check ZYPE
+    const zypeResults = await ZypeResponseLog.findByLeadId(leadId);
+    const zypeResult = zypeResults.find(log => 
+      log.responseStatus === 'ACCEPT' || log.responseBody?.status === 'ACCEPT'
+    );
+    if (zypeResult) successfulLenders.push('ZYPE');
+
+    // Check FINTIFI
+    const fintifiResults = await FintifiResponseLog.findByLeadId(leadId);
+    const fintifiResult = fintifiResults.find(log => 
+      log.responseStatus === 200
+    );
+    if (fintifiResult) successfulLenders.push('FINTIFI');
+
+    // Check FATAKPAY
+    const fatakResults = await FatakPayResponseLog.findByLeadId(leadId);
+    const fatakResult = fatakResults.find(log => 
+      log.responseBody.message === 'You are eligible.'
+    );
+    if (fatakResult) successfulLenders.push('FATAKPAY');
+
+    // Check RAMFINCROP
+    const ramResults = await RamFinCropLog.findByLeadId(leadId);
+    const ramResult = ramResults.find(log => 
+      log.responseStatus === 'success'
+    );
+    if (ramResult) successfulLenders.push('RAMFINCROP');
+
+    // Check MyMoneyMantra
+    const mmmResults = await MMMResponseLog.findByLeadId(leadId);
+    const mmmResult = mmmResults.find(log => 
+      log.responseStatus === 200 || log.responseStatus === 201
+    );
+    if (mmmResult) successfulLenders.push('MyMoneyMantra');
+
+    // Check CRMPaisa
+    const CRMPaisaResults = await CrmPaisaResponseLog.findByLeadId(leadId);
+    const CRMPaisaResult = CRMPaisaResults.find(log => 
+      log.responseBody?.Message === 'Lead generated successfully.'
+    );
+    if (CRMPaisaResult) successfulLenders.push('CRMPaisa');
+
+    // Check IndiaLends
+    const IndiaLendsResults = await IndiaLendsResponseLog.findByLeadId(leadId);
+    const IndiaLendsResult = IndiaLendsResults.find(log => 
+      log.responseBody?.info?.message === 'Verification code sent to your mobile phone'
+    );
+    if (IndiaLendsResult) successfulLenders.push('IndiaLends');
+
+    // Check Mpokket
+    const MpokketResults = await MpokketResponseLog.findByLeadId(leadId);
+    const MpokketResult = MpokketResults.find(log => 
+      log.responseBody?.data?.message === 'Data Accepted Successfully'
+    );
+    if (MpokketResult) successfulLenders.push('Mpokket');
+
+    console.log("LC getAllSuccessfulLendersForLead : 573 line", successfulLenders);
+
+    // --- Create entry in leadSuccess ---
     if (lead && successfulLenders.length > 0) {
+      // Prepare lender flags
       const lenderFlags = {};
       successfulLenders.forEach(lender => {
         lenderFlags[lender] = true;
       });
 
+      console.log("LC getAllSuccessfulLendersForLead : 583 line", lenderFlags);
+
+      // Find or create lead success record
       const { record, created } = await LeadSuccess.findOrCreate({
         leadId,
         source: lead.source,
@@ -420,6 +502,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
         ...lenderFlags
       });
 
+      // If record already exists, update it with new successful lenders
       if (!created) {
         await LeadSuccess.updateByLeadId(leadId, lenderFlags);
       }
@@ -429,6 +512,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     console.error('Error getting successful lenders:', error);
   }
 
+  console.log("RCS lenders list: line 606", successfulLenders);
   return successfulLenders;
 }
 //////////////////////////////////////////////////////////////////
