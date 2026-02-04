@@ -7,7 +7,7 @@ const lenderSyncController = require('../controllers/lenderStatusUploadControlle
 const upload = multer({
   dest: '/tmp/uploads/',
   limits: { 
-    fileSize: 10 * 1024 * 1024
+    fileSize: 20 * 1024 * 1024
   },
   fileFilter: (req, file, cb) => {
     const allowedExts = ['.csv', '.xlsx', '.xls'];
