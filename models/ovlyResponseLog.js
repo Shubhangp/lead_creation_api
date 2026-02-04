@@ -1,6 +1,6 @@
 // models/OvlyResponseLog.js
 const { docClient } = require('../dynamodb');
-const { PutCommand, GetCommand, QueryCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
+const { PutCommand, GetCommand, QueryCommand, ScanCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'ovly_response_logs';
@@ -68,7 +68,7 @@ class OvlyResponseLog {
   // Get logs by date range
   static async findByDateRange(startDate, endDate, options = {}) {
     const { limit = 100, lastEvaluatedKey } = options;
-    
+
     const params = {
       TableName: TABLE_NAME,
       FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
@@ -200,7 +200,7 @@ class OvlyResponseLog {
 
       // Wait for all segments to complete
       const results = await Promise.all(scanPromises);
-      
+
       // Sum up all counts
       const totalCount = results.reduce((sum, result) => sum + result.count, 0);
       const elapsed = Date.now() - startTime;
@@ -328,7 +328,7 @@ class OvlyResponseLog {
 
       // Calculate success rate
       const successCount = stats.statusCategoryBreakdown['success'];
-      stats.successRate = allItems.length > 0 
+      stats.successRate = allItems.length > 0
         ? ((successCount / allItems.length) * 100).toFixed(2) + '%'
         : '0%';
 
@@ -397,7 +397,7 @@ class OvlyResponseLog {
 
       allItems.forEach(item => {
         const date = item.createdAt.split('T')[0];
-        
+
         if (!statsByDate[date]) {
           statsByDate[date] = {
             date,
@@ -416,7 +416,7 @@ class OvlyResponseLog {
 
         // Status breakdown
         const status = item.responseStatus || 'unknown';
-        statsByDate[date].statusBreakdown[status] = 
+        statsByDate[date].statusBreakdown[status] =
           (statsByDate[date].statusBreakdown[status] || 0) + 1;
 
         // Status categories
@@ -432,13 +432,30 @@ class OvlyResponseLog {
         }
       });
 
-      return Object.values(statsByDate).sort((a, b) => 
+      return Object.values(statsByDate).sort((a, b) =>
         a.date.localeCompare(b.date)
       );
     } catch (error) {
       console.error('Error in getStatsByDate:', error);
       throw error;
     }
+  }
+
+  // Update currentStatus on a log row (called after CSV/XLSX match)
+  static async updateCurrentStatus(logId, newStatus) {
+    const params = {
+      TableName: TABLE_NAME,
+      Key: { logId },
+      UpdateExpression: 'SET currentStatus = :newStatus, updatedAt = :now',
+      ExpressionAttributeValues: {
+        ':newStatus': newStatus,
+        ':now': new Date().toISOString()
+      },
+      ReturnValues: 'ALL_NEW'
+    };
+
+    const result = await docClient.send(new UpdateCommand(params));
+    return result.Attributes;
   }
 }
 
