@@ -155,12 +155,12 @@ class RCSService {
           standalone: {
             cardOrientation: "VERTICAL",
             content: {
-              cardTitle: "Don't Miss Out on Your Loan!",
-              cardDescription: "We have exclusive loan offers waiting for you. Check eligibility in 2 minutes!",
+              cardTitle: "Get Instant Loan up to ₹5 lakhs",
+              cardDescription: "Apply for an Instant Loan to fulfil all your financial needs.\n\nWe have exclusive loan offers waiting for you. Check eligibility in 2 minutes!",
               cardMedia: {
                 mediaHeight: "TALL",
                 contentInfo: {
-                  fileUrl: "https://example.com/zet-campaign.png"
+                  fileUrl: "https://res.cloudinary.com/dha4otbzk/image/upload/v1770264773/RCS_Poonawalla_fezsxk.png"
                 }
               },
               suggestions: [
@@ -171,7 +171,7 @@ class RCSService {
                       data: `ZET_ELIGIBILITY_${leadData._id}`
                     },
                     openUrl: {
-                      url: "https://ratecut.com/check-eligibility"
+                      url: "https://instant-pocket-loan.poonawallafincorp.com/?utm_DSA_Code=PKA00191&UTM_Partner_Name=ZETAPP&UTM_Partner_Medium=sms&UTM_Partner_AgentCode=PFLZETA&UTM_Partner_ReferenceID=ZPRCLC_1234"
                     }
                   }
                 }
