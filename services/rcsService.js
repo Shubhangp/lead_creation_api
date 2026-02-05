@@ -271,7 +271,7 @@ class RCSService {
       const pendingMessages = await RCSQueue.findByStatusAndScheduledTime(
         'PENDING',
         now,
-        { limit: 50 }
+        { limit: 500 }
       );
 
       console.log(`Found ${pendingMessages.length} pending RCS messages`);
@@ -414,7 +414,7 @@ class RCSService {
             lead.phone,
             'ZET_CAMPAIGN',
             null,
-            null,
+            0,
             zetCampaign.dayDelay
           );
         }
