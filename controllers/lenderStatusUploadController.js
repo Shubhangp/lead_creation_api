@@ -6,44 +6,30 @@ const XLSX = require('xlsx');
 
 // Import your DynamoDB models
 const OvlyResponseLog = require('../models/ovlyResponseLog');
-// Add other lender models here:
-// const LenderAResponseLog = require('../models/LenderAResponseLog');
-// const LenderBResponseLog = require('../models/LenderBResponseLog');
-
-// ═══════════════════════════════════════════════════════════════════════════
-// LENDER CONFIGURATIONS
-// ═══════════════════════════════════════════════════════════════════════════
-// 
-// ⭐ TO ADD A NEW LENDER: Just add a new object to this LENDER_CONFIGS object
-//
-// Each lender config defines:
-//   - tableName: DynamoDB table name
-//   - displayName: Human-readable name
-//   - model: Reference to the DynamoDB model class
-//   - allowedExtensions: Which file types are accepted
-//   - columnMapping: How to find leadId and status in uploaded file
-//   - extractLeadId: Function to parse responseBody and extract leadId
-//   - updateMethod: Name of the update method in the model (default: 'updateCurrentStatus')
 
 const LENDER_CONFIGS = {
-  
-  // ── OVLY ──────────────────────────────────────────────────────────────────
+
   ovly: {
     tableName:          'ovly_response_logs',
     displayName:        'Ovly',
     model:              OvlyResponseLog,
     allowedExtensions:  ['.csv', '.xlsx', '.xls'],
-    
-    // Column mapping: tries these column names in order (case-insensitive)
+
     columnMapping: {
-      leadId: ['leadId', 'lead_id', 'LeadId', 'LEAD_ID'],
-      status: ['currentStatus', 'status', 'Status', 'current_status', 'CURRENT_STATUS']
+      leadId:           ['lead_id', 'leadId', 'LeadId', 'LEAD_ID'],
+      rejectionReason:  ['rejection_reason', 'rejectionReason', 'RejectionReason', 'REJECTION_REASON'],
+      
+      // Conditional fields (only if rejection_reason = "Unlocked")
+      unlockAmount:          ['unlock_amount', 'unlockAmount', 'UnlockAmount'],
+      appliedDate:           ['applied_date', 'appliedDate', 'AppliedDate'],
+      kycCompletedDate:      ['kyc_completed_date', 'kycCompletedDate', 'KycCompletedDate'],
+      approvedDate:          ['approved_date', 'approvedDate', 'ApprovedDate'],
+      emandateDoneAt:        ['emandate_done_at', 'emandateDoneAt', 'EmandateDoneAt'],
+      agreementSignedDate:   ['agreement_signed_date', 'agreementSignedDate', 'AgreementSignedDate'],
+      loanAmount:            ['loan_amount', 'loanAmount', 'LoanAmount'],
+      loanDisbursedDate:     ['loan_disbursed_date', 'loanDisbursedDate', 'LoanDisbursedDate']
     },
     
-    // How to extract leadId from responseBody JSON
-    // responseBody can be either:
-    //   1. DynamoDB typed format: { leadId: { S: "value" } }
-    //   2. Plain JSON: { leadId: "value" }
     extractLeadId: (responseBody) => {
       if (!responseBody) return null;
       
@@ -56,7 +42,6 @@ const LENDER_CONFIGS = {
         }
       }
       
-      // DynamoDB typed format: { leadId: { S: "value" } }
       if (parsed.leadId && typeof parsed.leadId === 'object' && parsed.leadId.S) {
         return parsed.leadId.S;
       }
@@ -69,68 +54,43 @@ const LENDER_CONFIGS = {
       return null;
     },
     
-    updateMethod: 'updateCurrentStatus'  // method name in OvlyResponseLog model
-  },
+    filterUpdateData: (rowData) => {
+      const filtered = {
+        lead_id:          rowData.leadId,
+        rejection_reason: rowData.rejectionReason
+      };
+      
+      if (rowData.rejectionReason === 'Unlocked') {
+        if (rowData.unlockAmount)         filtered.unlock_amount          = rowData.unlockAmount;
+        if (rowData.appliedDate)          filtered.applied_date           = rowData.appliedDate;
+        if (rowData.kycCompletedDate)     filtered.kyc_completed_date     = rowData.kycCompletedDate;
+        if (rowData.approvedDate)         filtered.approved_date          = rowData.approvedDate;
+        if (rowData.emandateDoneAt)       filtered.emandate_done_at       = rowData.emandateDoneAt;
+        if (rowData.agreementSignedDate)  filtered.agreement_signed_date  = rowData.agreementSignedDate;
+        if (rowData.loanAmount)           filtered.loan_amount            = rowData.loanAmount;
+        if (rowData.loanDisbursedDate)    filtered.loan_disbursed_date    = rowData.loanDisbursedDate;
+      }
+      
+      return filtered;
+    },
+    
+    updateMethod: 'updateStatusWithData'
+  }
 
-  // ── EXAMPLE: LENDER A ─────────────────────────────────────────────────────
-  // Uncomment and customize when adding a new lender:
-  //
-  // lenderA: {
-  //   tableName:          'lender_a_logs',
-  //   displayName:        'Lender A',
-  //   model:              LenderAResponseLog,
-  //   allowedExtensions:  ['.csv'],
-  //   
-  //   columnMapping: {
-  //     leadId: ['loan_id', 'loanId', 'LoanID'],
-  //     status: ['status', 'loan_status']
-  //   },
-  //   
-  //   extractLeadId: (responseBody) => {
-  //     if (!responseBody) return null;
-  //     let parsed = typeof responseBody === 'string' 
-  //       ? JSON.parse(responseBody) 
-  //       : responseBody;
-  //     return parsed.loan_id || parsed.loanId || null;
-  //   },
-  //   
-  //   updateMethod: 'updateStatus'
-  // },
-
-  // ── EXAMPLE: LENDER B ─────────────────────────────────────────────────────
-  // lenderB: {
-  //   tableName:          'lender_b_logs',
-  //   displayName:        'Lender B',
-  //   model:              LenderBResponseLog,
-  //   allowedExtensions:  ['.xlsx', '.xls'],
-  //   
-  //   columnMapping: {
-  //     leadId: ['application_id', 'appId'],
-  //     status: ['current_status', 'app_status']
-  //   },
-  //   
-  //   extractLeadId: (responseBody) => {
-  //     if (!responseBody) return null;
-  //     let parsed = typeof responseBody === 'string' 
-  //       ? JSON.parse(responseBody) 
-  //       : responseBody;
-  //     return parsed.application?.id || parsed.appId || null;
-  //   },
-  //   
-  //   updateMethod: 'updateCurrentStatus'
-  // }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
-// FILE PARSING UTILITIES
-// ═══════════════════════════════════════════════════════════════════════════
+function extractColumnValue(row, possibleNames) {
+  for (const name of possibleNames) {
+    const value = row[name] || row[name.toLowerCase()] || row[name.toUpperCase()];
+    if (value !== undefined && value !== null && value !== '') {
+      return String(value).trim();
+    }
+  }
+  return null;
+}
 
-/**
- * Parse uploaded CSV or Excel file
- * Returns array of { leadId, status } objects
- */
-function parseUploadedFile(filePath, config) {
-  const ext = path.extname(filePath).toLowerCase();
+function parseUploadedFile(filePath, originalFilename, config) {
+  const ext = path.extname(originalFilename).toLowerCase();
   
   if (!config.allowedExtensions.includes(ext)) {
     throw new Error(`File type ${ext} not supported for ${config.displayName}. Allowed: ${config.allowedExtensions.join(', ')}`);
@@ -138,7 +98,6 @@ function parseUploadedFile(filePath, config) {
 
   let rows = [];
 
-  // ── Parse CSV ─────────────────────────────────────────────────────────────
   if (ext === '.csv') {
     const content = fs.readFileSync(filePath, 'utf-8');
     rows = csv.parse(content, { 
@@ -148,70 +107,44 @@ function parseUploadedFile(filePath, config) {
     });
   }
   
-  // ── Parse Excel ───────────────────────────────────────────────────────────
   else if (ext === '.xlsx' || ext === '.xls') {
     const workbook = XLSX.readFile(filePath);
-    const sheet    = workbook.Sheets[workbook.SheetNames[0]];  // first sheet
+    const sheet    = workbook.Sheets[workbook.SheetNames[0]];
     rows           = XLSX.utils.sheet_to_json(sheet);
   }
 
-  // ── Extract leadId and status using column mapping ────────────────────────
-  const { leadId: leadIdCols, status: statusCols } = config.columnMapping;
+  const mapping = config.columnMapping;
   
   const parsed = rows.map(row => {
-    // Try each possible column name for leadId (case-insensitive)
-    let leadId = null;
-    for (const col of leadIdCols) {
-      const value = row[col] || row[col.toLowerCase()] || row[col.toUpperCase()];
+    const extracted = {};
+    
+    for (const [fieldKey, possibleNames] of Object.entries(mapping)) {
+      const value = extractColumnValue(row, possibleNames);
       if (value) {
-        leadId = String(value).trim();
-        break;
+        extracted[fieldKey] = value;
       }
     }
     
-    // Try each possible column name for status (case-insensitive)
-    let status = null;
-    for (const col of statusCols) {
-      const value = row[col] || row[col.toLowerCase()] || row[col.toUpperCase()];
-      if (value) {
-        status = String(value).trim();
-        break;
-      }
-    }
-    
-    return { leadId, status };
+    return extracted;
   });
 
-  // Filter out rows that don't have both leadId and status
-  const filtered = parsed.filter(item => item.leadId && item.status);
+  const filtered = parsed.filter(item => item.leadId && item.rejectionReason);
   
   console.log(`[parseFile] Parsed ${rows.length} rows → ${filtered.length} valid entries`);
   
   return filtered;
 }
 
-/**
- * Build a Map of leadId -> status from parsed rows
- * Last occurrence wins if there are duplicates
- */
 function buildFileMap(rows) {
   const map = new Map();
-  rows.forEach(({ leadId, status }) => {
-    if (leadId) {
-      map.set(leadId, status);
+  rows.forEach((rowData) => {
+    if (rowData.leadId) {
+      map.set(rowData.leadId, rowData);
     }
   });
   return map;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SYNC LOGIC
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Scan DynamoDB table and find logs where responseBody.leadId matches file
- * Returns array of { logId, matchedLeadId, newStatus }
- */
 async function findMatchingLogs(fileMap, config) {
   const matches = [];
   let lastKey   = null;
@@ -230,10 +163,17 @@ async function findMatchingLogs(fileMap, config) {
       const bodyLeadId = config.extractLeadId(item.responseBody);
       
       if (bodyLeadId && fileMap.has(bodyLeadId)) {
+        const rowData = fileMap.get(bodyLeadId);
+        
+        // Apply filterUpdateData if it exists
+        const updateData = config.filterUpdateData 
+          ? config.filterUpdateData(rowData)
+          : rowData;
+        
         matches.push({
           logId:         item.logId,
           matchedLeadId: bodyLeadId,
-          newStatus:     fileMap.get(bodyLeadId)
+          updateData:    updateData
         });
       }
     });
@@ -245,11 +185,6 @@ async function findMatchingLogs(fileMap, config) {
   return matches;
 }
 
-/**
- * Batch update currentStatus in DynamoDB
- * Updates in batches of 25 to avoid rate limits
- * Returns array of errors (if any)
- */
 async function batchUpdateStatus(matches, config) {
   const BATCH_SIZE       = 25;
   const errors           = [];
@@ -261,8 +196,8 @@ async function batchUpdateStatus(matches, config) {
     const chunk = matches.slice(i, i + BATCH_SIZE);
 
     const results = await Promise.allSettled(
-      chunk.map(({ logId, newStatus }) =>
-        config.model[updateMethodName](logId, newStatus)
+      chunk.map(({ logId, updateData }) =>
+        config.model[updateMethodName](logId, updateData)
       )
     );
 
@@ -283,11 +218,7 @@ async function batchUpdateStatus(matches, config) {
   return errors;
 }
 
-/**
- * Main sync function
- * Orchestrates: parse file → find matches → update status
- */
-async function syncStatusFromFile(filePath, lenderKey) {
+async function syncStatusFromFile(filePath, originalFilename, lenderKey) {
   const config = LENDER_CONFIGS[lenderKey];
   
   if (!config) {
@@ -296,10 +227,11 @@ async function syncStatusFromFile(filePath, lenderKey) {
 
   console.log(`\n[${lenderKey}] ========== Starting Sync ==========`);
   console.log(`[${lenderKey}] File: ${filePath}`);
+  console.log(`[${lenderKey}] Original filename: ${originalFilename}`);
   console.log(`[${lenderKey}] Table: ${config.tableName}`);
 
   // Step 1: Parse file
-  const rows    = parseUploadedFile(filePath, config);
+  const rows    = parseUploadedFile(filePath, originalFilename, config);
   const fileMap = buildFileMap(rows);
   console.log(`[${lenderKey}] Loaded ${fileMap.size} unique leadIds from file`);
 
@@ -307,34 +239,33 @@ async function syncStatusFromFile(filePath, lenderKey) {
   const matches = await findMatchingLogs(fileMap, config);
   console.log(`[${lenderKey}] Found ${matches.length} matching logs in DynamoDB`);
 
-  // Step 3: Update status
+  // Step 3: Update status/data
   const errors = await batchUpdateStatus(matches, config);
+
+  // Step 4: Count how many were "Unlocked" vs other reasons
+  const unlockedCount = Array.from(fileMap.values()).filter(
+    row => row.rejectionReason === 'Unlocked'
+  ).length;
 
   // Summary
   const summary = {
-    lender:      config.displayName,
-    tableName:   config.tableName,
-    totalInFile: fileMap.size,
-    matched:     matches.length,
-    updated:     matches.length - errors.length,
-    unmatched:   fileMap.size - matches.length,
-    errors:      errors
+    lender:         config.displayName,
+    tableName:      config.tableName,
+    totalInFile:    fileMap.size,
+    matched:        matches.length,
+    updated:        matches.length - errors.length,
+    unmatched:      fileMap.size - matches.length,
+    unlockedCount:  unlockedCount,
+    errors:         errors
   };
 
   console.log(`[${lenderKey}] ========== Sync Complete ==========`);
   console.log(`[${lenderKey}] Matched: ${summary.matched}, Updated: ${summary.updated}, Unmatched: ${summary.unmatched}`);
+  console.log(`[${lenderKey}] Unlocked records: ${unlockedCount}`);
   
   return summary;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONTROLLER METHODS
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * GET /api/lender-sync/lenders
- * Returns list of available lenders for frontend dropdown
- */
 exports.getLenders = (req, res) => {
   try {
     const lenders = Object.keys(LENDER_CONFIGS).map(key => ({
@@ -402,7 +333,7 @@ exports.uploadAndSync = async (req, res) => {
     }
 
     // ── Run Sync ────────────────────────────────────────────────────────────
-    const result = await syncStatusFromFile(filePath, lender);
+    const result = await syncStatusFromFile(filePath, file.originalname, lender);
 
     // ── Cleanup ─────────────────────────────────────────────────────────────
     if (fs.existsSync(filePath)) {

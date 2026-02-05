@@ -442,17 +442,60 @@ class OvlyResponseLog {
   }
 
   // Update currentStatus on a log row (called after CSV/XLSX match)
-  static async updateCurrentStatus(logId, newStatus) {
+  static async updateStatusWithData(logId, data) {
+    const updateParts = [];
+    const expressionAttributeNames = {};
+    const expressionAttributeValues = {
+      ':updatedAt': new Date().toISOString()
+    };
+
+    if (data.lead_id) {
+      updateParts.push('#lead_id = :lead_id');
+      expressionAttributeNames['#lead_id'] = 'lead_id';
+      expressionAttributeValues[':lead_id'] = data.lead_id;
+    }
+
+    if (data.rejection_reason) {
+      updateParts.push('#rejection_reason = :rejection_reason');
+      expressionAttributeNames['#rejection_reason'] = 'rejection_reason';
+      expressionAttributeValues[':rejection_reason'] = data.rejection_reason;
+    }
+
+    const conditionalFields = [
+      'unlock_amount',
+      'applied_date',
+      'kyc_completed_date',
+      'approved_date',
+      'emandate_done_at',
+      'agreement_signed_date',
+      'loan_amount',
+      'loan_disbursed_date'
+    ];
+
+    conditionalFields.forEach(field => {
+      if (data[field] !== undefined && data[field] !== null) {
+        updateParts.push(`#${field} = :${field}`);
+        expressionAttributeNames[`#${field}`] = field;
+        expressionAttributeValues[`:${field}`] = data[field];
+      }
+    });
+
+    updateParts.push('#updatedAt = :updatedAt');
+    expressionAttributeNames['#updatedAt'] = 'updatedAt';
+
     const params = {
       TableName: TABLE_NAME,
       Key: { logId },
-      UpdateExpression: 'SET currentStatus = :newStatus, updatedAt = :now',
-      ExpressionAttributeValues: {
-        ':newStatus': newStatus,
-        ':now': new Date().toISOString()
-      },
+      UpdateExpression: `SET ${updateParts.join(', ')}`,
+      ExpressionAttributeNames: expressionAttributeNames,
+      ExpressionAttributeValues: expressionAttributeValues,
       ReturnValues: 'ALL_NEW'
     };
+
+    console.log(`[updateStatusWithData] Updating ${logId}:`, {
+      rejection_reason: data.rejection_reason,
+      fieldCount: Object.keys(data).length
+    });
 
     const result = await docClient.send(new UpdateCommand(params));
     return result.Attributes;
