@@ -364,7 +364,7 @@ function isLenderSuccess(result, lenderName) {
     "MPOKKET": (result) => result.responseStatus === 200,
     'CRMPaisa': (result) => result.responseStatus === 1,
   };
-
+ 
   const checkSuccess = successCriteria[lenderName];
   return checkSuccess ? checkSuccess(result) : false;
 }
