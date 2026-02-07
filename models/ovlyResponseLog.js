@@ -1,4 +1,3 @@
-// models/OvlyResponseLog.js
 const { docClient } = require('../dynamodb');
 const { PutCommand, GetCommand, QueryCommand, ScanCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');

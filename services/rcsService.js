@@ -60,7 +60,7 @@ class RCSService {
         title: 'Get Instant Personal Loan up to 2 Lakhs',
         description: 'Need salary early, get it now with a loan of up to ₹2 Lakhs💵\n\n✅Interest starting at as low as 1.5%* per month.\n💳EMIs as low as ₹512*.\n🤝 Trusted by over 4 crore Indians.\n🏦  Loans via RBI-registered lenders.\n\n📱Sign up now and get started.\n\nT&C Apply.',
         imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1758734323/Zype_v04vki.jpg',
-        actionUrl: 'https://zype.sng.link/Ajygt/0bli?_dl=com.zype.mobile&_smtype=3'
+        actionUrl: 'https://portal.getzype.com/?utm_campaign=web_Ratecut'
       },
       'LendingPlate': {
         title: 'LendingPlate: Best Way to Borrow',
