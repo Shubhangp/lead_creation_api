@@ -1,8 +1,6 @@
 const express = require('express');
 const { docClient } = require('../dynamodb');
-const { ScanCommand } = require('@aws-sdk/lib-dynamodb');
-const { Parser } = require('json2csv');
-const { Writable } = require('stream');
+const { QueryCommand, GetItemCommand } = require('@aws-sdk/lib-dynamodb');
 
 const router = express.Router();
 
@@ -15,7 +13,7 @@ router.get('/tables', async (req, res) => {
       'zype_response_logs', 'fintifi_response_logs', 'fatakpay_response_logs',
       'ramfincrop_logs', 'mpokket_response_logs', 'indialends_response_logs',
       'crmPaisa_response_logs', 'lead_distribution_stats', 'lead_success',
-      'lead_distribution_processing'
+      'lead_distribution_processing', 'rcs_queue'
     ];
     res.json({ tables });
   } catch (error) {
@@ -72,65 +70,200 @@ function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
   return result;
 }
 
-// Build scan parameters
-function buildScanParams(tableName, filters) {
-  const params = { TableName: tableName };
+// ✅ OPTIMIZED: Build Query parameters (NO MORE SCAN)
+function buildQueryParams(tableName, filters) {
+  // Define log tables that MUST have source filter
+  const LOG_TABLES = [
+    'sml_response_logs',
+    'freo_response_logs',
+    'ovly_response_logs',
+    'lending_plate_response_logs',
+    'zype_response_logs',
+    'fintifi_response_logs',
+    'fatakpay_response_logs',
+    'ramfincrop_logs',
+    'mpokket_response_logs',
+    'indialends_response_logs',
+    'crmPaisa_response_logs'
+  ];
 
-  if (!filters || typeof filters !== 'object' || Object.keys(filters).length === 0) {
-    return params;
+  // ✅ BUSINESS RULE: Log tables MUST have source to avoid expensive scans
+  if (LOG_TABLES.includes(tableName) && (!filters || !filters.source)) {
+    throw new Error(
+      `Source is mandatory for ${tableName}. This prevents expensive full table scans. ` +
+      `Available sources: OVLY, FREO, SML, ZYPE, FINTIFI, FATAKPAY, MPOKKET, INDIALENDS, CRMPAISAY`
+    );
   }
 
-  const conditions = [];
-  const expressionAttributeNames = {};
-  const expressionAttributeValues = {};
-
-  // Date range filter
-  if (filters.startDate && filters.endDate) {
-    conditions.push(`#createdAt BETWEEN :startDate AND :endDate`);
-    expressionAttributeNames['#createdAt'] = 'createdAt';
-    expressionAttributeValues[':startDate'] = filters.startDate;
-    expressionAttributeValues[':endDate'] = filters.endDate;
-  } else if (filters.startDate) {
-    conditions.push(`#createdAt >= :startDate`);
-    expressionAttributeNames['#createdAt'] = 'createdAt';
-    expressionAttributeValues[':startDate'] = filters.startDate;
-  } else if (filters.endDate) {
-    conditions.push(`#createdAt <= :endDate`);
-    expressionAttributeNames['#createdAt'] = 'createdAt';
-    expressionAttributeValues[':endDate'] = filters.endDate;
-  }
- 
-  // Response status filter
-  if (filters.responseStatus) {
-    conditions.push(`#responseStatus = :responseStatus`);
-    expressionAttributeNames['#responseStatus'] = 'responseStatus';
-    expressionAttributeValues[':responseStatus'] = filters.responseStatus;
+  if (!filters || typeof filters !== 'object') {
+    throw new Error('Filters are required. Please specify at least source or leadId to avoid expensive full table scans.');
   }
 
-  // Source filter
+  // STRATEGY 1: Query by source + createdAt (BEST - uses GSI)
   if (filters.source) {
-    conditions.push(`#src = :source`);
-    expressionAttributeNames['#src'] = 'source';
-    expressionAttributeValues[':source'] = filters.source;
+    const params = {
+      TableName: tableName,
+      IndexName: 'source-createdAt-index',
+      KeyConditionExpression: '#source = :source',
+      ScanIndexForward: false, // ✅ Newest records first (descending order)
+      ExpressionAttributeNames: {
+        '#source': 'source'
+      },
+      ExpressionAttributeValues: {
+        ':source': filters.source
+      }
+    };
+
+    // Add date range to KeyCondition (SORT KEY) - This is CHEAP ✅
+    if (filters.startDate && filters.endDate) {
+      params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+      params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+    } else if (filters.startDate) {
+      params.KeyConditionExpression += ' AND #createdAt >= :startDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+    } else if (filters.endDate) {
+      params.KeyConditionExpression += ' AND #createdAt <= :endDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+    }
+
+    // Non-indexed fields go to FilterExpression (applied after query)
+    const filterConditions = [];
+    
+    if (filters.responseStatus) {
+      filterConditions.push('#responseStatus = :responseStatus');
+      params.ExpressionAttributeNames['#responseStatus'] = 'responseStatus';
+      params.ExpressionAttributeValues[':responseStatus'] = filters.responseStatus;
+    }
+
+    if (filters.leadId) {
+      filterConditions.push('#leadId = :leadId');
+      params.ExpressionAttributeNames['#leadId'] = 'leadId';
+      params.ExpressionAttributeValues[':leadId'] = filters.leadId;
+    }
+
+    if (filterConditions.length > 0) {
+      params.FilterExpression = filterConditions.join(' AND ');
+    }
+
+    // ✅ LIMIT GUARD: Protect memory and prevent abuse
+    const MAX_LIMIT = 5000;
+    if (filters.limit) {
+      params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+    }
+
+    return { type: 'QUERY', params };
   }
 
-  // Lead ID filter
-  if (filters.leadId) {
-    conditions.push(`#leadId = :leadId`);
-    expressionAttributeNames['#leadId'] = 'leadId';
-    expressionAttributeValues[':leadId'] = filters.leadId;
+  // STRATEGY 2: Query by leadId (uses leadId index for leads table)
+  if (filters.leadId && (tableName === 'leads' || tableName === 'excel_leads' || tableName === 'leads_uat')) {
+    const params = {
+      TableName: tableName,
+      IndexName: 'leadId-index',
+      KeyConditionExpression: '#leadId = :leadId',
+      ExpressionAttributeNames: {
+        '#leadId': 'leadId'
+      },
+      ExpressionAttributeValues: {
+        ':leadId': filters.leadId
+      }
+    };
+
+    // Add date filter if provided
+    if (filters.startDate || filters.endDate) {
+      const filterConditions = [];
+      
+      if (filters.startDate && filters.endDate) {
+        filterConditions.push('#createdAt BETWEEN :startDate AND :endDate');
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+        params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+      } else if (filters.startDate) {
+        filterConditions.push('#createdAt >= :startDate');
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+      } else if (filters.endDate) {
+        filterConditions.push('#createdAt <= :endDate');
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+      }
+
+      if (filterConditions.length > 0) {
+        params.FilterExpression = filterConditions.join(' AND ');
+      }
+    }
+
+    // ✅ LIMIT GUARD: Protect memory and prevent abuse
+    const MAX_LIMIT = 5000;
+    if (filters.limit) {
+      params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+    }
+
+    return { type: 'QUERY', params };
   }
 
-  if (conditions.length > 0) {
-    params.FilterExpression = conditions.join(' AND ');
-    params.ExpressionAttributeNames = expressionAttributeNames;
-    params.ExpressionAttributeValues = expressionAttributeValues;
+  // STRATEGY 3: Query by phone (for leads table)
+  if (filters.phone && (tableName === 'leads' || tableName === 'excel_leads')) {
+    const params = {
+      TableName: tableName,
+      IndexName: 'phone-index',
+      KeyConditionExpression: '#phone = :phone',
+      ExpressionAttributeNames: {
+        '#phone': 'phone'
+      },
+      ExpressionAttributeValues: {
+        ':phone': filters.phone
+      }
+    };
+
+    // ✅ LIMIT GUARD: Protect memory and prevent abuse
+    const MAX_LIMIT = 5000;
+    if (filters.limit) {
+      params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+    }
+
+    return { type: 'QUERY', params };
   }
 
-  return params;
+  // STRATEGY 4: Query by panNumber (for leads table)
+  if (filters.panNumber && (tableName === 'leads' || tableName === 'excel_leads')) {
+    const params = {
+      TableName: tableName,
+      IndexName: 'panNumber-index',
+      KeyConditionExpression: '#panNumber = :panNumber',
+      ExpressionAttributeNames: {
+        '#panNumber': 'panNumber'
+      },
+      ExpressionAttributeValues: {
+        ':panNumber': filters.panNumber
+      }
+    };
+
+    // ✅ LIMIT GUARD: Protect memory and prevent abuse
+    const MAX_LIMIT = 5000;
+    if (filters.limit) {
+      params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+    }
+
+    return { type: 'QUERY', params };
+  }
+
+  // ❌ REJECT: No valid query path available
+  throw new Error(
+    `Invalid filter combination. To avoid expensive scans, please provide one of:
+    - source (required for response logs)
+    - leadId (for leads tables)
+    - phone (for leads tables)
+    - panNumber (for leads tables)
+    
+    Current filters: ${JSON.stringify(Object.keys(filters))}`
+  );
 }
 
-// STREAMING EXPORT - Handles large datasets
+// ✅ STREAMING EXPORT - Now uses QUERY instead of SCAN
 router.post('/export', async (req, res) => {
   try {
     const { tableName, filters } = req.body;
@@ -141,26 +274,40 @@ router.post('/export', async (req, res) => {
       return res.status(400).json({ error: 'Table name is required' });
     }
 
+    // Validate and build query params
+    let queryConfig;
+    try {
+      queryConfig = buildQueryParams(tableName, filters);
+    } catch (error) {
+      return res.status(400).json({ 
+        error: error.message,
+        hint: 'Provide source, leadId, phone, or panNumber to enable efficient querying'
+      });
+    }
+
     // Set headers for streaming CSV
     res.header('Content-Type', 'text/csv');
     res.header('Content-Disposition', `attachment; filename="${tableName}_export_${new Date().toISOString().split('T')[0]}.csv"`);
     res.header('Transfer-Encoding', 'chunked');
 
-    const params = buildScanParams(tableName, filters);
+    const params = queryConfig.params;
     
     let lastEvaluatedKey = null;
     let totalProcessed = 0;
     let headerWritten = false;
     let allFields = new Set();
     let buffer = [];
-    const BATCH_SIZE = 1000; // Process in batches
+    const BATCH_SIZE = 1000;
+
+    console.log(`Using ${queryConfig.type} operation with index: ${params.IndexName || 'primary key'}`);
 
     do {
       if (lastEvaluatedKey) {
         params.ExclusiveStartKey = lastEvaluatedKey;
       }
 
-      const result = await docClient.send(new ScanCommand(params));
+      // ✅ Use QueryCommand instead of ScanCommand
+      const result = await docClient.send(new QueryCommand(params));
       const items = (result.Items || []).filter(item => item && typeof item === 'object');
       
       // Flatten items
@@ -202,13 +349,13 @@ router.post('/export', async (req, res) => {
       }
 
       lastEvaluatedKey = result.LastEvaluatedKey;
-      console.log(`Processed ${totalProcessed} items...`);
+      console.log(`Processed ${totalProcessed} items using ${queryConfig.type}...`);
 
       delete params.ExclusiveStartKey;
       
     } while (lastEvaluatedKey);
 
-    console.log(`Export complete: ${totalProcessed} items`);
+    console.log(`✅ Export complete: ${totalProcessed} items exported using ${queryConfig.type}`);
     res.end();
 
   } catch (error) {
@@ -221,52 +368,8 @@ router.post('/export', async (req, res) => {
   }
 });
 
-// ALTERNATIVE: Paginated Export for very large datasets
-router.post('/export-paginated', async (req, res) => {
-  try {
-    const { tableName, filters, page = 1, pageSize = 5000 } = req.body;
-    
-    if (!tableName) {
-      return res.status(400).json({ error: 'Table name is required' });
-    }
-
-    const params = buildScanParams(tableName, filters);
-    params.Limit = pageSize;
-
-    // Calculate pagination
-    let lastEvaluatedKey = null;
-    let currentPage = 1;
-    
-    // Skip to requested page
-    while (currentPage < page) {
-      const result = await docClient.send(new ScanCommand(params));
-      lastEvaluatedKey = result.LastEvaluatedKey;
-      if (!lastEvaluatedKey) break;
-      params.ExclusiveStartKey = lastEvaluatedKey;
-      currentPage++;
-    }
-
-    // Get current page data
-    const result = await docClient.send(new ScanCommand(params));
-    const items = (result.Items || []).filter(item => item && typeof item === 'object');
-    const flattenedData = items.map(item => flattenObject(item));
-
-    // Convert to CSV
-    const parser = new Parser();
-    const csv = parser.parse(flattenedData);
-
-    res.header('Content-Type', 'text/csv');
-    res.header('Content-Disposition', `attachment; filename="${tableName}_export_page${page}_${new Date().toISOString().split('T')[0]}.csv"`);
-    res.send(csv);
-
-  } catch (error) {
-    console.error('Paginated export error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get estimate of total records (for progress indication)
-router.post('/export-estimate', async (req, res) => {
+// ✅ OPTIMIZED: Get accurate count using Query (not full table scan)
+router.post('/export-count', async (req, res) => {
   try {
     const { tableName, filters } = req.body;
     
@@ -274,33 +377,93 @@ router.post('/export-estimate', async (req, res) => {
       return res.status(400).json({ error: 'Table name is required' });
     }
 
-    const params = buildScanParams(tableName, filters);
-    params.Select = 'COUNT';
+    // Validate and build query params
+    let queryConfig;
+    try {
+      queryConfig = buildQueryParams(tableName, filters);
+    } catch (error) {
+      return res.status(400).json({ 
+        error: error.message,
+        hint: 'Provide source, leadId, phone, or panNumber to get count'
+      });
+    }
+
+    const params = { ...queryConfig.params, Select: 'COUNT' };
 
     let totalCount = 0;
     let lastEvaluatedKey = null;
+    let iterations = 0;
+    const MAX_ITERATIONS = 100; // Safety limit
 
-    // Quick scan to count (limit to 10 iterations for estimate)
-    for (let i = 0; i < 10; i++) {
+    do {
       if (lastEvaluatedKey) {
         params.ExclusiveStartKey = lastEvaluatedKey;
       }
 
-      const result = await docClient.send(new ScanCommand(params));
+      const result = await docClient.send(new QueryCommand(params));
       totalCount += result.Count || 0;
       lastEvaluatedKey = result.LastEvaluatedKey;
+      iterations++;
 
-      if (!lastEvaluatedKey) break;
       delete params.ExclusiveStartKey;
-    }
+
+      // Safety break
+      if (iterations >= MAX_ITERATIONS) {
+        console.warn(`Count reached max iterations (${MAX_ITERATIONS}), returning estimate`);
+        break;
+      }
+      
+    } while (lastEvaluatedKey);
 
     res.json({ 
-      estimatedCount: totalCount,
-      isEstimate: !!lastEvaluatedKey 
+      count: totalCount,
+      isComplete: !lastEvaluatedKey,
+      queryType: queryConfig.type,
+      indexUsed: params.IndexName || 'primary'
     });
 
   } catch (error) {
-    console.error('Estimate error:', error);
+    console.error('Count error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ NEW: Preview endpoint - shows first 10 rows without full export
+router.post('/preview', async (req, res) => {
+  try {
+    const { tableName, filters } = req.body;
+    
+    if (!tableName) {
+      return res.status(400).json({ error: 'Table name is required' });
+    }
+
+    // Validate and build query params
+    let queryConfig;
+    try {
+      queryConfig = buildQueryParams(tableName, filters);
+    } catch (error) {
+      return res.status(400).json({ 
+        error: error.message,
+        hint: 'Provide source, leadId, phone, or panNumber to preview data'
+      });
+    }
+
+    const params = { ...queryConfig.params, Limit: 10 };
+
+    const result = await docClient.send(new QueryCommand(params));
+    const items = (result.Items || []).filter(item => item && typeof item === 'object');
+    const flattenedData = items.map(item => flattenObject(item));
+
+    res.json({
+      preview: flattenedData,
+      hasMore: !!result.LastEvaluatedKey,
+      count: items.length,
+      queryType: queryConfig.type,
+      indexUsed: params.IndexName || 'primary'
+    });
+
+  } catch (error) {
+    console.error('Preview error:', error);
     res.status(500).json({ error: error.message });
   }
 });
