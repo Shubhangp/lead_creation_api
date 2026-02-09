@@ -384,7 +384,7 @@ async function sendToZYPE(lead) {
         partnerId: process.env.ZYPE_PARTNER_ID,
       },
       responseStatus: "REJECTED",
-      responseBody: { status: "REJECTED" },
+      responseBody: { status: "REJECTED", isEligible },
     });
     return responseLog;
   } else if (isEligible.status === 'ACCEPT') {
