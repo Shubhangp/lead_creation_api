@@ -51,7 +51,7 @@ app.use('/api/v1/unified-stats', statsRoutes);
 app.use('/api/v1/leads_success', leadSuccessRoutes);
 app.use('/api/v1/uploadStatus', lenderStatusUploadRoutes);
 
-// rcsScheduler.init();
+rcsScheduler.init();
 // // Start continuous scheduler when server starts
 // continuousScheduler.start();
 

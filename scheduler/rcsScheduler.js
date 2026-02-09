@@ -13,8 +13,8 @@ class RCSScheduler {
   init() {
     console.log('Initializing RCS Scheduler...');
 
-    // Run every 5 minutes
-    cron.schedule('*/1 * * * *', async () => {
+    // Run every 3 minutes
+    cron.schedule('*/3 * * * *', async () => {
       if (this.isRunning) {
         console.log('RCS processing already running, skipping...');
         return;

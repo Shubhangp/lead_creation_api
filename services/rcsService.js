@@ -99,10 +99,10 @@ class RCSService {
         actionUrl: 'https://partners.indialends.com/RateCut?sub_source=IND&ref_id=77D908AB-7C2E-4E26'
       },
       'default': {
-        title: 'Loan Approved!',
-        description: 'Your loan application has been approved✅\n\n🏦  Loans via RBI-registered lenders.\n\n📱Complete your application now!\n\nT&C Apply.',
-        imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1758734319/zet_exjwcl.jpg',
-        actionUrl: 'https://ratecut.com/complete-loan'
+        title: 'Get Instant Loan up to ₹5 lakhs',
+        description: 'Apply for an Instant Loan to fulfil all your financial needs.\n\nWe have exclusive loan offers waiting for you. Check eligibility in 2 minutes!',
+        imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1770264773/RCS_Poonawalla_fezsxk.png',
+        actionUrl: 'https://instant-pocket-loan.poonawallafincorp.com/?utm_DSA_Code=PKA00191&UTM_Partner_Name=ZETAPP&UTM_Partner_Medium=sms&UTM_Partner_AgentCode=PFLZETA&UTM_Partner_ReferenceID=ZPRCLC_1234'
       }
     };
 
