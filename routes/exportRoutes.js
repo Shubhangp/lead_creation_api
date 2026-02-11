@@ -1,6 +1,6 @@
 const express = require('express');
 const { docClient } = require('../dynamodb');
-const { QueryCommand, GetItemCommand } = require('@aws-sdk/lib-dynamodb');
+const { QueryCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
 
 const router = express.Router();
 
@@ -13,7 +13,7 @@ router.get('/tables', async (req, res) => {
       'zype_response_logs', 'fintifi_response_logs', 'fatakpay_response_logs',
       'ramfincrop_logs', 'mpokket_response_logs', 'indialends_response_logs',
       'crmPaisa_response_logs', 'lead_distribution_stats', 'lead_success',
-      'lead_distribution_processing', 'rcs_queue'
+      'lead_distribution_processing', 'rcs_queue', 'mmm_response_logs'
     ];
     res.json({ tables });
   } catch (error) {
@@ -70,200 +70,425 @@ function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
   return result;
 }
 
-// ✅ OPTIMIZED: Build Query parameters (NO MORE SCAN)
+// ✅ TABLE-SPECIFIC INDEX CONFIGURATION
+// This maps each table to its available and working GSIs
+const TABLE_INDEX_CONFIG = {
+  // Response logs with ACTIVE source-createdAt-index
+  'ovly_response_logs': {
+    primary: 'source-createdAt-index',
+    fallback: 'leadId-index',
+    sourceRequired: false // Has data in source-createdAt-index
+  },
+  'mpokket_response_logs': {
+    primary: 'source-createdAt-index',
+    fallback: 'leadId-index',
+    alternative: 'status-index', // Can use status + createdAt
+    sourceRequired: false
+  },
+  'indialends_response_logs': {
+    primary: 'source-createdAt-index',
+    fallback: 'leadId-createdAt-index', // Different pattern!
+    sourceRequired: false
+  },
+  'mmm_response_logs': {
+    primary: 'source-createdAt-index',
+    fallback: 'leadId-index',
+    sourceRequired: false
+  },
+  'sml_response_logs': {
+    primary: 'source-createdAt-index',
+    fallback: 'leadId-index',
+    sourceRequired: false
+  },
+  'freo_response_logs': {
+    primary: 'source-createdAt-index',
+    fallback: 'leadId-index',
+    sourceRequired: false
+  },
+  'crmPaisa_response_logs': {
+    primary: 'source-createdAt-index',
+    fallback: 'leadId-index',
+    sourceRequired: false
+  },
+  
+  // Response logs with CREATING source-createdAt-index (must use leadId)
+  'zype_response_logs': {
+    primary: 'leadId-index', // source-createdAt is Creating
+    sourceRequired: false
+  },
+  'ramfincrop_logs': {
+    primary: 'leadId-index', // source-createdAt is Creating
+    sourceRequired: false
+  },
+  'lending_plate_response_logs': {
+    primary: 'leadId-index', // source-createdAt is Creating
+    sourceRequired: false
+  },
+  'fatakpay_response_logs': {
+    primary: 'leadId-index', // source-createdAt is Creating
+    sourceRequired: false
+  },
+  'fintifi_response_logs': {
+    primary: 'source-createdAt-index',
+    fallback: 'leadId-index',
+    sourceRequired: false
+  },
+  
+  // Leads tables
+  'leads': {
+    primary: 'source-createdAt-index',
+    alternatives: ['phone-index', 'panNumber-index'],
+    sourceRequired: false
+  },
+  'excel_leads': {
+    primary: 'source-createdAt-index',
+    alternatives: ['phone-index', 'panNumber-index'],
+    sourceRequired: false
+  },
+  'lead_success': {
+    primary: 'leadId-index',
+    alternatives: ['phone-index', 'panNumber-index', 'source-createdAt-index'],
+    sourceRequired: false
+  },
+  
+  // RCS Queue - special table
+  'rcs_queue': {
+    primary: 'status-scheduledTime-index', // Most common query
+    alternatives: ['leadId-rcsType-index', 'status-attempts-index', 'source-createdAt-index'],
+    sourceRequired: false
+  }
+};
+
+// ✅ SMART QUERY BUILDER - Detects best index automatically
 function buildQueryParams(tableName, filters) {
-  // Define log tables that MUST have source filter
-  const LOG_TABLES = [
-    'sml_response_logs',
-    'freo_response_logs',
-    'ovly_response_logs',
-    'lending_plate_response_logs',
-    'zype_response_logs',
-    'fintifi_response_logs',
-    'fatakpay_response_logs',
-    'ramfincrop_logs',
-    'mpokket_response_logs',
-    'indialends_response_logs',
-    'crmPaisa_response_logs'
-  ];
-
-  // ✅ BUSINESS RULE: Log tables MUST have source to avoid expensive scans
-  if (LOG_TABLES.includes(tableName) && (!filters || !filters.source)) {
-    throw new Error(
-      `Source is mandatory for ${tableName}. This prevents expensive full table scans. ` +
-      `Available sources: OVLY, FREO, SML, ZYPE, FINTIFI, FATAKPAY, MPOKKET, INDIALENDS, CRMPAISAY`
-    );
-  }
-
   if (!filters || typeof filters !== 'object') {
-    throw new Error('Filters are required. Please specify at least source or leadId to avoid expensive full table scans.');
+    throw new Error('Filters are required. Please specify at least one filter field.');
   }
 
-  // STRATEGY 1: Query by source + createdAt (BEST - uses GSI)
+  const config = TABLE_INDEX_CONFIG[tableName];
+  const MAX_LIMIT = 5000;
+
+  // STRATEGY 1: Try primary index based on table config
+  if (config) {
+    // Check if we can use primary index
+    if (config.primary === 'source-createdAt-index' && filters.source) {
+      return buildSourceCreatedAtQuery(tableName, filters, MAX_LIMIT);
+    }
+    
+    if (config.primary === 'leadId-index' && filters.leadId) {
+      return buildLeadIdQuery(tableName, filters, MAX_LIMIT);
+    }
+    
+    if (config.primary === 'leadId-createdAt-index' && filters.leadId) {
+      return buildLeadIdCreatedAtQuery(tableName, filters, MAX_LIMIT);
+    }
+    
+    if (config.primary === 'status-scheduledTime-index' && filters.status) {
+      return buildStatusScheduledTimeQuery(tableName, filters, MAX_LIMIT);
+    }
+    
+    // Try alternative indexes
+    if (config.alternatives) {
+      if (filters.phone && config.alternatives.includes('phone-index')) {
+        return buildPhoneQuery(tableName, filters, MAX_LIMIT);
+      }
+      if (filters.panNumber && config.alternatives.includes('panNumber-index')) {
+        return buildPanNumberQuery(tableName, filters, MAX_LIMIT);
+      }
+      if (filters.status && config.alternatives.includes('status-index')) {
+        return buildStatusQuery(tableName, filters, MAX_LIMIT);
+      }
+      if (filters.leadId && config.alternatives.includes('leadId-rcsType-index')) {
+        return buildLeadIdRcsTypeQuery(tableName, filters, MAX_LIMIT);
+      }
+    }
+    
+    // Try fallback index
+    if (config.fallback === 'leadId-index' && filters.leadId) {
+      return buildLeadIdQuery(tableName, filters, MAX_LIMIT);
+    }
+    
+    if (config.fallback === 'leadId-createdAt-index' && filters.leadId) {
+      return buildLeadIdCreatedAtQuery(tableName, filters, MAX_LIMIT);
+    }
+  }
+
+  // FALLBACK: Generic strategies for tables without config
   if (filters.source) {
-    const params = {
-      TableName: tableName,
-      IndexName: 'source-createdAt-index',
-      KeyConditionExpression: '#source = :source',
-      ScanIndexForward: false, // ✅ Newest records first (descending order)
-      ExpressionAttributeNames: {
-        '#source': 'source'
-      },
-      ExpressionAttributeValues: {
-        ':source': filters.source
-      }
-    };
-
-    // Add date range to KeyCondition (SORT KEY) - This is CHEAP ✅
-    if (filters.startDate && filters.endDate) {
-      params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
-      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-      params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-      params.ExpressionAttributeValues[':endDate'] = filters.endDate;
-    } else if (filters.startDate) {
-      params.KeyConditionExpression += ' AND #createdAt >= :startDate';
-      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-      params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-    } else if (filters.endDate) {
-      params.KeyConditionExpression += ' AND #createdAt <= :endDate';
-      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-      params.ExpressionAttributeValues[':endDate'] = filters.endDate;
-    }
-
-    // Non-indexed fields go to FilterExpression (applied after query)
-    const filterConditions = [];
-    
-    if (filters.responseStatus) {
-      filterConditions.push('#responseStatus = :responseStatus');
-      params.ExpressionAttributeNames['#responseStatus'] = 'responseStatus';
-      params.ExpressionAttributeValues[':responseStatus'] = filters.responseStatus;
-    }
-
-    if (filters.leadId) {
-      filterConditions.push('#leadId = :leadId');
-      params.ExpressionAttributeNames['#leadId'] = 'leadId';
-      params.ExpressionAttributeValues[':leadId'] = filters.leadId;
-    }
-
-    if (filterConditions.length > 0) {
-      params.FilterExpression = filterConditions.join(' AND ');
-    }
-
-    // ✅ LIMIT GUARD: Protect memory and prevent abuse
-    const MAX_LIMIT = 5000;
-    if (filters.limit) {
-      params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-    }
-
-    return { type: 'QUERY', params };
+    return buildSourceCreatedAtQuery(tableName, filters, MAX_LIMIT);
+  }
+  
+  if (filters.leadId) {
+    return buildLeadIdQuery(tableName, filters, MAX_LIMIT);
+  }
+  
+  if (filters.phone) {
+    return buildPhoneQuery(tableName, filters, MAX_LIMIT);
+  }
+  
+  if (filters.panNumber) {
+    return buildPanNumberQuery(tableName, filters, MAX_LIMIT);
   }
 
-  // STRATEGY 2: Query by leadId (uses leadId index for leads table)
-  if (filters.leadId && (tableName === 'leads' || tableName === 'excel_leads' || tableName === 'leads_uat')) {
-    const params = {
-      TableName: tableName,
-      IndexName: 'leadId-index',
-      KeyConditionExpression: '#leadId = :leadId',
-      ExpressionAttributeNames: {
-        '#leadId': 'leadId'
-      },
-      ExpressionAttributeValues: {
-        ':leadId': filters.leadId
-      }
-    };
-
-    // Add date filter if provided
-    if (filters.startDate || filters.endDate) {
-      const filterConditions = [];
-      
-      if (filters.startDate && filters.endDate) {
-        filterConditions.push('#createdAt BETWEEN :startDate AND :endDate');
-        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-        params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-        params.ExpressionAttributeValues[':endDate'] = filters.endDate;
-      } else if (filters.startDate) {
-        filterConditions.push('#createdAt >= :startDate');
-        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-        params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-      } else if (filters.endDate) {
-        filterConditions.push('#createdAt <= :endDate');
-        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-        params.ExpressionAttributeValues[':endDate'] = filters.endDate;
-      }
-
-      if (filterConditions.length > 0) {
-        params.FilterExpression = filterConditions.join(' AND ');
-      }
-    }
-
-    // ✅ LIMIT GUARD: Protect memory and prevent abuse
-    const MAX_LIMIT = 5000;
-    if (filters.limit) {
-      params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-    }
-
-    return { type: 'QUERY', params };
-  }
-
-  // STRATEGY 3: Query by phone (for leads table)
-  if (filters.phone && (tableName === 'leads' || tableName === 'excel_leads')) {
-    const params = {
-      TableName: tableName,
-      IndexName: 'phone-index',
-      KeyConditionExpression: '#phone = :phone',
-      ExpressionAttributeNames: {
-        '#phone': 'phone'
-      },
-      ExpressionAttributeValues: {
-        ':phone': filters.phone
-      }
-    };
-
-    // ✅ LIMIT GUARD: Protect memory and prevent abuse
-    const MAX_LIMIT = 5000;
-    if (filters.limit) {
-      params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-    }
-
-    return { type: 'QUERY', params };
-  }
-
-  // STRATEGY 4: Query by panNumber (for leads table)
-  if (filters.panNumber && (tableName === 'leads' || tableName === 'excel_leads')) {
-    const params = {
-      TableName: tableName,
-      IndexName: 'panNumber-index',
-      KeyConditionExpression: '#panNumber = :panNumber',
-      ExpressionAttributeNames: {
-        '#panNumber': 'panNumber'
-      },
-      ExpressionAttributeValues: {
-        ':panNumber': filters.panNumber
-      }
-    };
-
-    // ✅ LIMIT GUARD: Protect memory and prevent abuse
-    const MAX_LIMIT = 5000;
-    if (filters.limit) {
-      params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-    }
-
-    return { type: 'QUERY', params };
-  }
-
-  // ❌ REJECT: No valid query path available
+  // ❌ No valid query path found
+  const availableFilters = config ? 
+    `Try: ${config.primary}${config.fallback ? `, ${config.fallback}` : ''}${config.alternatives ? `, ${config.alternatives.join(', ')}` : ''}` :
+    'Try: source, leadId, phone, or panNumber';
+  
   throw new Error(
-    `Invalid filter combination. To avoid expensive scans, please provide one of:
-    - source (required for response logs)
-    - leadId (for leads tables)
-    - phone (for leads tables)
-    - panNumber (for leads tables)
-    
-    Current filters: ${JSON.stringify(Object.keys(filters))}`
+    `Cannot query ${tableName} with provided filters. ${availableFilters}. ` +
+    `Current filters: ${JSON.stringify(Object.keys(filters))}`
   );
 }
 
-// ✅ STREAMING EXPORT - Now uses QUERY instead of SCAN
+// Query builders for different index patterns
+function buildSourceCreatedAtQuery(tableName, filters, MAX_LIMIT) {
+  const params = {
+    TableName: tableName,
+    IndexName: 'source-createdAt-index',
+    KeyConditionExpression: '#source = :source',
+    ScanIndexForward: false,
+    ExpressionAttributeNames: { '#source': 'source' },
+    ExpressionAttributeValues: { ':source': filters.source }
+  };
+
+  // Add date range to key condition
+  if (filters.startDate && filters.endDate) {
+    params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
+    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+  } else if (filters.startDate) {
+    params.KeyConditionExpression += ' AND #createdAt >= :startDate';
+    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+  } else if (filters.endDate) {
+    params.KeyConditionExpression += ' AND #createdAt <= :endDate';
+    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+  }
+
+  addFilterExpression(params, filters, ['source', 'startDate', 'endDate']);
+  
+  if (filters.limit) {
+    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+  }
+
+  return { type: 'QUERY', params };
+}
+
+function buildLeadIdQuery(tableName, filters, MAX_LIMIT) {
+  const params = {
+    TableName: tableName,
+    IndexName: 'leadId-index',
+    KeyConditionExpression: '#leadId = :leadId',
+    ExpressionAttributeNames: { '#leadId': 'leadId' },
+    ExpressionAttributeValues: { ':leadId': filters.leadId }
+  };
+
+  addFilterExpression(params, filters, ['leadId']);
+  
+  if (filters.limit) {
+    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+  }
+
+  return { type: 'QUERY', params };
+}
+
+function buildLeadIdCreatedAtQuery(tableName, filters, MAX_LIMIT) {
+  const params = {
+    TableName: tableName,
+    IndexName: 'leadId-createdAt-index',
+    KeyConditionExpression: '#leadId = :leadId',
+    ScanIndexForward: false,
+    ExpressionAttributeNames: { '#leadId': 'leadId' },
+    ExpressionAttributeValues: { ':leadId': filters.leadId }
+  };
+
+  // Add date range to key condition if available
+  if (filters.startDate && filters.endDate) {
+    params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
+    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+  } else if (filters.startDate) {
+    params.KeyConditionExpression += ' AND #createdAt >= :startDate';
+    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+  }
+
+  addFilterExpression(params, filters, ['leadId', 'startDate', 'endDate']);
+  
+  if (filters.limit) {
+    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+  }
+
+  return { type: 'QUERY', params };
+}
+
+function buildPhoneQuery(tableName, filters, MAX_LIMIT) {
+  const params = {
+    TableName: tableName,
+    IndexName: 'phone-index',
+    KeyConditionExpression: '#phone = :phone',
+    ExpressionAttributeNames: { '#phone': 'phone' },
+    ExpressionAttributeValues: { ':phone': filters.phone }
+  };
+
+  addFilterExpression(params, filters, ['phone']);
+  
+  if (filters.limit) {
+    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+  }
+
+  return { type: 'QUERY', params };
+}
+
+function buildPanNumberQuery(tableName, filters, MAX_LIMIT) {
+  const params = {
+    TableName: tableName,
+    IndexName: 'panNumber-index',
+    KeyConditionExpression: '#panNumber = :panNumber',
+    ExpressionAttributeNames: { '#panNumber': 'panNumber' },
+    ExpressionAttributeValues: { ':panNumber': filters.panNumber }
+  };
+
+  addFilterExpression(params, filters, ['panNumber']);
+  
+  if (filters.limit) {
+    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+  }
+
+  return { type: 'QUERY', params };
+}
+
+function buildStatusQuery(tableName, filters, MAX_LIMIT) {
+  const params = {
+    TableName: tableName,
+    IndexName: 'status-index',
+    KeyConditionExpression: '#status = :status',
+    ScanIndexForward: false,
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: { ':status': filters.status }
+  };
+
+  // Add date range if index has createdAt as sort key
+  if (filters.startDate && filters.endDate) {
+    params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
+    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+  }
+
+  addFilterExpression(params, filters, ['status', 'startDate', 'endDate']);
+  
+  if (filters.limit) {
+    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+  }
+
+  return { type: 'QUERY', params };
+}
+
+function buildStatusScheduledTimeQuery(tableName, filters, MAX_LIMIT) {
+  const params = {
+    TableName: tableName,
+    IndexName: 'status-scheduledTime-index',
+    KeyConditionExpression: '#status = :status',
+    ScanIndexForward: false,
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: { ':status': filters.status }
+  };
+
+  if (filters.scheduledTime) {
+    params.KeyConditionExpression += ' AND #scheduledTime = :scheduledTime';
+    params.ExpressionAttributeNames['#scheduledTime'] = 'scheduledTime';
+    params.ExpressionAttributeValues[':scheduledTime'] = filters.scheduledTime;
+  }
+
+  addFilterExpression(params, filters, ['status', 'scheduledTime']);
+  
+  if (filters.limit) {
+    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+  }
+
+  return { type: 'QUERY', params };
+}
+
+function buildLeadIdRcsTypeQuery(tableName, filters, MAX_LIMIT) {
+  const params = {
+    TableName: tableName,
+    IndexName: 'leadId-rcsType-index',
+    KeyConditionExpression: '#leadId = :leadId',
+    ExpressionAttributeNames: { '#leadId': 'leadId' },
+    ExpressionAttributeValues: { ':leadId': filters.leadId }
+  };
+
+  if (filters.rcsType) {
+    params.KeyConditionExpression += ' AND #rcsType = :rcsType';
+    params.ExpressionAttributeNames['#rcsType'] = 'rcsType';
+    params.ExpressionAttributeValues[':rcsType'] = filters.rcsType;
+  }
+
+  addFilterExpression(params, filters, ['leadId', 'rcsType']);
+  
+  if (filters.limit) {
+    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
+  }
+
+  return { type: 'QUERY', params };
+}
+
+// Helper to add FilterExpression for non-key fields
+function addFilterExpression(params, filters, excludeFields) {
+  const filterConditions = [];
+  
+  // Common filter fields
+  const filterableFields = {
+    responseStatus: 'responseStatus',
+    leadId: 'leadId',
+    source: 'source',
+    status: 'status',
+    phone: 'phone',
+    panNumber: 'panNumber',
+    rcsType: 'rcsType',
+    attempts: 'attempts'
+  };
+
+  Object.keys(filterableFields).forEach(field => {
+    if (filters[field] && !excludeFields.includes(field)) {
+      const attributeName = `#${field}`;
+      const attributeValue = `:${field}`;
+      
+      filterConditions.push(`${attributeName} = ${attributeValue}`);
+      params.ExpressionAttributeNames[attributeName] = filterableFields[field];
+      params.ExpressionAttributeValues[attributeValue] = filters[field];
+    }
+  });
+
+  // Date filters (if not in key condition)
+  if (filters.startDate && !excludeFields.includes('startDate') && !excludeFields.includes('endDate')) {
+    if (filters.endDate) {
+      filterConditions.push('#createdAt BETWEEN :startDate AND :endDate');
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+      params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+    } else {
+      filterConditions.push('#createdAt >= :startDate');
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+    }
+  } else if (filters.endDate && !excludeFields.includes('endDate')) {
+    filterConditions.push('#createdAt <= :endDate');
+    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+  }
+
+  if (filterConditions.length > 0) {
+    params.FilterExpression = filterConditions.join(' AND ');
+  }
+}
+
+// ✅ STREAMING EXPORT
 router.post('/export', async (req, res) => {
   try {
     const { tableName, filters } = req.body;
@@ -274,18 +499,16 @@ router.post('/export', async (req, res) => {
       return res.status(400).json({ error: 'Table name is required' });
     }
 
-    // Validate and build query params
     let queryConfig;
     try {
       queryConfig = buildQueryParams(tableName, filters);
     } catch (error) {
       return res.status(400).json({ 
         error: error.message,
-        hint: 'Provide source, leadId, phone, or panNumber to enable efficient querying'
+        hint: 'Provide at least one indexed field (source, leadId, phone, panNumber, status, etc.)'
       });
     }
 
-    // Set headers for streaming CSV
     res.header('Content-Type', 'text/csv');
     res.header('Content-Disposition', `attachment; filename="${tableName}_export_${new Date().toISOString().split('T')[0]}.csv"`);
     res.header('Transfer-Encoding', 'chunked');
@@ -299,21 +522,18 @@ router.post('/export', async (req, res) => {
     let buffer = [];
     const BATCH_SIZE = 1000;
 
-    console.log(`Using ${queryConfig.type} operation with index: ${params.IndexName || 'primary key'}`);
+    console.log(`Using ${queryConfig.type} with index: ${params.IndexName || 'primary key'}`);
 
     do {
       if (lastEvaluatedKey) {
         params.ExclusiveStartKey = lastEvaluatedKey;
       }
 
-      // ✅ Use QueryCommand instead of ScanCommand
       const result = await docClient.send(new QueryCommand(params));
       const items = (result.Items || []).filter(item => item && typeof item === 'object');
       
-      // Flatten items
       const flattenedBatch = items.map(item => flattenObject(item));
       
-      // Collect all fields for consistent CSV columns
       flattenedBatch.forEach(item => {
         Object.keys(item).forEach(key => allFields.add(key));
       });
@@ -321,21 +541,17 @@ router.post('/export', async (req, res) => {
       buffer = buffer.concat(flattenedBatch);
       totalProcessed += items.length;
 
-      // Write batch when buffer is full or this is the last batch
       if (buffer.length >= BATCH_SIZE || !result.LastEvaluatedKey) {
         if (!headerWritten && buffer.length > 0) {
-          // Write CSV header
           const header = Array.from(allFields).join(',') + '\n';
           res.write(header);
           headerWritten = true;
         }
 
-        // Write CSV rows
         buffer.forEach(row => {
           const values = Array.from(allFields).map(field => {
             const value = row[field];
             if (value === null || value === undefined) return '';
-            // Escape commas and quotes in CSV
             const stringValue = String(value);
             if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
               return `"${stringValue.replace(/"/g, '""')}"`;
@@ -349,13 +565,13 @@ router.post('/export', async (req, res) => {
       }
 
       lastEvaluatedKey = result.LastEvaluatedKey;
-      console.log(`Processed ${totalProcessed} items using ${queryConfig.type}...`);
+      console.log(`Processed ${totalProcessed} items...`);
 
       delete params.ExclusiveStartKey;
       
     } while (lastEvaluatedKey);
 
-    console.log(`✅ Export complete: ${totalProcessed} items exported using ${queryConfig.type}`);
+    console.log(`✅ Export complete: ${totalProcessed} items`);
     res.end();
 
   } catch (error) {
@@ -368,7 +584,7 @@ router.post('/export', async (req, res) => {
   }
 });
 
-// ✅ OPTIMIZED: Get accurate count using Query (not full table scan)
+// ✅ COUNT ENDPOINT
 router.post('/export-count', async (req, res) => {
   try {
     const { tableName, filters } = req.body;
@@ -377,14 +593,13 @@ router.post('/export-count', async (req, res) => {
       return res.status(400).json({ error: 'Table name is required' });
     }
 
-    // Validate and build query params
     let queryConfig;
     try {
       queryConfig = buildQueryParams(tableName, filters);
     } catch (error) {
       return res.status(400).json({ 
         error: error.message,
-        hint: 'Provide source, leadId, phone, or panNumber to get count'
+        hint: 'Provide at least one indexed field to get count'
       });
     }
 
@@ -393,7 +608,7 @@ router.post('/export-count', async (req, res) => {
     let totalCount = 0;
     let lastEvaluatedKey = null;
     let iterations = 0;
-    const MAX_ITERATIONS = 100; // Safety limit
+    const MAX_ITERATIONS = 100;
 
     do {
       if (lastEvaluatedKey) {
@@ -407,7 +622,6 @@ router.post('/export-count', async (req, res) => {
 
       delete params.ExclusiveStartKey;
 
-      // Safety break
       if (iterations >= MAX_ITERATIONS) {
         console.warn(`Count reached max iterations (${MAX_ITERATIONS}), returning estimate`);
         break;
@@ -428,7 +642,7 @@ router.post('/export-count', async (req, res) => {
   }
 });
 
-// ✅ NEW: Preview endpoint - shows first 10 rows without full export
+// ✅ PREVIEW ENDPOINT
 router.post('/preview', async (req, res) => {
   try {
     const { tableName, filters } = req.body;
@@ -437,14 +651,13 @@ router.post('/preview', async (req, res) => {
       return res.status(400).json({ error: 'Table name is required' });
     }
 
-    // Validate and build query params
     let queryConfig;
     try {
       queryConfig = buildQueryParams(tableName, filters);
     } catch (error) {
       return res.status(400).json({ 
         error: error.message,
-        hint: 'Provide source, leadId, phone, or panNumber to preview data'
+        hint: 'Provide at least one indexed field to preview data'
       });
     }
 
