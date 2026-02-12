@@ -1,23 +1,19 @@
-// models/leadModel.js
+// models/leadModel.js - ZERO SCAN VERSION
+// 100% GSI-based queries, no ScanCommand at all
+
 const { docClient } = require('../dynamodb');
 const {
   PutCommand,
   GetCommand,
   QueryCommand,
   UpdateCommand,
-  DeleteCommand,
-  ScanCommand
+  DeleteCommand
 } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'leads';
 
 class Lead {
-  // ============================================================================
-  // HELPER METHODS
-  // ============================================================================
-
-  // Get date partition for GSI (format: "YYYY-MM")
   static getDatePartition(date) {
     const d = new Date(date);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -275,30 +271,6 @@ class Lead {
     };
   }
 
-  // Find all leads (paginated) - DEPRECATED: Use findByDateRange instead
-  // This method is kept for backward compatibility but should be avoided
-  static async findAll(options = {}) {
-    console.warn('[DEPRECATED] findAll() uses expensive Scan operation. Use findByDateRange() instead.');
-    
-    const { limit = 100, lastEvaluatedKey } = options;
-
-    const params = {
-      TableName: TABLE_NAME,
-      Limit: limit
-    };
-
-    if (lastEvaluatedKey) {
-      params.ExclusiveStartKey = lastEvaluatedKey;
-    }
-
-    const result = await docClient.send(new ScanCommand(params));
-
-    return {
-      items: result.Items || [],
-      lastEvaluatedKey: result.LastEvaluatedKey
-    };
-  }
-
   // Find by date range using GSI (OPTIMIZED - No Scan)
   static async findByDateRange(startDate, endDate, options = {}) {
     const { limit = 1000, lastEvaluatedKey } = options;
@@ -320,7 +292,7 @@ class Lead {
       
       return {
         items,
-        lastEvaluatedKey: null, // Note: Pagination across partitions needs custom implementation
+        lastEvaluatedKey: null,
         count: items.length
       };
     } catch (error) {
@@ -456,39 +428,6 @@ class Lead {
     return { deleted: true };
   }
 
-  // Query by multiple filters - DEPRECATED: Use specific GSI queries instead
-  // This method uses expensive Scan and should be avoided
-  static async findByFilters(filters = {}, options = {}) {
-    console.warn('[DEPRECATED] findByFilters() uses expensive Scan operation. Use specific GSI queries instead.');
-    
-    const { limit = 100 } = options;
-
-    const filterExpressions = [];
-    const expressionAttributeNames = {};
-    const expressionAttributeValues = {};
-
-    Object.keys(filters).forEach((key, index) => {
-      filterExpressions.push(`#field${index} = :value${index}`);
-      expressionAttributeNames[`#field${index}`] = key;
-      expressionAttributeValues[`:value${index}`] = filters[key];
-    });
-
-    const params = {
-      TableName: TABLE_NAME,
-      Limit: limit
-    };
-
-    if (filterExpressions.length > 0) {
-      params.FilterExpression = filterExpressions.join(' AND ');
-      params.ExpressionAttributeNames = expressionAttributeNames;
-      params.ExpressionAttributeValues = expressionAttributeValues;
-    }
-
-    const result = await docClient.send(new ScanCommand(params));
-
-    return result.Items || [];
-  }
-
   // Count leads by source
   static async countBySource(source) {
     const result = await docClient.send(new QueryCommand({
@@ -506,10 +445,36 @@ class Lead {
   }
 
   // ============================================================================
-  // STATISTICS FUNCTIONS (OPTIMIZED)
+  // STATISTICS FUNCTIONS (100% GSI-BASED)
   // ============================================================================
 
-  // Get quick stats with optional date range (COUNT only - very fast)
+  // Get approximate item count from table metadata (free and instant)
+  static async getTableItemCountEstimate() {
+    const { DescribeTableCommand } = require('@aws-sdk/client-dynamodb');
+    const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+    
+    const client = new DynamoDBClient({});
+    
+    try {
+      const result = await client.send(new DescribeTableCommand({
+        TableName: TABLE_NAME
+      }));
+      
+      const itemCount = result.Table?.ItemCount || 0;
+      
+      return {
+        totalLogs: itemCount,
+        isEstimate: true,
+        estimateNote: 'Count from table metadata (updated every ~6 hours)',
+        method: 'table-metadata'
+      };
+    } catch (error) {
+      console.error('Error getting table metadata:', error);
+      throw error;
+    }
+  }
+
+  // Get quick stats (GSI-based COUNT only)
   static async getQuickStats(source = null, startDate = null, endDate = null) {
     try {
       if (source && !startDate) {
@@ -518,15 +483,16 @@ class Lead {
         return {
           totalLogs: count,
           source: source,
-          isEstimate: false
+          isEstimate: false,
+          method: 'gsi-count'
         };
       } else if (startDate && endDate) {
         // Quick count for date range using GSI
         return this.getQuickStatsForDateRange(startDate, endDate);
       } else {
-        // Use parallel scan for total count (fallback - expensive)
-        console.warn('Full table count requested - this is expensive!');
-        return this.getQuickStatsParallel();
+        // Return estimate from DynamoDB table metadata (instant, free)
+        console.log('[INFO] Getting table item count estimate from metadata (free, instant)');
+        return this.getTableItemCountEstimate();
       }
     } catch (error) {
       console.error('Error in getQuickStats:', error);
@@ -534,7 +500,7 @@ class Lead {
     }
   }
 
-  // Quick count for date range using GSI (OPTIMIZED)
+  // Quick count for date range using GSI
   static async getQuickStatsForDateRange(startDate, endDate) {
     const startTime = Date.now();
 
@@ -568,7 +534,7 @@ class Lead {
     }
   }
 
-  // Helper: Count items in date partition
+  // Helper: Count items in date partition using GSI
   static async _countDatePartition(partition, startDate, endDate) {
     let count = 0;
     let lastKey = null;
@@ -599,24 +565,19 @@ class Lead {
     return count;
   }
 
-  // Parallel scan for total count (DISABLED - Too expensive)
-  static async getQuickStatsParallel() {
-    throw new Error('Full table scans are disabled for cost optimization. Please provide a date range to getQuickStats(source, startDate, endDate).');
-  }
-
-  // Get comprehensive stats (OPTIMIZED for date ranges using GSI)
-  static async getStats(startDate = null, endDate = null) {
+  // Get comprehensive stats (REQUIRES date range, GSI-based only)
+  static async getStats(startDate, endDate) {
     const startTime = Date.now();
 
-    // REQUIRE date range to prevent expensive full table scans
+    // REQUIRE date range - no full table stats allowed
     if (!startDate || !endDate) {
-      throw new Error('getStats() requires startDate and endDate parameters. Full table scans are disabled for cost optimization. Use getQuickStats() for simple counts or provide a date range.');
+      throw new Error('getStats() requires startDate and endDate parameters. For total count use getQuickStats().');
     }
 
     console.log(`[${TABLE_NAME}] Starting stats fetch for date range:`, startDate, 'to', endDate);
 
     try {
-      // Use GSI to query by date range (OPTIMIZED)
+      // Use GSI to query by date range
       const partitions = this.getMonthPartitions(startDate, endDate);
       
       const promises = partitions.map(partition => 
@@ -805,7 +766,7 @@ class Lead {
     return stats;
   }
 
-  // Get stats grouped by date (OPTIMIZED using GSI)
+  // Get stats grouped by date (GSI-based only)
   static async getStatsByDate(startDate, endDate) {
     const startTime = Date.now();
     console.log(`[${TABLE_NAME}] Fetching stats by date:`, startDate, 'to', endDate);
@@ -888,102 +849,97 @@ class Lead {
   // MIGRATION / UTILITY FUNCTIONS
   // ============================================================================
 
-  // Backfill datePartition for existing records (Run once after adding createdAt-index GSI)
-  // Uses source-createdAt-index to avoid full table scan
-  static async backfillDatePartitions(source = null) {
-    let processed = 0;
+  // Backfill datePartition for existing records using GSI queries (NOT SCAN!)
+  static async backfillDatePartitions(sourceToMigrate = null) {
+    let totalProcessed = 0;
     
-    console.log('[MIGRATION] Starting datePartition backfill...');
+    console.log('═══════════════════════════════════════════════════════════');
+    console.log('  MIGRATION: Backfill datePartition Field');
+    console.log('═══════════════════════════════════════════════════════════\n');
 
-    if (source) {
-      // Backfill specific source using GSI
-      let lastKey = null;
-      
-      do {
-        const params = {
-          TableName: TABLE_NAME,
-          IndexName: 'source-createdAt-index',
-          KeyConditionExpression: '#source = :source',
-          ExpressionAttributeNames: {
-            '#source': 'source'
-          },
-          ExpressionAttributeValues: {
-            ':source': source
-          },
-          Limit: 100
-        };
-
-        if (lastKey) {
-          params.ExclusiveStartKey = lastKey;
-        }
-
-        const result = await docClient.send(new QueryCommand(params));
-
-        const updates = (result.Items || [])
-          .filter(item => !item.datePartition && item.createdAt)
-          .map(item => {
-            return this.updateByIdNoValidation(item.leadId, {
-              datePartition: this.getDatePartition(item.createdAt)
-            });
-          });
-
-        if (updates.length > 0) {
-          await Promise.all(updates);
-          processed += updates.length;
-          console.log(`[MIGRATION] Backfilled ${processed} items for source: ${source}...`);
-        }
+    try {
+      // If specific source provided, migrate only that
+      if (sourceToMigrate) {
+        console.log(`[MIGRATION] Processing source: ${sourceToMigrate}`);
+        const processed = await this._backfillSource(sourceToMigrate);
+        totalProcessed += processed;
+      } else {
+        // Migrate all known sources
+        // You need to provide a list of your sources here
+        const sources = process.env.LEAD_SOURCES?.split(',') || [];
         
-        lastKey = result.LastEvaluatedKey;
-      } while (lastKey);
-    } else {
-      // Get all unique sources first
-      console.log('[MIGRATION] Getting all sources...');
-      const sources = await this.getAllSources();
-      
-      console.log(`[MIGRATION] Found ${sources.length} sources. Processing each...`);
-      
-      // Process each source
-      for (const sourceValue of sources) {
-        await this.backfillDatePartitions(sourceValue);
-      }
-    }
+        if (sources.length === 0) {
+          throw new Error('No sources configured. Set LEAD_SOURCES environment variable or provide source parameter.');
+        }
 
-    console.log(`[MIGRATION] Backfill complete: ${processed} items updated`);
-    return { processed };
+        console.log(`[MIGRATION] Found ${sources.length} sources to process\n`);
+        
+        for (const source of sources) {
+          const processed = await this._backfillSource(source.trim());
+          totalProcessed += processed;
+        }
+      }
+
+      console.log('\n═══════════════════════════════════════════════════════════');
+      console.log('  ✅ MIGRATION COMPLETE!');
+      console.log('═══════════════════════════════════════════════════════════');
+      console.log(`  Total records updated: ${totalProcessed}`);
+      console.log('═══════════════════════════════════════════════════════════\n');
+
+      return { processed: totalProcessed };
+    } catch (error) {
+      console.error('\n❌ MIGRATION FAILED:', error.message);
+      throw error;
+    }
   }
 
-  // Get all unique sources (helper for backfill)
-  static async getAllSources() {
-    const sources = new Set();
+  // Backfill a single source using source-createdAt-index GSI
+  static async _backfillSource(source) {
+    let processed = 0;
     let lastKey = null;
 
-    // We need one scan here to get unique sources, but it's SELECT specific attributes only
+    console.log(`[MIGRATION] Processing source: ${source}`);
+
     do {
       const params = {
         TableName: TABLE_NAME,
-        ProjectionExpression: '#source',
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source',
         ExpressionAttributeNames: {
           '#source': 'source'
         },
-        Limit: 1000
+        ExpressionAttributeValues: {
+          ':source': source
+        },
+        Limit: 100
       };
 
       if (lastKey) {
         params.ExclusiveStartKey = lastKey;
       }
 
-      const result = await docClient.send(new ScanCommand(params));
-      
-      (result.Items || []).forEach(item => {
-        if (item.source) {
-          sources.add(item.source);
-        }
-      });
+      const result = await docClient.send(new QueryCommand(params));
+
+      // Filter and update records missing datePartition
+      const updates = (result.Items || [])
+        .filter(item => !item.datePartition && item.createdAt)
+        .map(item => {
+          return this.updateByIdNoValidation(item.leadId, {
+            datePartition: this.getDatePartition(item.createdAt)
+          });
+        });
+
+      if (updates.length > 0) {
+        await Promise.all(updates);
+        processed += updates.length;
+        console.log(`  ✓ Updated ${processed} records for ${source}...`);
+      }
       
       lastKey = result.LastEvaluatedKey;
     } while (lastKey);
 
-    return Array.from(sources);
+    console.log(`  ✅ Completed ${source}: ${processed} records\n`);
+    return processed;
   }
 }
 
