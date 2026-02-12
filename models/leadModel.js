@@ -13,7 +13,61 @@ const { v4: uuidv4 } = require('uuid');
 const TABLE_NAME = 'leads';
 
 class Lead {
-  // Validation helper
+  // ============================================================================
+  // HELPER METHODS
+  // ============================================================================
+
+  // Get date partition for GSI (format: "YYYY-MM")
+  static getDatePartition(date) {
+    const d = new Date(date);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  // Get all month partitions between two dates
+  static getMonthPartitions(startDate, endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const partitions = [];
+    
+    let current = new Date(start.getFullYear(), start.getMonth(), 1);
+    const endMonth = new Date(end.getFullYear(), end.getMonth(), 1);
+    
+    while (current <= endMonth) {
+      partitions.push(this.getDatePartition(current));
+      current.setMonth(current.getMonth() + 1);
+    }
+    
+    return partitions;
+  }
+
+  // Calculate age from date of birth
+  static calculateAge(dateOfBirth) {
+    if (!dateOfBirth) return null;
+    const dob = new Date(dateOfBirth);
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const monthDiff = today.getMonth() - dob.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+      age--;
+    }
+    return age;
+  }
+
+  // Get age range category
+  static getAgeRange(age) {
+    if (!age || age < 18) return 'Below 18';
+    if (age >= 18 && age <= 25) return '18-25';
+    if (age >= 26 && age <= 35) return '26-35';
+    if (age >= 36 && age <= 45) return '36-45';
+    if (age >= 46 && age <= 55) return '46-55';
+    if (age >= 56 && age <= 65) return '56-65';
+    return 'Above 65';
+  }
+
+  // ============================================================================
+  // VALIDATION
+  // ============================================================================
+
   static validate(data) {
     const errors = [];
 
@@ -23,9 +77,6 @@ class Lead {
     if (!data.phone) errors.push('Phone is required');
     if (!data.email) errors.push('Email is required');
     if (!data.panNumber) errors.push('PAN number is required');
-    // if (data.consent !== true && data.consent !== false) {
-    //   errors.push('Consent is required');
-    // }
 
     // String length validations
     if (data.fullName && (data.fullName.length < 1 || data.fullName.length > 100)) {
@@ -75,6 +126,10 @@ class Lead {
     }
   }
 
+  // ============================================================================
+  // CRUD OPERATIONS
+  // ============================================================================
+
   // Create lead with uniqueness check
   static async create(leadData) {
     // Validate data
@@ -96,6 +151,7 @@ class Lead {
       throw error;
     }
 
+    const now = new Date().toISOString();
     const item = {
       leadId: uuidv4(),
       source: leadData.source,
@@ -116,7 +172,8 @@ class Lead {
       address: leadData.address || null,
       pincode: leadData.pincode || null,
       consent: leadData.consent,
-      createdAt: new Date().toISOString()
+      createdAt: now,
+      datePartition: this.getDatePartition(now) // For createdAt-index GSI
     };
 
     await docClient.send(new PutCommand({
@@ -218,8 +275,11 @@ class Lead {
     };
   }
 
-  // Find all leads (paginated)
+  // Find all leads (paginated) - DEPRECATED: Use findByDateRange instead
+  // This method is kept for backward compatibility but should be avoided
   static async findAll(options = {}) {
+    console.warn('[DEPRECATED] findAll() uses expensive Scan operation. Use findByDateRange() instead.');
+    
     const { limit = 100, lastEvaluatedKey } = options;
 
     const params = {
@@ -237,6 +297,74 @@ class Lead {
       items: result.Items || [],
       lastEvaluatedKey: result.LastEvaluatedKey
     };
+  }
+
+  // Find by date range using GSI (OPTIMIZED - No Scan)
+  static async findByDateRange(startDate, endDate, options = {}) {
+    const { limit = 1000, lastEvaluatedKey } = options;
+    
+    try {
+      // Get all month partitions in the date range
+      const partitions = this.getMonthPartitions(startDate, endDate);
+      
+      // Query each partition
+      const promises = partitions.map(partition => 
+        this._queryByDatePartition(partition, startDate, endDate, limit)
+      );
+      
+      const results = await Promise.all(promises);
+      const allItems = results.flat();
+      
+      // Apply limit if specified
+      const items = limit ? allItems.slice(0, limit) : allItems;
+      
+      return {
+        items,
+        lastEvaluatedKey: null, // Note: Pagination across partitions needs custom implementation
+        count: items.length
+      };
+    } catch (error) {
+      console.error('Error in findByDateRange:', error);
+      throw error;
+    }
+  }
+
+  // Helper: Query single date partition
+  static async _queryByDatePartition(partition, startDate, endDate, limit = null) {
+    let items = [];
+    let lastKey = null;
+
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'createdAt-index',
+        KeyConditionExpression: 'datePartition = :partition AND createdAt BETWEEN :start AND :end',
+        ExpressionAttributeValues: {
+          ':partition': partition,
+          ':start': startDate,
+          ':end': endDate
+        }
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      if (limit) {
+        params.Limit = limit;
+      }
+
+      const result = await docClient.send(new QueryCommand(params));
+      items = items.concat(result.Items || []);
+      lastKey = result.LastEvaluatedKey;
+      
+      // Break if we've hit the limit
+      if (limit && items.length >= limit) {
+        break;
+      }
+    } while (lastKey);
+
+    return items;
   }
 
   // Update lead
@@ -328,8 +456,11 @@ class Lead {
     return { deleted: true };
   }
 
-  // Query by multiple filters (uses Scan - use sparingly)
+  // Query by multiple filters - DEPRECATED: Use specific GSI queries instead
+  // This method uses expensive Scan and should be avoided
   static async findByFilters(filters = {}, options = {}) {
+    console.warn('[DEPRECATED] findByFilters() uses expensive Scan operation. Use specific GSI queries instead.');
+    
     const { limit = 100 } = options;
 
     const filterExpressions = [];
@@ -374,37 +505,11 @@ class Lead {
     return result.Count || 0;
   }
 
-  // Add these stats functions to your existing Lead model (models/leadModel.js)
-
   // ============================================================================
-  // STATS FUNCTIONS - Add to Lead class
+  // STATISTICS FUNCTIONS (OPTIMIZED)
   // ============================================================================
 
-  // Calculate age from date of birth
-  static calculateAge(dateOfBirth) {
-    if (!dateOfBirth) return null;
-    const dob = new Date(dateOfBirth);
-    const today = new Date();
-    let age = today.getFullYear() - dob.getFullYear();
-    const monthDiff = today.getMonth() - dob.getMonth();
-    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
-      age--;
-    }
-    return age;
-  }
-
-  // Get age range category
-  static getAgeRange(age) {
-    if (!age || age < 18) return 'Below 18';
-    if (age >= 18 && age <= 25) return '18-25';
-    if (age >= 26 && age <= 35) return '26-35';
-    if (age >= 36 && age <= 45) return '36-45';
-    if (age >= 46 && age <= 55) return '46-55';
-    if (age >= 56 && age <= 65) return '56-65';
-    return 'Above 65';
-  }
-
-  // Get quick stats with optional date range
+  // Get quick stats with optional date range (COUNT only - very fast)
   static async getQuickStats(source = null, startDate = null, endDate = null) {
     try {
       if (source && !startDate) {
@@ -416,10 +521,11 @@ class Lead {
           isEstimate: false
         };
       } else if (startDate && endDate) {
-        // Quick count for date range
+        // Quick count for date range using GSI
         return this.getQuickStatsForDateRange(startDate, endDate);
       } else {
-        // Use parallel scan for total count
+        // Use parallel scan for total count (fallback - expensive)
+        console.warn('Full table count requested - this is expensive!');
         return this.getQuickStatsParallel();
       }
     } catch (error) {
@@ -428,21 +534,23 @@ class Lead {
     }
   }
 
-  // Quick count for date range (COUNT only)
+  // Quick count for date range using GSI (OPTIMIZED)
   static async getQuickStatsForDateRange(startDate, endDate) {
-    const segments = 8;
     const startTime = Date.now();
 
     try {
       console.log(`[${TABLE_NAME}] Quick count for date range:`, startDate, 'to', endDate);
 
-      const countPromises = [];
-      for (let segment = 0; segment < segments; segment++) {
-        countPromises.push(this._countSegmentInRange(segment, segments, startDate, endDate));
-      }
+      // Get all month partitions
+      const partitions = this.getMonthPartitions(startDate, endDate);
+      
+      // Count each partition in parallel
+      const countPromises = partitions.map(partition => 
+        this._countDatePartition(partition, startDate, endDate)
+      );
 
       const results = await Promise.all(countPromises);
-      const totalCount = results.reduce((sum, result) => sum + result.count, 0);
+      const totalCount = results.reduce((sum, count) => sum + count, 0);
       const elapsed = Date.now() - startTime;
 
       console.log(`[${TABLE_NAME}] Quick count complete: ${totalCount} items in ${elapsed}ms`);
@@ -451,7 +559,7 @@ class Lead {
         totalLogs: totalCount,
         isEstimate: false,
         scannedInMs: elapsed,
-        method: 'parallel-count',
+        method: 'gsi-query',
         dateRange: { start: startDate, end: endDate }
       };
     } catch (error) {
@@ -460,349 +568,257 @@ class Lead {
     }
   }
 
-  // Helper: Count items in segment for date range
-  static async _countSegmentInRange(segment, totalSegments, startDate, endDate) {
+  // Helper: Count items in date partition
+  static async _countDatePartition(partition, startDate, endDate) {
     let count = 0;
     let lastKey = null;
 
     do {
       const params = {
         TableName: TABLE_NAME,
-        Select: 'COUNT',
-        Segment: segment,
-        TotalSegments: totalSegments,
-        FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
+        IndexName: 'createdAt-index',
+        KeyConditionExpression: 'datePartition = :partition AND createdAt BETWEEN :start AND :end',
         ExpressionAttributeValues: {
-          ':startDate': startDate,
-          ':endDate': endDate
-        }
+          ':partition': partition,
+          ':start': startDate,
+          ':end': endDate
+        },
+        Select: 'COUNT'
       };
 
       if (lastKey) {
         params.ExclusiveStartKey = lastKey;
       }
 
-      const result = await docClient.send(new ScanCommand(params));
+      const result = await docClient.send(new QueryCommand(params));
       count += result.Count || 0;
       lastKey = result.LastEvaluatedKey;
     } while (lastKey);
 
-    console.log(`Count segment ${segment}/${totalSegments}: ${count} items`);
-    return { segment, count };
+    console.log(`Count partition ${partition}: ${count} items`);
+    return count;
   }
 
-  // Parallel scan for total count
+  // Parallel scan for total count (DISABLED - Too expensive)
   static async getQuickStatsParallel() {
-    const segments = 8;
-    const startTime = Date.now();
-
-    try {
-      console.log(`Starting parallel scan with ${segments} segments for ${TABLE_NAME}`);
-
-      const scanPromises = [];
-      for (let segment = 0; segment < segments; segment++) {
-        scanPromises.push(this._scanSegment(segment, segments));
-      }
-
-      const results = await Promise.all(scanPromises);
-      const totalCount = results.reduce((sum, result) => sum + result.count, 0);
-      const elapsed = Date.now() - startTime;
-
-      console.log(`Parallel scan complete: ${totalCount} items in ${elapsed}ms`);
-
-      return {
-        totalLogs: totalCount,
-        isEstimate: false,
-        scannedInMs: elapsed,
-        method: 'parallel'
-      };
-    } catch (error) {
-      console.error('Error in parallel scan:', error);
-      throw error;
-    }
+    throw new Error('Full table scans are disabled for cost optimization. Please provide a date range to getQuickStats(source, startDate, endDate).');
   }
 
-  // Helper method for parallel scanning
-  static async _scanSegment(segment, totalSegments) {
-    let count = 0;
-    let lastKey = null;
-
-    do {
-      const params = {
-        TableName: TABLE_NAME,
-        Select: 'COUNT',
-        Segment: segment,
-        TotalSegments: totalSegments
-      };
-
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
-
-      const result = await docClient.send(new ScanCommand(params));
-      count += result.Count || 0;
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
-
-    console.log(`Segment ${segment}/${totalSegments} complete: ${count} items`);
-    return { segment, count };
-  }
-
-  // Get comprehensive stats (OPTIMIZED for date ranges)
+  // Get comprehensive stats (OPTIMIZED for date ranges using GSI)
   static async getStats(startDate = null, endDate = null) {
-    let allItems = [];
     const startTime = Date.now();
+
+    // REQUIRE date range to prevent expensive full table scans
+    if (!startDate || !endDate) {
+      throw new Error('getStats() requires startDate and endDate parameters. Full table scans are disabled for cost optimization. Use getQuickStats() for simple counts or provide a date range.');
+    }
 
     console.log(`[${TABLE_NAME}] Starting stats fetch for date range:`, startDate, 'to', endDate);
 
     try {
-      // Use parallel scan with date filter
-      if (startDate && endDate) {
-        const segments = 8;
-        const scanPromises = [];
+      // Use GSI to query by date range (OPTIMIZED)
+      const partitions = this.getMonthPartitions(startDate, endDate);
+      
+      const promises = partitions.map(partition => 
+        this._queryByDatePartition(partition, startDate, endDate)
+      );
+      
+      const results = await Promise.all(promises);
+      const allItems = results.flat();
+      
+      console.log(`[${TABLE_NAME}] GSI query complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
 
-        for (let segment = 0; segment < segments; segment++) {
-          scanPromises.push(this._scanSegmentWithFilter(segment, segments, startDate, endDate));
-        }
-
-        const results = await Promise.all(scanPromises);
-        allItems = results.flat();
-
-        console.log(`[${TABLE_NAME}] Parallel filtered scan complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
-      } else {
-        // No date filter - regular scan
-        let lastKey = null;
-        do {
-          const params = {
-            TableName: TABLE_NAME,
-            Limit: 1000
-          };
-
-          if (lastKey) {
-            params.ExclusiveStartKey = lastKey;
-          }
-
-          const result = await docClient.send(new ScanCommand(params));
-          allItems = allItems.concat(result.Items || []);
-          lastKey = result.LastEvaluatedKey;
-        } while (lastKey);
-      }
-
-      // Track unique phones and PANs for duplicate detection
-      const seenPhones = new Set();
-      const seenPans = new Set();
-      const duplicatePhones = new Set();
-      const duplicatePans = new Set();
-
-      // First pass - identify duplicates
-      allItems.forEach(item => {
-        if (item.phone) {
-          if (seenPhones.has(item.phone)) {
-            duplicatePhones.add(item.phone);
-          }
-          seenPhones.add(item.phone);
-        }
-        if (item.panNumber) {
-          if (seenPans.has(item.panNumber)) {
-            duplicatePans.add(item.panNumber);
-          }
-          seenPans.add(item.panNumber);
-        }
-      });
-
-      // Initialize stats
-      const stats = {
-        totalLogs: allItems.length,
-        uniqueLeads: 0,
-        duplicateLeads: 0,
-        duplicateByPhone: duplicatePhones.size,
-        duplicateByPan: duplicatePans.size,
-        dateRange: {
-          start: startDate,
-          end: endDate
-        },
-        sourceBreakdown: {},
-        genderBreakdown: {
-          'Male': 0,
-          'Female': 0,
-          'Other': 0,
-          'Unknown': 0
-        },
-        ageRangeBreakdown: {
-          'Below 18': 0,
-          '18-25': 0,
-          '26-35': 0,
-          '36-45': 0,
-          '46-55': 0,
-          '56-65': 0,
-          'Above 65': 0,
-          'Unknown': 0
-        },
-        jobTypeBreakdown: {},
-        businessTypeBreakdown: {},
-        salaryRangeBreakdown: {
-          'Below 20k': 0,
-          '20k-40k': 0,
-          '40k-60k': 0,
-          '60k-80k': 0,
-          '80k-100k': 0,
-          'Above 100k': 0,
-          'Unknown': 0
-        },
-        creditScoreBreakdown: {
-          'Poor (300-579)': 0,
-          'Fair (580-669)': 0,
-          'Good (670-739)': 0,
-          'Very Good (740-799)': 0,
-          'Excellent (800-900)': 0,
-          'Unknown': 0
-        },
-        consentBreakdown: {
-          'true': 0,
-          'false': 0,
-          'unknown': 0
-        }
-      };
-
-      // Second pass - process stats
-      allItems.forEach(item => {
-        // Check if lead is duplicate
-        const isDuplicate = duplicatePhones.has(item.phone) || duplicatePans.has(item.panNumber);
-        if (isDuplicate) {
-          stats.duplicateLeads++;
-        } else {
-          stats.uniqueLeads++;
-        }
-
-        // Source breakdown
-        const source = item.source || 'unknown';
-        stats.sourceBreakdown[source] = (stats.sourceBreakdown[source] || 0) + 1;
-
-        // Gender breakdown
-        const gender = item.gender || 'Unknown';
-        if (stats.genderBreakdown[gender] !== undefined) {
-          stats.genderBreakdown[gender]++;
-        } else {
-          stats.genderBreakdown['Other']++;
-        }
-
-        // Age range breakdown (calculated from DOB)
-        let age = item.age;
-        if (!age && item.dateOfBirth) {
-          age = this.calculateAge(item.dateOfBirth);
-        }
-        const ageRange = age ? this.getAgeRange(age) : 'Unknown';
-        stats.ageRangeBreakdown[ageRange]++;
-
-        // Job type breakdown
-        if (item.jobType) {
-          stats.jobTypeBreakdown[item.jobType] = (stats.jobTypeBreakdown[item.jobType] || 0) + 1;
-        }
-
-        // Business type breakdown
-        if (item.businessType) {
-          stats.businessTypeBreakdown[item.businessType] = (stats.businessTypeBreakdown[item.businessType] || 0) + 1;
-        }
-
-        // Salary range breakdown
-        if (item.salary) {
-          const salary = parseInt(item.salary);
-          if (salary < 20000) {
-            stats.salaryRangeBreakdown['Below 20k']++;
-          } else if (salary < 40000) {
-            stats.salaryRangeBreakdown['20k-40k']++;
-          } else if (salary < 60000) {
-            stats.salaryRangeBreakdown['40k-60k']++;
-          } else if (salary < 80000) {
-            stats.salaryRangeBreakdown['60k-80k']++;
-          } else if (salary < 100000) {
-            stats.salaryRangeBreakdown['80k-100k']++;
-          } else {
-            stats.salaryRangeBreakdown['Above 100k']++;
-          }
-        } else {
-          stats.salaryRangeBreakdown['Unknown']++;
-        }
-
-        // Credit score breakdown
-        if (item.creditScore || item.cibilScore) {
-          const score = item.creditScore || item.cibilScore;
-          if (score < 580) {
-            stats.creditScoreBreakdown['Poor (300-579)']++;
-          } else if (score < 670) {
-            stats.creditScoreBreakdown['Fair (580-669)']++;
-          } else if (score < 740) {
-            stats.creditScoreBreakdown['Good (670-739)']++;
-          } else if (score < 800) {
-            stats.creditScoreBreakdown['Very Good (740-799)']++;
-          } else {
-            stats.creditScoreBreakdown['Excellent (800-900)']++;
-          }
-        } else {
-          stats.creditScoreBreakdown['Unknown']++;
-        }
-
-        // Consent breakdown
-        const consent = item.consent === true ? 'true' : item.consent === false ? 'false' : 'unknown';
-        stats.consentBreakdown[consent]++;
-      });
-
-      const elapsed = Date.now() - startTime;
-      console.log(`[${TABLE_NAME}] Stats processing complete in ${elapsed}ms`);
-      stats.processingTimeMs = elapsed;
-
-      return stats;
+      // Process stats data
+      return this.processStatsData(allItems, startDate, endDate, startTime);
+      
     } catch (error) {
       console.error('Error in getStats:', error);
       throw error;
     }
   }
 
-  // Helper: Parallel scan with date filter
-  static async _scanSegmentWithFilter(segment, totalSegments, startDate, endDate) {
-    let items = [];
-    let lastKey = null;
+  // Process stats data (extracted for reusability)
+  static processStatsData(allItems, startDate, endDate, startTime) {
+    // Track unique phones and PANs for duplicate detection
+    const seenPhones = new Set();
+    const seenPans = new Set();
+    const duplicatePhones = new Set();
+    const duplicatePans = new Set();
 
-    do {
-      const params = {
-        TableName: TABLE_NAME,
-        Segment: segment,
-        TotalSegments: totalSegments,
-        FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
-        ExpressionAttributeValues: {
-          ':startDate': startDate,
-          ':endDate': endDate
+    // First pass - identify duplicates
+    allItems.forEach(item => {
+      if (item.phone) {
+        if (seenPhones.has(item.phone)) {
+          duplicatePhones.add(item.phone);
         }
-      };
+        seenPhones.add(item.phone);
+      }
+      if (item.panNumber) {
+        if (seenPans.has(item.panNumber)) {
+          duplicatePans.add(item.panNumber);
+        }
+        seenPans.add(item.panNumber);
+      }
+    });
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
+    // Initialize stats
+    const stats = {
+      totalLogs: allItems.length,
+      uniqueLeads: 0,
+      duplicateLeads: 0,
+      duplicateByPhone: duplicatePhones.size,
+      duplicateByPan: duplicatePans.size,
+      dateRange: {
+        start: startDate,
+        end: endDate
+      },
+      sourceBreakdown: {},
+      genderBreakdown: {
+        'Male': 0,
+        'Female': 0,
+        'Other': 0,
+        'Unknown': 0
+      },
+      ageRangeBreakdown: {
+        'Below 18': 0,
+        '18-25': 0,
+        '26-35': 0,
+        '36-45': 0,
+        '46-55': 0,
+        '56-65': 0,
+        'Above 65': 0,
+        'Unknown': 0
+      },
+      jobTypeBreakdown: {},
+      businessTypeBreakdown: {},
+      salaryRangeBreakdown: {
+        'Below 20k': 0,
+        '20k-40k': 0,
+        '40k-60k': 0,
+        '60k-80k': 0,
+        '80k-100k': 0,
+        'Above 100k': 0,
+        'Unknown': 0
+      },
+      creditScoreBreakdown: {
+        'Poor (300-579)': 0,
+        'Fair (580-669)': 0,
+        'Good (670-739)': 0,
+        'Very Good (740-799)': 0,
+        'Excellent (800-900)': 0,
+        'Unknown': 0
+      },
+      consentBreakdown: {
+        'true': 0,
+        'false': 0,
+        'unknown': 0
+      }
+    };
+
+    // Second pass - process stats
+    allItems.forEach(item => {
+      // Check if lead is duplicate
+      const isDuplicate = duplicatePhones.has(item.phone) || duplicatePans.has(item.panNumber);
+      if (isDuplicate) {
+        stats.duplicateLeads++;
+      } else {
+        stats.uniqueLeads++;
       }
 
-      const result = await docClient.send(new ScanCommand(params));
-      items = items.concat(result.Items || []);
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
+      // Source breakdown
+      const source = item.source || 'unknown';
+      stats.sourceBreakdown[source] = (stats.sourceBreakdown[source] || 0) + 1;
 
-    console.log(`Segment ${segment}/${totalSegments} complete: ${items.length} items`);
-    return items;
+      // Gender breakdown
+      const gender = item.gender || 'Unknown';
+      if (stats.genderBreakdown[gender] !== undefined) {
+        stats.genderBreakdown[gender]++;
+      } else {
+        stats.genderBreakdown['Other']++;
+      }
+
+      // Age range breakdown (calculated from DOB)
+      let age = item.age;
+      if (!age && item.dateOfBirth) {
+        age = this.calculateAge(item.dateOfBirth);
+      }
+      const ageRange = age ? this.getAgeRange(age) : 'Unknown';
+      stats.ageRangeBreakdown[ageRange]++;
+
+      // Job type breakdown
+      if (item.jobType) {
+        stats.jobTypeBreakdown[item.jobType] = (stats.jobTypeBreakdown[item.jobType] || 0) + 1;
+      }
+
+      // Business type breakdown
+      if (item.businessType) {
+        stats.businessTypeBreakdown[item.businessType] = (stats.businessTypeBreakdown[item.businessType] || 0) + 1;
+      }
+
+      // Salary range breakdown
+      if (item.salary) {
+        const salary = parseInt(item.salary);
+        if (salary < 20000) {
+          stats.salaryRangeBreakdown['Below 20k']++;
+        } else if (salary < 40000) {
+          stats.salaryRangeBreakdown['20k-40k']++;
+        } else if (salary < 60000) {
+          stats.salaryRangeBreakdown['40k-60k']++;
+        } else if (salary < 80000) {
+          stats.salaryRangeBreakdown['60k-80k']++;
+        } else if (salary < 100000) {
+          stats.salaryRangeBreakdown['80k-100k']++;
+        } else {
+          stats.salaryRangeBreakdown['Above 100k']++;
+        }
+      } else {
+        stats.salaryRangeBreakdown['Unknown']++;
+      }
+
+      // Credit score breakdown
+      if (item.creditScore || item.cibilScore) {
+        const score = item.creditScore || item.cibilScore;
+        if (score < 580) {
+          stats.creditScoreBreakdown['Poor (300-579)']++;
+        } else if (score < 670) {
+          stats.creditScoreBreakdown['Fair (580-669)']++;
+        } else if (score < 740) {
+          stats.creditScoreBreakdown['Good (670-739)']++;
+        } else if (score < 800) {
+          stats.creditScoreBreakdown['Very Good (740-799)']++;
+        } else {
+          stats.creditScoreBreakdown['Excellent (800-900)']++;
+        }
+      } else {
+        stats.creditScoreBreakdown['Unknown']++;
+      }
+
+      // Consent breakdown
+      const consent = item.consent === true ? 'true' : item.consent === false ? 'false' : 'unknown';
+      stats.consentBreakdown[consent]++;
+    });
+
+    const elapsed = Date.now() - startTime;
+    console.log(`[${TABLE_NAME}] Stats processing complete in ${elapsed}ms`);
+    stats.processingTimeMs = elapsed;
+
+    return stats;
   }
 
-  // Get stats grouped by date (OPTIMIZED)
+  // Get stats grouped by date (OPTIMIZED using GSI)
   static async getStatsByDate(startDate, endDate) {
     const startTime = Date.now();
     console.log(`[${TABLE_NAME}] Fetching stats by date:`, startDate, 'to', endDate);
 
     try {
-      // Use parallel scan
-      const segments = 8;
-      const scanPromises = [];
-
-      for (let segment = 0; segment < segments; segment++) {
-        scanPromises.push(this._scanSegmentWithFilter(segment, segments, startDate, endDate));
-      }
-
-      const results = await Promise.all(scanPromises);
+      // Use GSI to query by date range
+      const partitions = this.getMonthPartitions(startDate, endDate);
+      
+      const promises = partitions.map(partition => 
+        this._queryByDatePartition(partition, startDate, endDate)
+      );
+      
+      const results = await Promise.all(promises);
       const allItems = results.flat();
 
       console.log(`[${TABLE_NAME}] Fetched ${allItems.length} items in ${Date.now() - startTime}ms`);
@@ -868,29 +884,106 @@ class Lead {
     }
   }
 
-  // Get logs by date range
-  static async findByDateRange(startDate, endDate, options = {}) {
-    const { limit = 100, lastEvaluatedKey } = options;
+  // ============================================================================
+  // MIGRATION / UTILITY FUNCTIONS
+  // ============================================================================
 
-    const params = {
-      TableName: TABLE_NAME,
-      FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
-      ExpressionAttributeValues: {
-        ':startDate': startDate,
-        ':endDate': endDate
-      },
-      Limit: limit
-    };
+  // Backfill datePartition for existing records (Run once after adding createdAt-index GSI)
+  // Uses source-createdAt-index to avoid full table scan
+  static async backfillDatePartitions(source = null) {
+    let processed = 0;
+    
+    console.log('[MIGRATION] Starting datePartition backfill...');
 
-    if (lastEvaluatedKey) {
-      params.ExclusiveStartKey = lastEvaluatedKey;
+    if (source) {
+      // Backfill specific source using GSI
+      let lastKey = null;
+      
+      do {
+        const params = {
+          TableName: TABLE_NAME,
+          IndexName: 'source-createdAt-index',
+          KeyConditionExpression: '#source = :source',
+          ExpressionAttributeNames: {
+            '#source': 'source'
+          },
+          ExpressionAttributeValues: {
+            ':source': source
+          },
+          Limit: 100
+        };
+
+        if (lastKey) {
+          params.ExclusiveStartKey = lastKey;
+        }
+
+        const result = await docClient.send(new QueryCommand(params));
+
+        const updates = (result.Items || [])
+          .filter(item => !item.datePartition && item.createdAt)
+          .map(item => {
+            return this.updateByIdNoValidation(item.leadId, {
+              datePartition: this.getDatePartition(item.createdAt)
+            });
+          });
+
+        if (updates.length > 0) {
+          await Promise.all(updates);
+          processed += updates.length;
+          console.log(`[MIGRATION] Backfilled ${processed} items for source: ${source}...`);
+        }
+        
+        lastKey = result.LastEvaluatedKey;
+      } while (lastKey);
+    } else {
+      // Get all unique sources first
+      console.log('[MIGRATION] Getting all sources...');
+      const sources = await this.getAllSources();
+      
+      console.log(`[MIGRATION] Found ${sources.length} sources. Processing each...`);
+      
+      // Process each source
+      for (const sourceValue of sources) {
+        await this.backfillDatePartitions(sourceValue);
+      }
     }
 
-    const result = await docClient.send(new ScanCommand(params));
-    return {
-      items: result.Items || [],
-      lastEvaluatedKey: result.LastEvaluatedKey
-    };
+    console.log(`[MIGRATION] Backfill complete: ${processed} items updated`);
+    return { processed };
+  }
+
+  // Get all unique sources (helper for backfill)
+  static async getAllSources() {
+    const sources = new Set();
+    let lastKey = null;
+
+    // We need one scan here to get unique sources, but it's SELECT specific attributes only
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        ProjectionExpression: '#source',
+        ExpressionAttributeNames: {
+          '#source': 'source'
+        },
+        Limit: 1000
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      const result = await docClient.send(new ScanCommand(params));
+      
+      (result.Items || []).forEach(item => {
+        if (item.source) {
+          sources.add(item.source);
+        }
+      });
+      
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    return Array.from(sources);
   }
 }
 
