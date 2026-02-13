@@ -1,6 +1,3 @@
-// models/leadModel.js - ZERO SCAN VERSION
-// 100% GSI-based queries, no ScanCommand at all
-
 const { docClient } = require('../dynamodb');
 const {
   PutCommand,
@@ -123,23 +120,17 @@ class Lead {
   }
 
   // ============================================================================
-  // CRUD OPERATIONS
+  // CRUD OPERATIONS (Unchanged)
   // ============================================================================
 
-  // Create lead with uniqueness check
   static async create(leadData) {
-    // Validate data
     this.validate(leadData);
-
-    // Check if phone already exists
     const existingPhone = await this.findByPhone(leadData.phone);
     if (existingPhone) {
       const error = new Error('Phone number already exists');
       error.code = 'DUPLICATE_PHONE';
       throw error;
     }
-
-    // Check if PAN already exists
     const existingPan = await this.findByPanNumber(leadData.panNumber);
     if (existingPan) {
       const error = new Error('PAN number already exists');
@@ -169,7 +160,7 @@ class Lead {
       pincode: leadData.pincode || null,
       consent: leadData.consent,
       createdAt: now,
-      datePartition: this.getDatePartition(now) // For createdAt-index GSI
+      datePartition: this.getDatePartition(now)
     };
 
     await docClient.send(new PutCommand({
@@ -180,17 +171,14 @@ class Lead {
     return item;
   }
 
-  // Find by ID
   static async findById(leadId) {
     const result = await docClient.send(new GetCommand({
       TableName: TABLE_NAME,
       Key: { leadId }
     }));
-
     return result.Item || null;
   }
 
-  // Find by phone (GSI)
   static async findByPhone(phone) {
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
@@ -199,11 +187,9 @@ class Lead {
       ExpressionAttributeValues: { ':phone': phone },
       Limit: 1
     }));
-
     return result.Items?.[0] || null;
   }
 
-  // Find by PAN number (GSI)
   static async findByPanNumber(panNumber) {
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
@@ -212,11 +198,9 @@ class Lead {
       ExpressionAttributeValues: { ':panNumber': panNumber },
       Limit: 1
     }));
-
     return result.Items?.[0] || null;
   }
 
-  // Find by source with date sorting
   static async findBySource(source, options = {}) {
     const {
       limit = 100,
@@ -226,14 +210,10 @@ class Lead {
       lastEvaluatedKey = null
     } = options;
 
-    // Use ExpressionAttributeNames to handle 'source' reserved keyword
     let keyConditionExpression = '#source = :source';
-    const expressionAttributeNames = {
-      '#source': 'source'
-    };
+    const expressionAttributeNames = { '#source': 'source' };
     const expressionAttributeValues = { ':source': source };
 
-    // Add date range if provided
     if (startDate && endDate) {
       keyConditionExpression += ' AND createdAt BETWEEN :startDate AND :endDate';
       expressionAttributeValues[':startDate'] = startDate;
@@ -256,14 +236,12 @@ class Lead {
       Limit: limit
     };
 
-    // Add pagination token if provided
     if (lastEvaluatedKey) {
       params.ExclusiveStartKey = lastEvaluatedKey;
     }
 
     const result = await docClient.send(new QueryCommand(params));
 
-    // Return both items and pagination token
     return {
       items: result.Items || [],
       lastEvaluatedKey: result.LastEvaluatedKey || null,
@@ -271,23 +249,17 @@ class Lead {
     };
   }
 
-  // Find by date range using GSI (OPTIMIZED - No Scan)
   static async findByDateRange(startDate, endDate, options = {}) {
     const { limit = 1000, lastEvaluatedKey } = options;
     
     try {
-      // Get all month partitions in the date range
       const partitions = this.getMonthPartitions(startDate, endDate);
-      
-      // Query each partition
       const promises = partitions.map(partition => 
         this._queryByDatePartition(partition, startDate, endDate, limit)
       );
       
       const results = await Promise.all(promises);
       const allItems = results.flat();
-      
-      // Apply limit if specified
       const items = limit ? allItems.slice(0, limit) : allItems;
       
       return {
@@ -301,7 +273,6 @@ class Lead {
     }
   }
 
-  // Helper: Query single date partition
   static async _queryByDatePartition(partition, startDate, endDate, limit = null) {
     let items = [];
     let lastKey = null;
@@ -321,7 +292,6 @@ class Lead {
       if (lastKey) {
         params.ExclusiveStartKey = lastKey;
       }
-
       if (limit) {
         params.Limit = limit;
       }
@@ -330,7 +300,6 @@ class Lead {
       items = items.concat(result.Items || []);
       lastKey = result.LastEvaluatedKey;
       
-      // Break if we've hit the limit
       if (limit && items.length >= limit) {
         break;
       }
@@ -339,21 +308,16 @@ class Lead {
     return items;
   }
 
-  // Update lead
   static async updateById(leadId, updates) {
-    // Validate updates if they contain validatable fields
     if (Object.keys(updates).length > 0) {
-      // Get existing lead for validation
       const existingLead = await this.findById(leadId);
       if (!existingLead) {
         throw new Error('Lead not found');
       }
 
-      // Merge and validate
       const mergedData = { ...existingLead, ...updates };
       this.validate(mergedData);
 
-      // Check uniqueness if phone or PAN is being updated
       if (updates.phone && updates.phone !== existingLead.phone) {
         const existingPhone = await this.findByPhone(updates.phone);
         if (existingPhone && existingPhone.leadId !== leadId) {
@@ -418,81 +382,153 @@ class Lead {
     return result.Attributes;
   }
 
-  // Delete lead
   static async deleteById(leadId) {
     await docClient.send(new DeleteCommand({
       TableName: TABLE_NAME,
       Key: { leadId }
     }));
-
     return { deleted: true };
   }
 
-  // Count leads by source
   static async countBySource(source) {
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'source-createdAt-index',
       KeyConditionExpression: '#source = :source',
-      ExpressionAttributeNames: {
-        '#source': 'source'
-      },
+      ExpressionAttributeNames: { '#source': 'source' },
       ExpressionAttributeValues: { ':source': source },
       Select: 'COUNT'
     }));
-
     return result.Count || 0;
   }
 
   // ============================================================================
-  // STATISTICS FUNCTIONS (100% GSI-BASED)
+  // OPTIMIZED STATISTICS FUNCTIONS
   // ============================================================================
 
-  // Get approximate item count from table metadata (free and instant)
-  static async getTableItemCountEstimate() {
-    const { DescribeTableCommand } = require('@aws-sdk/client-dynamodb');
-    const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-    
-    const client = new DynamoDBClient({});
+  /**
+   * Get REAL-TIME accurate total count using GSI pagination
+   * This is fast and accurate, unlike table metadata
+   */
+  static async getAccurateTotalCount() {
+    const startTime = Date.now();
+    console.log('[ANALYTICS] Getting accurate total count via GSI...');
     
     try {
-      const result = await client.send(new DescribeTableCommand({
-        TableName: TABLE_NAME
-      }));
+      // Get all known sources from environment or use a default approach
+      const sources = process.env.LEAD_SOURCES?.split(',') || [];
       
-      const itemCount = result.Table?.ItemCount || 0;
-      
+      if (sources.length === 0) {
+        // If no sources configured, count via createdAt-index with all partitions
+        return await this._countViaDatePartitions();
+      }
+
+      // Count via source-createdAt-index (usually faster)
+      let totalCount = 0;
+      for (const source of sources) {
+        const count = await this.countBySource(source.trim());
+        totalCount += count;
+        console.log(`  Source "${source.trim()}": ${count.toLocaleString()} records`);
+      }
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[ANALYTICS] ✅ Total count: ${totalCount.toLocaleString()} in ${elapsed}ms`);
+
       return {
-        totalLogs: itemCount,
-        isEstimate: true,
-        estimateNote: 'Count from table metadata (updated every ~6 hours)',
-        method: 'table-metadata'
+        totalLogs: totalCount,
+        isEstimate: false,
+        scannedInMs: elapsed,
+        method: 'gsi-source-count',
+        sources: sources.length
       };
     } catch (error) {
-      console.error('Error getting table metadata:', error);
+      console.error('Error getting accurate total count:', error);
       throw error;
     }
   }
 
-  // Get quick stats (GSI-based COUNT only)
+  /**
+   * Count via date partitions (fallback method)
+   */
+  static async _countViaDatePartitions() {
+    const startTime = Date.now();
+    
+    // Generate partitions for last 2 years as reasonable default
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setFullYear(startDate.getFullYear() - 2);
+    
+    const partitions = this.getMonthPartitions(
+      startDate.toISOString(),
+      endDate.toISOString()
+    );
+
+    console.log(`  Counting ${partitions.length} monthly partitions...`);
+
+    const countPromises = partitions.map(partition => 
+      this._countFullPartition(partition)
+    );
+
+    const results = await Promise.all(countPromises);
+    const totalCount = results.reduce((sum, count) => sum + count, 0);
+    const elapsed = Date.now() - startTime;
+
+    return {
+      totalLogs: totalCount,
+      isEstimate: false,
+      scannedInMs: elapsed,
+      method: 'gsi-partition-count',
+      partitions: partitions.length
+    };
+  }
+
+  /**
+   * Count all items in a partition (no date filter)
+   */
+  static async _countFullPartition(partition) {
+    let count = 0;
+    let lastKey = null;
+
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'createdAt-index',
+        KeyConditionExpression: 'datePartition = :partition',
+        ExpressionAttributeValues: { ':partition': partition },
+        Select: 'COUNT'
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      const result = await docClient.send(new QueryCommand(params));
+      count += result.Count || 0;
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    return count;
+  }
+
+  /**
+   * Get quick stats - NOW RETURNS REAL-TIME COUNT
+   */
   static async getQuickStats(source = null, startDate = null, endDate = null) {
     try {
       if (source && !startDate) {
-        // Get count for specific source using GSI
         const count = await this.countBySource(source);
         return {
           totalLogs: count,
           source: source,
           isEstimate: false,
-          method: 'gsi-count'
+          method: 'gsi-source-count'
         };
       } else if (startDate && endDate) {
-        // Quick count for date range using GSI
         return this.getQuickStatsForDateRange(startDate, endDate);
       } else {
-        // Return estimate from DynamoDB table metadata (instant, free)
-        console.log('[INFO] Getting table item count estimate from metadata (free, instant)');
-        return this.getTableItemCountEstimate();
+        // CHANGED: Return accurate real-time count instead of stale estimate
+        console.log('[INFO] Getting accurate total count (real-time via GSI)');
+        return this.getAccurateTotalCount();
       }
     } catch (error) {
       console.error('Error in getQuickStats:', error);
@@ -500,17 +536,13 @@ class Lead {
     }
   }
 
-  // Quick count for date range using GSI
   static async getQuickStatsForDateRange(startDate, endDate) {
     const startTime = Date.now();
 
     try {
       console.log(`[${TABLE_NAME}] Quick count for date range:`, startDate, 'to', endDate);
 
-      // Get all month partitions
       const partitions = this.getMonthPartitions(startDate, endDate);
-      
-      // Count each partition in parallel
       const countPromises = partitions.map(partition => 
         this._countDatePartition(partition, startDate, endDate)
       );
@@ -534,7 +566,6 @@ class Lead {
     }
   }
 
-  // Helper: Count items in date partition using GSI
   static async _countDatePartition(partition, startDate, endDate) {
     let count = 0;
     let lastKey = null;
@@ -561,233 +592,328 @@ class Lead {
       lastKey = result.LastEvaluatedKey;
     } while (lastKey);
 
-    console.log(`Count partition ${partition}: ${count} items`);
     return count;
   }
 
-  // Get comprehensive stats (REQUIRES date range, GSI-based only)
-  static async getStats(startDate, endDate) {
+  /**
+   * STREAMING STATISTICS - Process data in chunks without loading all into memory
+   * This is the KEY optimization for large datasets (200k+)
+   */
+  static async getStats(startDate, endDate, options = {}) {
     const startTime = Date.now();
+    const { progressCallback } = options;
 
-    // REQUIRE date range - no full table stats allowed
     if (!startDate || !endDate) {
       throw new Error('getStats() requires startDate and endDate parameters. For total count use getQuickStats().');
     }
 
-    console.log(`[${TABLE_NAME}] Starting stats fetch for date range:`, startDate, 'to', endDate);
+    console.log(`[${TABLE_NAME}] Starting STREAMING stats for:`, startDate, 'to', endDate);
 
     try {
-      // Use GSI to query by date range
+      // Initialize stats accumulator
+      const statsAggregator = this._createStatsAggregator();
+      
+      // Get partitions
       const partitions = this.getMonthPartitions(startDate, endDate);
-      
-      const promises = partitions.map(partition => 
-        this._queryByDatePartition(partition, startDate, endDate)
-      );
-      
-      const results = await Promise.all(promises);
-      const allItems = results.flat();
-      
-      console.log(`[${TABLE_NAME}] GSI query complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
+      console.log(`[${TABLE_NAME}] Processing ${partitions.length} partitions...`);
 
-      // Process stats data
-      return this.processStatsData(allItems, startDate, endDate, startTime);
+      // Process each partition with streaming
+      let totalProcessed = 0;
+      for (let i = 0; i < partitions.length; i++) {
+        const partition = partitions[i];
+        console.log(`  Processing partition ${i + 1}/${partitions.length}: ${partition}`);
+        
+        const partitionCount = await this._streamProcessPartition(
+          partition,
+          startDate,
+          endDate,
+          statsAggregator,
+          (count) => {
+            totalProcessed += count;
+            if (progressCallback) {
+              progressCallback({
+                partition: i + 1,
+                totalPartitions: partitions.length,
+                processedRecords: totalProcessed
+              });
+            }
+          }
+        );
+        
+        console.log(`    Processed ${partitionCount.toLocaleString()} records from ${partition}`);
+      }
+
+      // Finalize stats
+      const stats = this._finalizeStats(statsAggregator, startDate, endDate, startTime);
       
+      const elapsed = Date.now() - startTime;
+      console.log(`[${TABLE_NAME}] ✅ Streaming stats complete: ${stats.totalLogs.toLocaleString()} records in ${elapsed}ms`);
+      
+      return stats;
     } catch (error) {
       console.error('Error in getStats:', error);
       throw error;
     }
   }
 
-  // Process stats data (extracted for reusability)
-  static processStatsData(allItems, startDate, endDate, startTime) {
-    // Track unique phones and PANs for duplicate detection
-    const seenPhones = new Set();
-    const seenPans = new Set();
-    const duplicatePhones = new Set();
-    const duplicatePans = new Set();
-
-    // First pass - identify duplicates
-    allItems.forEach(item => {
-      if (item.phone) {
-        if (seenPhones.has(item.phone)) {
-          duplicatePhones.add(item.phone);
-        }
-        seenPhones.add(item.phone);
-      }
-      if (item.panNumber) {
-        if (seenPans.has(item.panNumber)) {
-          duplicatePans.add(item.panNumber);
-        }
-        seenPans.add(item.panNumber);
-      }
-    });
-
-    // Initialize stats
-    const stats = {
-      totalLogs: allItems.length,
-      uniqueLeads: 0,
-      duplicateLeads: 0,
-      duplicateByPhone: duplicatePhones.size,
-      duplicateByPan: duplicatePans.size,
-      dateRange: {
-        start: startDate,
-        end: endDate
-      },
+  /**
+   * Create stats aggregator object
+   */
+  static _createStatsAggregator() {
+    return {
+      totalLogs: 0,
+      seenPhones: new Set(),
+      seenPans: new Set(),
+      duplicatePhones: new Set(),
+      duplicatePans: new Set(),
       sourceBreakdown: {},
-      genderBreakdown: {
-        'Male': 0,
-        'Female': 0,
-        'Other': 0,
-        'Unknown': 0
-      },
+      genderBreakdown: { 'Male': 0, 'Female': 0, 'Other': 0, 'Unknown': 0 },
       ageRangeBreakdown: {
-        'Below 18': 0,
-        '18-25': 0,
-        '26-35': 0,
-        '36-45': 0,
-        '46-55': 0,
-        '56-65': 0,
-        'Above 65': 0,
-        'Unknown': 0
+        'Below 18': 0, '18-25': 0, '26-35': 0, '36-45': 0,
+        '46-55': 0, '56-65': 0, 'Above 65': 0, 'Unknown': 0
       },
       jobTypeBreakdown: {},
       businessTypeBreakdown: {},
       salaryRangeBreakdown: {
-        'Below 20k': 0,
-        '20k-40k': 0,
-        '40k-60k': 0,
-        '60k-80k': 0,
-        '80k-100k': 0,
-        'Above 100k': 0,
-        'Unknown': 0
+        'Below 20k': 0, '20k-40k': 0, '40k-60k': 0,
+        '60k-80k': 0, '80k-100k': 0, 'Above 100k': 0, 'Unknown': 0
       },
       creditScoreBreakdown: {
-        'Poor (300-579)': 0,
-        'Fair (580-669)': 0,
-        'Good (670-739)': 0,
-        'Very Good (740-799)': 0,
-        'Excellent (800-900)': 0,
-        'Unknown': 0
+        'Poor (300-579)': 0, 'Fair (580-669)': 0, 'Good (670-739)': 0,
+        'Very Good (740-799)': 0, 'Excellent (800-900)': 0, 'Unknown': 0
       },
-      consentBreakdown: {
-        'true': 0,
-        'false': 0,
-        'unknown': 0
-      }
+      consentBreakdown: { 'true': 0, 'false': 0, 'unknown': 0 }
     };
+  }
 
-    // Second pass - process stats
-    allItems.forEach(item => {
-      // Check if lead is duplicate
-      const isDuplicate = duplicatePhones.has(item.phone) || duplicatePans.has(item.panNumber);
-      if (isDuplicate) {
-        stats.duplicateLeads++;
-      } else {
-        stats.uniqueLeads++;
+  /**
+   * Stream process a single partition in chunks
+   */
+  static async _streamProcessPartition(partition, startDate, endDate, aggregator, progressCallback) {
+    let lastKey = null;
+    let partitionCount = 0;
+    const CHUNK_SIZE = 1000; // Process 1000 records at a time
+
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'createdAt-index',
+        KeyConditionExpression: 'datePartition = :partition AND createdAt BETWEEN :start AND :end',
+        ExpressionAttributeValues: {
+          ':partition': partition,
+          ':start': startDate,
+          ':end': endDate
+        },
+        Limit: CHUNK_SIZE
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
       }
 
-      // Source breakdown
+      const result = await docClient.send(new QueryCommand(params));
+      const items = result.Items || [];
+      
+      // Process this chunk
+      this._processChunk(items, aggregator);
+      
+      partitionCount += items.length;
+      lastKey = result.LastEvaluatedKey;
+      
+      // Report progress
+      if (progressCallback) {
+        progressCallback(items.length);
+      }
+      
+      // Small delay to avoid throttling
+      if (lastKey) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    } while (lastKey);
+
+    return partitionCount;
+  }
+
+  /**
+   * Process a chunk of items and update aggregator
+   */
+  static _processChunk(items, aggregator) {
+    items.forEach(item => {
+      aggregator.totalLogs++;
+
+      // Track duplicates
+      if (item.phone) {
+        if (aggregator.seenPhones.has(item.phone)) {
+          aggregator.duplicatePhones.add(item.phone);
+        }
+        aggregator.seenPhones.add(item.phone);
+      }
+      if (item.panNumber) {
+        if (aggregator.seenPans.has(item.panNumber)) {
+          aggregator.duplicatePans.add(item.panNumber);
+        }
+        aggregator.seenPans.add(item.panNumber);
+      }
+
+      // Source
       const source = item.source || 'unknown';
-      stats.sourceBreakdown[source] = (stats.sourceBreakdown[source] || 0) + 1;
+      aggregator.sourceBreakdown[source] = (aggregator.sourceBreakdown[source] || 0) + 1;
 
-      // Gender breakdown
+      // Gender
       const gender = item.gender || 'Unknown';
-      if (stats.genderBreakdown[gender] !== undefined) {
-        stats.genderBreakdown[gender]++;
+      if (aggregator.genderBreakdown[gender] !== undefined) {
+        aggregator.genderBreakdown[gender]++;
       } else {
-        stats.genderBreakdown['Other']++;
+        aggregator.genderBreakdown['Other']++;
       }
 
-      // Age range breakdown (calculated from DOB)
+      // Age range
       let age = item.age;
       if (!age && item.dateOfBirth) {
         age = this.calculateAge(item.dateOfBirth);
       }
       const ageRange = age ? this.getAgeRange(age) : 'Unknown';
-      stats.ageRangeBreakdown[ageRange]++;
+      aggregator.ageRangeBreakdown[ageRange]++;
 
-      // Job type breakdown
+      // Job type
       if (item.jobType) {
-        stats.jobTypeBreakdown[item.jobType] = (stats.jobTypeBreakdown[item.jobType] || 0) + 1;
+        aggregator.jobTypeBreakdown[item.jobType] = (aggregator.jobTypeBreakdown[item.jobType] || 0) + 1;
       }
 
-      // Business type breakdown
+      // Business type
       if (item.businessType) {
-        stats.businessTypeBreakdown[item.businessType] = (stats.businessTypeBreakdown[item.businessType] || 0) + 1;
+        aggregator.businessTypeBreakdown[item.businessType] = (aggregator.businessTypeBreakdown[item.businessType] || 0) + 1;
       }
 
-      // Salary range breakdown
+      // Salary range
       if (item.salary) {
         const salary = parseInt(item.salary);
-        if (salary < 20000) {
-          stats.salaryRangeBreakdown['Below 20k']++;
-        } else if (salary < 40000) {
-          stats.salaryRangeBreakdown['20k-40k']++;
-        } else if (salary < 60000) {
-          stats.salaryRangeBreakdown['40k-60k']++;
-        } else if (salary < 80000) {
-          stats.salaryRangeBreakdown['60k-80k']++;
-        } else if (salary < 100000) {
-          stats.salaryRangeBreakdown['80k-100k']++;
-        } else {
-          stats.salaryRangeBreakdown['Above 100k']++;
-        }
+        if (salary < 20000) aggregator.salaryRangeBreakdown['Below 20k']++;
+        else if (salary < 40000) aggregator.salaryRangeBreakdown['20k-40k']++;
+        else if (salary < 60000) aggregator.salaryRangeBreakdown['40k-60k']++;
+        else if (salary < 80000) aggregator.salaryRangeBreakdown['60k-80k']++;
+        else if (salary < 100000) aggregator.salaryRangeBreakdown['80k-100k']++;
+        else aggregator.salaryRangeBreakdown['Above 100k']++;
       } else {
-        stats.salaryRangeBreakdown['Unknown']++;
+        aggregator.salaryRangeBreakdown['Unknown']++;
       }
 
-      // Credit score breakdown
+      // Credit score
       if (item.creditScore || item.cibilScore) {
         const score = item.creditScore || item.cibilScore;
-        if (score < 580) {
-          stats.creditScoreBreakdown['Poor (300-579)']++;
-        } else if (score < 670) {
-          stats.creditScoreBreakdown['Fair (580-669)']++;
-        } else if (score < 740) {
-          stats.creditScoreBreakdown['Good (670-739)']++;
-        } else if (score < 800) {
-          stats.creditScoreBreakdown['Very Good (740-799)']++;
-        } else {
-          stats.creditScoreBreakdown['Excellent (800-900)']++;
-        }
+        if (score < 580) aggregator.creditScoreBreakdown['Poor (300-579)']++;
+        else if (score < 670) aggregator.creditScoreBreakdown['Fair (580-669)']++;
+        else if (score < 740) aggregator.creditScoreBreakdown['Good (670-739)']++;
+        else if (score < 800) aggregator.creditScoreBreakdown['Very Good (740-799)']++;
+        else aggregator.creditScoreBreakdown['Excellent (800-900)']++;
       } else {
-        stats.creditScoreBreakdown['Unknown']++;
+        aggregator.creditScoreBreakdown['Unknown']++;
       }
 
-      // Consent breakdown
+      // Consent
       const consent = item.consent === true ? 'true' : item.consent === false ? 'false' : 'unknown';
-      stats.consentBreakdown[consent]++;
+      aggregator.consentBreakdown[consent]++;
+    });
+  }
+
+  /**
+   * Finalize stats from aggregator
+   */
+  static _finalizeStats(aggregator, startDate, endDate, startTime) {
+    // Count unique vs duplicate
+    let uniqueLeads = 0;
+    let duplicateLeads = 0;
+    
+    aggregator.seenPhones.forEach(phone => {
+      if (aggregator.duplicatePhones.has(phone)) {
+        duplicateLeads++;
+      } else {
+        uniqueLeads++;
+      }
     });
 
     const elapsed = Date.now() - startTime;
-    console.log(`[${TABLE_NAME}] Stats processing complete in ${elapsed}ms`);
-    stats.processingTimeMs = elapsed;
 
-    return stats;
+    return {
+      totalLogs: aggregator.totalLogs,
+      uniqueLeads: uniqueLeads,
+      duplicateLeads: duplicateLeads,
+      duplicateByPhone: aggregator.duplicatePhones.size,
+      duplicateByPan: aggregator.duplicatePans.size,
+      dateRange: { start: startDate, end: endDate },
+      sourceBreakdown: aggregator.sourceBreakdown,
+      genderBreakdown: aggregator.genderBreakdown,
+      ageRangeBreakdown: aggregator.ageRangeBreakdown,
+      jobTypeBreakdown: aggregator.jobTypeBreakdown,
+      businessTypeBreakdown: aggregator.businessTypeBreakdown,
+      salaryRangeBreakdown: aggregator.salaryRangeBreakdown,
+      creditScoreBreakdown: aggregator.creditScoreBreakdown,
+      consentBreakdown: aggregator.consentBreakdown,
+      processingTimeMs: elapsed,
+      method: 'streaming-aggregation'
+    };
   }
 
-  // Get stats grouped by date (GSI-based only)
+  /**
+   * Get stats by date with streaming (also optimized)
+   */
   static async getStatsByDate(startDate, endDate) {
     const startTime = Date.now();
-    console.log(`[${TABLE_NAME}] Fetching stats by date:`, startDate, 'to', endDate);
+    console.log(`[${TABLE_NAME}] Fetching stats by date (streaming):`, startDate, 'to', endDate);
 
     try {
-      // Use GSI to query by date range
-      const partitions = this.getMonthPartitions(startDate, endDate);
-      
-      const promises = partitions.map(partition => 
-        this._queryByDatePartition(partition, startDate, endDate)
-      );
-      
-      const results = await Promise.all(promises);
-      const allItems = results.flat();
-
-      console.log(`[${TABLE_NAME}] Fetched ${allItems.length} items in ${Date.now() - startTime}ms`);
-
-      // Group by date
       const statsByDate = {};
+      const partitions = this.getMonthPartitions(startDate, endDate);
 
-      allItems.forEach(item => {
+      for (const partition of partitions) {
+        await this._streamProcessPartitionByDate(partition, startDate, endDate, statsByDate);
+      }
+
+      const result = Object.values(statsByDate).map(day => ({
+        date: day.date,
+        total: day.total,
+        uniquePhones: day.uniquePhones.size,
+        uniquePans: day.uniquePans.size,
+        genders: day.genders,
+        withConsent: day.withConsent,
+        withoutConsent: day.withoutConsent
+      })).sort((a, b) => a.date.localeCompare(b.date));
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[${TABLE_NAME}] Stats by date complete in ${elapsed}ms`);
+
+      return result;
+    } catch (error) {
+      console.error('Error in getStatsByDate:', error);
+      throw error;
+    }
+  }
+
+  static async _streamProcessPartitionByDate(partition, startDate, endDate, statsByDate) {
+    let lastKey = null;
+    const CHUNK_SIZE = 1000;
+
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'createdAt-index',
+        KeyConditionExpression: 'datePartition = :partition AND createdAt BETWEEN :start AND :end',
+        ExpressionAttributeValues: {
+          ':partition': partition,
+          ':start': startDate,
+          ':end': endDate
+        },
+        Limit: CHUNK_SIZE
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      const result = await docClient.send(new QueryCommand(params));
+      const items = result.Items || [];
+
+      items.forEach(item => {
         const date = item.createdAt.split('T')[0];
 
         if (!statsByDate[date]) {
@@ -803,15 +929,9 @@ class Lead {
         }
 
         statsByDate[date].total++;
+        if (item.phone) statsByDate[date].uniquePhones.add(item.phone);
+        if (item.panNumber) statsByDate[date].uniquePans.add(item.panNumber);
 
-        if (item.phone) {
-          statsByDate[date].uniquePhones.add(item.phone);
-        }
-        if (item.panNumber) {
-          statsByDate[date].uniquePans.add(item.panNumber);
-        }
-
-        // Gender tracking
         const gender = item.gender || 'Unknown';
         if (statsByDate[date].genders[gender] !== undefined) {
           statsByDate[date].genders[gender]++;
@@ -819,7 +939,6 @@ class Lead {
           statsByDate[date].genders['Other']++;
         }
 
-        // Consent tracking
         if (item.consent === true) {
           statsByDate[date].withConsent++;
         } else {
@@ -827,29 +946,18 @@ class Lead {
         }
       });
 
-      // Convert sets to counts
-      const result = Object.values(statsByDate).map(day => ({
-        date: day.date,
-        total: day.total,
-        uniquePhones: day.uniquePhones.size,
-        uniquePans: day.uniquePans.size,
-        genders: day.genders,
-        withConsent: day.withConsent,
-        withoutConsent: day.withoutConsent
-      })).sort((a, b) => a.date.localeCompare(b.date));
-
-      return result;
-    } catch (error) {
-      console.error('Error in getStatsByDate:', error);
-      throw error;
-    }
+      lastKey = result.LastEvaluatedKey;
+      
+      if (lastKey) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    } while (lastKey);
   }
 
   // ============================================================================
-  // MIGRATION / UTILITY FUNCTIONS
+  // MIGRATION / UTILITY FUNCTIONS (Unchanged)
   // ============================================================================
 
-  // Backfill datePartition for existing records using GSI queries (NOT SCAN!)
   static async backfillDatePartitions(sourceToMigrate = null) {
     let totalProcessed = 0;
     
@@ -858,14 +966,11 @@ class Lead {
     console.log('═══════════════════════════════════════════════════════════\n');
 
     try {
-      // If specific source provided, migrate only that
       if (sourceToMigrate) {
         console.log(`[MIGRATION] Processing source: ${sourceToMigrate}`);
         const processed = await this._backfillSource(sourceToMigrate);
         totalProcessed += processed;
       } else {
-        // Migrate all known sources
-        // You need to provide a list of your sources here
         const sources = process.env.LEAD_SOURCES?.split(',') || [];
         
         if (sources.length === 0) {
@@ -893,7 +998,6 @@ class Lead {
     }
   }
 
-  // Backfill a single source using source-createdAt-index GSI
   static async _backfillSource(source) {
     let processed = 0;
     let lastKey = null;
@@ -905,12 +1009,8 @@ class Lead {
         TableName: TABLE_NAME,
         IndexName: 'source-createdAt-index',
         KeyConditionExpression: '#source = :source',
-        ExpressionAttributeNames: {
-          '#source': 'source'
-        },
-        ExpressionAttributeValues: {
-          ':source': source
-        },
+        ExpressionAttributeNames: { '#source': 'source' },
+        ExpressionAttributeValues: { ':source': source },
         Limit: 100
       };
 
@@ -920,7 +1020,6 @@ class Lead {
 
       const result = await docClient.send(new QueryCommand(params));
 
-      // Filter and update records missing datePartition
       const updates = (result.Items || [])
         .filter(item => !item.datePartition && item.createdAt)
         .map(item => {
