@@ -547,12 +547,30 @@ class OvlyResponseLog {
   }
 
   /**
- * Get stats grouped by date WITH source-wise breakdown
- */
-  static async getStatsByDate(source, startDate, endDate) {
+  * Get stats grouped by date WITH source-wise breakdown
+  * Handles both: getStatsByDate(startDate, endDate) and getStatsByDate(source, startDate, endDate)
+  */
+  static async getStatsByDate(sourceOrStartDate, startDateOrEndDate, endDate) {
     const startTime = Date.now();
 
     try {
+      // ✅ Detect which parameters were passed
+      let source, startDate, actualEndDate;
+
+      if (endDate) {
+        // Called as: getStatsByDate(source, startDate, endDate)
+        source = sourceOrStartDate;
+        startDate = startDateOrEndDate;
+        actualEndDate = endDate;
+      } else {
+        // Called as: getStatsByDate(startDate, endDate) - from controller
+        source = null;
+        startDate = sourceOrStartDate;
+        actualEndDate = startDateOrEndDate;
+      }
+
+      console.log(`[${TABLE_NAME}] getStatsByDate: source=${source}, start=${startDate}, end=${actualEndDate}`);
+
       // ✅ If no source, get source-wise breakdown by date
       if (!source) {
         const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
@@ -561,7 +579,7 @@ class OvlyResponseLog {
         // Collect items from all sources
         let allItems = [];
         for (const src of sources) {
-          const items = await this._fetchItemsBySource(src, startDate, endDate);
+          const items = await this._fetchItemsBySource(src, startDate, actualEndDate);
           allItems = allItems.concat(items);
         }
 
@@ -573,7 +591,7 @@ class OvlyResponseLog {
       }
 
       // ✅ Single source - original working code
-      console.log(`[${TABLE_NAME}] Fetching stats by date for source: ${source}, date range:`, startDate, 'to', endDate);
+      console.log(`[${TABLE_NAME}] Fetching stats by date for source: ${source}, date range:`, startDate, 'to', actualEndDate);
 
       let allItems = [];
       let lastKey = null;
@@ -589,7 +607,7 @@ class OvlyResponseLog {
         ExpressionAttributeValues: {
           ':source': source,
           ':startDate': startDate,
-          ':endDate': endDate
+          ':endDate': actualEndDate
         },
         ScanIndexForward: false
       };
@@ -657,7 +675,7 @@ class OvlyResponseLog {
   }
 
   /**
-   * ✅ NEW: Group by date WITH source-wise breakdown
+   * ✅ Group by date WITH source-wise breakdown
    */
   static _groupByDateWithSourceBreakdown(items) {
     const statsByDate = {};
@@ -677,7 +695,6 @@ class OvlyResponseLog {
             'duplicate': 0,
             'other': 0
           },
-          // ✅ NEW: Source-wise breakdown
           sourceBreakdown: {},
           bySource: {}
         };
@@ -701,7 +718,7 @@ class OvlyResponseLog {
         statsByDate[date].statusCategories['other']++;
       }
 
-      // ✅ NEW: Track by source
+      // ✅ Track by source
       if (!statsByDate[date].bySource[itemSource]) {
         statsByDate[date].bySource[itemSource] = {
           total: 0,
