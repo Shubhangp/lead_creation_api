@@ -111,19 +111,19 @@ class OvlyResponseLog {
   }
 
   /**
-   * ✅ ENHANCED: Get quick stats WITH SOURCE BREAKDOWN
+   * ✅ FIXED: Get quick stats - handles both single source and multi-source
    */
-  static async getQuickStats(source, startDate = null, endDate = null) {
-    if (!source) {
-      throw new Error(
-        'source is required for getQuickStats(). This prevents expensive Scans. ' +
-        'Example: getQuickStats("OVLY", startDate, endDate)'
-      );
-    }
-
+  static async getQuickStats(source = null, startDate = null, endDate = null) {
     const startTime = Date.now();
 
     try {
+      // ✅ NEW: If no source provided, get all known sources and aggregate
+      if (!source) {
+        console.log('[OVLY] No source provided, fetching all sources...');
+        return await this._getQuickStatsAllSources(startDate, endDate);
+      }
+
+      // Original single-source logic
       const params = {
         TableName: TABLE_NAME,
         IndexName: 'source-createdAt-index',
@@ -169,7 +169,7 @@ class OvlyResponseLog {
       return {
         totalLogs: totalCount,
         source: source,
-        sourceBreakdown: { [source]: totalCount }, // ✅ NEW: Include source breakdown
+        sourceBreakdown: { [source]: totalCount },
         dateRange: startDate && endDate ? { start: startDate, end: endDate } : null,
         scannedInMs: elapsed,
         method: 'query-count',
@@ -182,20 +182,115 @@ class OvlyResponseLog {
   }
 
   /**
-   * ✅ ENHANCED: Get comprehensive stats WITH SOURCE-WISE BREAKDOWN
+   * ✅ NEW: Get quick stats for all sources (when source not specified)
    */
-  static async getStats(source, startDate = null, endDate = null) {
-    if (!source) {
-      throw new Error(
-        'source is required for getStats(). This prevents expensive Scans. ' +
-        'Example: getStats("OVLY", startDate, endDate)'
-      );
-    }
-
+  static async _getQuickStatsAllSources(startDate = null, endDate = null) {
     const startTime = Date.now();
-    console.log(`[${TABLE_NAME}] Fetching stats for source: ${source}, date range:`, startDate, 'to', endDate);
 
     try {
+      // Get all known sources from environment or default to OVLY
+      const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
+      
+      console.log(`[OVLY] Counting ${sources.length} sources:`, sources);
+
+      // Count each source in parallel
+      const countPromises = sources.map(async (source) => {
+        const count = await this._countSource(source, startDate, endDate);
+        return { source, count };
+      });
+
+      const results = await Promise.all(countPromises);
+      
+      // Build aggregated result
+      const sourceBreakdown = {};
+      let totalCount = 0;
+      
+      results.forEach(({ source, count }) => {
+        sourceBreakdown[source] = count;
+        totalCount += count;
+        console.log(`  Source "${source}": ${count.toLocaleString()} records`);
+      });
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[OVLY] ✅ Total count: ${totalCount.toLocaleString()} in ${elapsed}ms`);
+
+      return {
+        totalLogs: totalCount,
+        sourceBreakdown,
+        sources: sources,
+        dateRange: startDate && endDate ? { start: startDate, end: endDate } : null,
+        scannedInMs: elapsed,
+        method: 'query-count-all-sources',
+        indexUsed: 'source-createdAt-index'
+      };
+    } catch (error) {
+      console.error('Error in _getQuickStatsAllSources:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ NEW: Count a single source with optional date range
+   */
+  static async _countSource(source, startDate = null, endDate = null) {
+    const params = {
+      TableName: TABLE_NAME,
+      IndexName: 'source-createdAt-index',
+      KeyConditionExpression: '#source = :source',
+      ExpressionAttributeNames: { '#source': 'source' },
+      ExpressionAttributeValues: { ':source': source },
+      Select: 'COUNT'
+    };
+
+    if (startDate && endDate) {
+      params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':startDate'] = startDate;
+      params.ExpressionAttributeValues[':endDate'] = endDate;
+    } else if (startDate) {
+      params.KeyConditionExpression += ' AND #createdAt >= :startDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':startDate'] = startDate;
+    } else if (endDate) {
+      params.KeyConditionExpression += ' AND #createdAt <= :endDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':endDate'] = endDate;
+    }
+
+    let totalCount = 0;
+    let lastKey = null;
+
+    do {
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      const result = await docClient.send(new QueryCommand(params));
+      totalCount += result.Count || 0;
+      lastKey = result.LastEvaluatedKey;
+
+      delete params.ExclusiveStartKey;
+    } while (lastKey);
+
+    return totalCount;
+  }
+
+  /**
+   * ✅ FIXED: Get comprehensive stats - handles both single source and multi-source
+   */
+  static async getStats(source = null, startDate = null, endDate = null) {
+    const startTime = Date.now();
+
+    try {
+      // ✅ NEW: If no source provided, get stats for all sources
+      if (!source) {
+        console.log('[OVLY] No source provided, fetching stats for all sources...');
+        return await this._getStatsAllSources(startDate, endDate);
+      }
+
+      // Original single-source logic
+      console.log(`[${TABLE_NAME}] Fetching stats for source: ${source}, date range:`, startDate, 'to', endDate);
+
       let allItems = [];
       let lastKey = null;
 
@@ -237,7 +332,6 @@ class OvlyResponseLog {
 
       console.log(`✅ Query complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
 
-      // Calculate stats with SOURCE-WISE BREAKDOWN
       const stats = this._calculateStatsWithSourceBreakdown(allItems, source, startDate, endDate);
       stats.processingTimeMs = Date.now() - startTime;
       stats.method = 'query';
@@ -251,8 +345,131 @@ class OvlyResponseLog {
   }
 
   /**
-   * ✅ NEW: Calculate stats WITH SOURCE-WISE BREAKDOWN for eligible, success, etc.
+   * ✅ NEW: Get stats for all sources (when source not specified)
    */
+  static async _getStatsAllSources(startDate = null, endDate = null) {
+    const startTime = Date.now();
+
+    try {
+      const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
+      
+      console.log(`[OVLY] Fetching stats for ${sources.length} sources:`, sources);
+
+      // Fetch stats for each source in parallel
+      const statsPromises = sources.map(source => 
+        this.getStats(source, startDate, endDate).catch(err => {
+          console.error(`Error fetching stats for ${source}:`, err);
+          return null;
+        })
+      );
+
+      const results = await Promise.all(statsPromises);
+      const validResults = results.filter(r => r !== null);
+
+      // Merge all stats
+      const mergedStats = this._mergeStats(validResults, startDate, endDate);
+      mergedStats.processingTimeMs = Date.now() - startTime;
+      mergedStats.method = 'query-all-sources';
+
+      console.log(`[OVLY] ✅ Stats complete: ${mergedStats.totalLogs.toLocaleString()} records in ${Date.now() - startTime}ms`);
+
+      return mergedStats;
+    } catch (error) {
+      console.error('Error in _getStatsAllSources:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ NEW: Merge stats from multiple sources
+   */
+  static _mergeStats(statsArray, startDate, endDate) {
+    const merged = {
+      totalLogs: 0,
+      sources: [],
+      dateRange: { start: startDate, end: endDate },
+      responseStatusBreakdown: {},
+      sourceBreakdown: {},
+      statusCategoryBreakdown: {
+        '403': 0,
+        'success': 0,
+        'duplicate': 0,
+        'other': 0
+      },
+      sourceWiseStats: {},
+      successRate: 0,
+      successRateBySource: {}
+    };
+
+    statsArray.forEach(stats => {
+      if (!stats) return;
+
+      merged.totalLogs += stats.totalLogs;
+      merged.sources.push(stats.source);
+
+      // Merge response status breakdown
+      Object.keys(stats.responseStatusBreakdown || {}).forEach(status => {
+        merged.responseStatusBreakdown[status] = 
+          (merged.responseStatusBreakdown[status] || 0) + stats.responseStatusBreakdown[status];
+      });
+
+      // Merge source breakdown
+      Object.keys(stats.sourceBreakdown || {}).forEach(source => {
+        merged.sourceBreakdown[source] = 
+          (merged.sourceBreakdown[source] || 0) + stats.sourceBreakdown[source];
+      });
+
+      // Merge status category breakdown
+      Object.keys(stats.statusCategoryBreakdown || {}).forEach(category => {
+        merged.statusCategoryBreakdown[category] += stats.statusCategoryBreakdown[category] || 0;
+      });
+
+      // Merge source-wise stats
+      Object.keys(stats.sourceWiseStats || {}).forEach(source => {
+        if (!merged.sourceWiseStats[source]) {
+          merged.sourceWiseStats[source] = {
+            totalLogs: 0,
+            eligible: 0,
+            success: 0,
+            duplicate: 0,
+            forbidden: 0,
+            other: 0
+          };
+        }
+
+        const srcStats = stats.sourceWiseStats[source];
+        merged.sourceWiseStats[source].totalLogs += srcStats.totalLogs || 0;
+        merged.sourceWiseStats[source].eligible += srcStats.eligible || 0;
+        merged.sourceWiseStats[source].success += srcStats.success || 0;
+        merged.sourceWiseStats[source].duplicate += srcStats.duplicate || 0;
+        merged.sourceWiseStats[source].forbidden += srcStats.forbidden || 0;
+        merged.sourceWiseStats[source].other += srcStats.other || 0;
+      });
+
+      // Merge success rate by source
+      Object.keys(stats.successRateBySource || {}).forEach(source => {
+        merged.successRateBySource[source] = stats.successRateBySource[source];
+      });
+    });
+
+    // Calculate overall success rate
+    const totalSuccess = merged.statusCategoryBreakdown.success || 0;
+    merged.successRate = merged.totalLogs > 0
+      ? ((totalSuccess / merged.totalLogs) * 100).toFixed(2) + '%'
+      : '0%';
+
+    // Recalculate success rate for each source in merged stats
+    Object.keys(merged.sourceWiseStats).forEach(source => {
+      const srcStats = merged.sourceWiseStats[source];
+      srcStats.successRate = srcStats.totalLogs > 0
+        ? ((srcStats.success / srcStats.totalLogs) * 100).toFixed(2) + '%'
+        : '0%';
+      merged.successRateBySource[source] = srcStats.successRate;
+    });
+
+    return merged;
+  }
+
   static _calculateStatsWithSourceBreakdown(items, source, startDate, endDate) {
     const stats = {
       totalLogs: items.length,
@@ -269,22 +486,18 @@ class OvlyResponseLog {
         'duplicate': 0,
         'other': 0
       },
-      // ✅ NEW: Source-wise breakdowns
       sourceWiseStats: {},
       successRate: 0,
-      successRateBySource: {} // ✅ NEW: Success rate per source
+      successRateBySource: {}
     };
 
     items.forEach(item => {
-      // Response status breakdown
       const status = item.responseStatus || 'unknown';
       stats.responseStatusBreakdown[status] = (stats.responseStatusBreakdown[status] || 0) + 1;
 
-      // Source breakdown
       const itemSource = item.source || 'unknown';
       stats.sourceBreakdown[itemSource] = (stats.sourceBreakdown[itemSource] || 0) + 1;
 
-      // ✅ NEW: Initialize source-wise stats
       if (!stats.sourceWiseStats[itemSource]) {
         stats.sourceWiseStats[itemSource] = {
           totalLogs: 0,
@@ -298,31 +511,28 @@ class OvlyResponseLog {
 
       stats.sourceWiseStats[itemSource].totalLogs++;
 
-      // Status category breakdown
       const statusLower = String(status).toLowerCase();
       if (statusLower === '403') {
         stats.statusCategoryBreakdown['403']++;
-        stats.sourceWiseStats[itemSource].forbidden++; // ✅ NEW
+        stats.sourceWiseStats[itemSource].forbidden++;
       } else if (statusLower === 'success' || statusLower === '200') {
         stats.statusCategoryBreakdown['success']++;
-        stats.sourceWiseStats[itemSource].success++; // ✅ NEW
-        stats.sourceWiseStats[itemSource].eligible++; // ✅ NEW: Success means eligible
+        stats.sourceWiseStats[itemSource].success++;
+        stats.sourceWiseStats[itemSource].eligible++;
       } else if (statusLower === 'duplicate') {
         stats.statusCategoryBreakdown['duplicate']++;
-        stats.sourceWiseStats[itemSource].duplicate++; // ✅ NEW
+        stats.sourceWiseStats[itemSource].duplicate++;
       } else {
         stats.statusCategoryBreakdown['other']++;
-        stats.sourceWiseStats[itemSource].other++; // ✅ NEW
+        stats.sourceWiseStats[itemSource].other++;
       }
     });
 
-    // Calculate overall success rate
     const successCount = stats.statusCategoryBreakdown['success'];
     stats.successRate = items.length > 0
       ? ((successCount / items.length) * 100).toFixed(2) + '%'
       : '0%';
 
-    // ✅ NEW: Calculate success rate per source
     Object.keys(stats.sourceWiseStats).forEach(src => {
       const sourceStats = stats.sourceWiseStats[src];
       const sourceSuccessRate = sourceStats.totalLogs > 0
@@ -433,9 +643,6 @@ class OvlyResponseLog {
     return statsByDate;
   }
 
-  /**
-   * ✅ ENHANCED: Batch get stats for multiple sources with combined source breakdown
-   */
   static async getStatsBatch(sources, startDate, endDate) {
     if (!sources || !Array.isArray(sources) || sources.length === 0) {
       throw new Error('sources array is required. Example: ["OVLY", "FREO", "SML"]');
@@ -454,7 +661,6 @@ class OvlyResponseLog {
     const results = await Promise.all(promises);
     const successfulResults = results.filter(r => r !== null);
 
-    // Combine stats with detailed source breakdown
     const combined = {
       totalLogs: successfulResults.reduce((sum, r) => sum + r.totalLogs, 0),
       sources: successfulResults.map(r => r.source),
@@ -473,7 +679,6 @@ class OvlyResponseLog {
         responseStatusBreakdown: result.responseStatusBreakdown
       };
 
-      // ✅ NEW: Merge source-wise stats
       if (result.sourceWiseStats) {
         Object.keys(result.sourceWiseStats).forEach(src => {
           if (!combined.sourceWiseStats[src]) {
@@ -497,17 +702,14 @@ class OvlyResponseLog {
         });
       }
 
-      // Extract success count for overall rate
       const successCount = result.statusCategoryBreakdown?.success || 0;
       totalSuccess += successCount;
     });
 
-    // Calculate overall success rate
     combined.overallSuccessRate = combined.totalLogs > 0
       ? ((totalSuccess / combined.totalLogs) * 100).toFixed(2) + '%'
       : '0%';
 
-    // Calculate success rate for each source in combined stats
     Object.keys(combined.sourceWiseStats).forEach(src => {
       const srcStats = combined.sourceWiseStats[src];
       srcStats.successRate = srcStats.totalLogs > 0
