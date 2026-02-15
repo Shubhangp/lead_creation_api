@@ -547,19 +547,39 @@ class OvlyResponseLog {
   }
 
   /**
- * Get stats grouped by date - supports multiple sources
- */
-  static async getStatsByDate(source = null, startDate, endDate) {
+   * Get stats grouped by date - supports multiple sources
+   * ✅ FIXED: Handles call from controller: getStatsByDate(startDate, endDate)
+   */
+  static async getStatsByDate(startDateOrSource, endDateOrStart, endDate = null) {
     const startTime = Date.now();
 
     try {
+      // ✅ Detect call pattern from controller
+      let source, startDate, actualEndDate;
+
+      // Pattern 1: getStatsByDate(startDate, endDate) - from controller
+      if (!endDate && startDateOrSource && endDateOrStart) {
+        source = null;
+        startDate = startDateOrSource;
+        actualEndDate = endDateOrStart;
+      }
+      // Pattern 2: getStatsByDate(source, startDate, endDate) - direct call
+      else {
+        source = startDateOrSource;
+        startDate = endDateOrStart;
+        actualEndDate = endDate;
+      }
+
+      console.log(`[${TABLE_NAME}] getStatsByDate called with source=${source}, startDate=${startDate}, endDate=${actualEndDate}`);
+
+      // If no source provided, get stats for all sources
       if (!source) {
         const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
         console.log(`[${TABLE_NAME}] Fetching stats by date for all sources:`, sources);
 
         // Fetch stats for each source in parallel
         const promises = sources.map(src =>
-          this._getStatsByDateForSource(src, startDate, endDate).catch(err => {
+          this._getStatsByDateForSource(src, startDate, actualEndDate).catch(err => {
             console.error(`Error fetching stats by date for ${src}:`, err);
             return [];
           })
@@ -574,7 +594,7 @@ class OvlyResponseLog {
       }
 
       // Single source logic
-      return this._getStatsByDateForSource(source, startDate, endDate);
+      return this._getStatsByDateForSource(source, startDate, actualEndDate);
     } catch (error) {
       console.error('Error in getStatsByDate:', error);
       throw error;
@@ -582,7 +602,7 @@ class OvlyResponseLog {
   }
 
   static async _getStatsByDateForSource(source, startDate, endDate) {
-    console.log(`[${TABLE_NAME}] Fetching stats by date for source: ${source}`);
+    console.log(`[${TABLE_NAME}] Fetching stats by date for source: ${source}, ${startDate} to ${endDate}`);
 
     let allItems = [];
     let lastKey = null;
@@ -617,7 +637,7 @@ class OvlyResponseLog {
 
     console.log(`  ✅ ${source}: ${allItems.length} items`);
 
-    // Group by date
+    // Group by date and return array
     return this._groupByDateArray(allItems);
   }
 
