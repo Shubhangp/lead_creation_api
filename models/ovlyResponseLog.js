@@ -1,5 +1,5 @@
 const { docClient } = require('../dynamodb');
-const { PutCommand, GetCommand, QueryCommand, ScanCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+const { PutCommand, GetCommand, QueryCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'ovly_response_logs';
@@ -7,10 +7,14 @@ const TABLE_NAME = 'ovly_response_logs';
 class OvlyResponseLog {
   // Create log entry
   static async create(logData) {
+    if (!logData.source) {
+      throw new Error('source is required to enable Query operations. Provide "OVLY" or appropriate source.');
+    }
+
     const item = {
       logId: uuidv4(),
       leadId: logData.leadId,
-      source: logData.source || null,
+      source: logData.source,
       requestPayload: logData.requestPayload || null,
       responseStatus: logData.responseStatus || null,
       responseBody: logData.responseBody || null,
@@ -25,7 +29,6 @@ class OvlyResponseLog {
     return item;
   }
 
-  // Find by ID
   static async findById(logId) {
     const result = await docClient.send(new GetCommand({
       TableName: TABLE_NAME,
@@ -34,22 +37,18 @@ class OvlyResponseLog {
     return result.Item || null;
   }
 
-  // Find by leadId (requires GSI: leadId-index)
-  static async findByLeadId(leadId) {
-    const result = await docClient.send(new QueryCommand({
+  static async findByLeadId(leadId, options = {}) {
+    if (!leadId) {
+      throw new Error('leadId is required');
+    }
+
+    const { limit = 100, lastEvaluatedKey } = options;
+    
+    const params = {
       TableName: TABLE_NAME,
       IndexName: 'leadId-index',
       KeyConditionExpression: 'leadId = :leadId',
-      ExpressionAttributeValues: { ':leadId': leadId }
-    }));
-    return result.Items || [];
-  }
-
-  // Find all logs (paginated)
-  static async findAll(options = {}) {
-    const { limit = 100, lastEvaluatedKey } = options;
-    const params = {
-      TableName: TABLE_NAME,
+      ExpressionAttributeValues: { ':leadId': leadId },
       Limit: limit
     };
 
@@ -57,283 +56,192 @@ class OvlyResponseLog {
       params.ExclusiveStartKey = lastEvaluatedKey;
     }
 
-    const result = await docClient.send(new ScanCommand(params));
+    const result = await docClient.send(new QueryCommand(params));
     return {
       items: result.Items || [],
       lastEvaluatedKey: result.LastEvaluatedKey
     };
   }
 
-  // Get logs by date range
-  static async findByDateRange(startDate, endDate, options = {}) {
-    const { limit = 100, lastEvaluatedKey } = options;
+  static async findBySourceAndDateRange(source, startDate, endDate, options = {}) {
+    if (!source) {
+      throw new Error('source is required to use efficient Query. This prevents expensive Scans that cost $0.45 each.');
+    }
 
+    const { limit = 1000, lastEvaluatedKey } = options;
+    
     const params = {
       TableName: TABLE_NAME,
-      FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
-      ExpressionAttributeValues: {
-        ':startDate': startDate,
-        ':endDate': endDate
+      IndexName: 'source-createdAt-index',
+      KeyConditionExpression: '#source = :source',
+      ExpressionAttributeNames: {
+        '#source': 'source'
       },
+      ExpressionAttributeValues: {
+        ':source': source
+      },
+      ScanIndexForward: false,
       Limit: limit
     };
+
+    if (startDate && endDate) {
+      params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':startDate'] = startDate;
+      params.ExpressionAttributeValues[':endDate'] = endDate;
+    } else if (startDate) {
+      params.KeyConditionExpression += ' AND #createdAt >= :startDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':startDate'] = startDate;
+    } else if (endDate) {
+      params.KeyConditionExpression += ' AND #createdAt <= :endDate';
+      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+      params.ExpressionAttributeValues[':endDate'] = endDate;
+    }
 
     if (lastEvaluatedKey) {
       params.ExclusiveStartKey = lastEvaluatedKey;
     }
 
-    const result = await docClient.send(new ScanCommand(params));
+    const result = await docClient.send(new QueryCommand(params));
     return {
       items: result.Items || [],
       lastEvaluatedKey: result.LastEvaluatedKey
     };
   }
 
-  // Get quick stats with optional date range
-  static async getQuickStats(source = null, startDate = null, endDate = null) {
-    try {
-      if (source && !startDate) {
-        // Get count for specific source using GSI
-        const result = await docClient.send(new QueryCommand({
-          TableName: TABLE_NAME,
-          IndexName: 'source-createdAt-index',
-          KeyConditionExpression: 'source = :source',
-          ExpressionAttributeValues: { ':source': source },
-          Select: 'COUNT'
-        }));
+  /**
+   * ✅ ENHANCED: Get quick stats WITH SOURCE BREAKDOWN
+   */
+  static async getQuickStats(source, startDate = null, endDate = null) {
+    if (!source) {
+      throw new Error(
+        'source is required for getQuickStats(). This prevents expensive Scans. ' +
+        'Example: getQuickStats("OVLY", startDate, endDate)'
+      );
+    }
 
-        return {
-          totalLogs: result.Count || 0,
-          source: source,
-          isEstimate: false
-        };
-      } else if (startDate && endDate) {
-        // Quick count for date range using parallel COUNT scan
-        return this.getQuickStatsForDateRange(startDate, endDate);
-      } else {
-        // Use parallel scan for total count
-        return this.getQuickStatsParallel();
+    const startTime = Date.now();
+
+    try {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source',
+        ExpressionAttributeNames: { '#source': 'source' },
+        ExpressionAttributeValues: { ':source': source },
+        Select: 'COUNT'
+      };
+
+      if (startDate && endDate) {
+        params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':startDate'] = startDate;
+        params.ExpressionAttributeValues[':endDate'] = endDate;
+      } else if (startDate) {
+        params.KeyConditionExpression += ' AND #createdAt >= :startDate';
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':startDate'] = startDate;
+      } else if (endDate) {
+        params.KeyConditionExpression += ' AND #createdAt <= :endDate';
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':endDate'] = endDate;
       }
+
+      let totalCount = 0;
+      let lastKey = null;
+
+      do {
+        if (lastKey) {
+          params.ExclusiveStartKey = lastKey;
+        }
+
+        const result = await docClient.send(new QueryCommand(params));
+        totalCount += result.Count || 0;
+        lastKey = result.LastEvaluatedKey;
+
+        delete params.ExclusiveStartKey;
+      } while (lastKey);
+
+      const elapsed = Date.now() - startTime;
+      console.log(`✅ Query COUNT: ${totalCount} items in ${elapsed}ms (source: ${source})`);
+
+      return {
+        totalLogs: totalCount,
+        source: source,
+        sourceBreakdown: { [source]: totalCount }, // ✅ NEW: Include source breakdown
+        dateRange: startDate && endDate ? { start: startDate, end: endDate } : null,
+        scannedInMs: elapsed,
+        method: 'query-count',
+        indexUsed: 'source-createdAt-index'
+      };
     } catch (error) {
       console.error('Error in getQuickStats:', error);
       throw error;
     }
   }
 
-  // Quick count for date range (COUNT only, no data fetching)
-  static async getQuickStatsForDateRange(startDate, endDate) {
-    const segments = 8;
+  /**
+   * ✅ ENHANCED: Get comprehensive stats WITH SOURCE-WISE BREAKDOWN
+   */
+  static async getStats(source, startDate = null, endDate = null) {
+    if (!source) {
+      throw new Error(
+        'source is required for getStats(). This prevents expensive Scans. ' +
+        'Example: getStats("OVLY", startDate, endDate)'
+      );
+    }
+
     const startTime = Date.now();
+    console.log(`[${TABLE_NAME}] Fetching stats for source: ${source}, date range:`, startDate, 'to', endDate);
 
     try {
-      console.log(`[${TABLE_NAME}] Quick count for date range:`, startDate, 'to', endDate);
+      let allItems = [];
+      let lastKey = null;
 
-      const countPromises = [];
-      for (let segment = 0; segment < segments; segment++) {
-        countPromises.push(this._countSegmentInRange(segment, segments, startDate, endDate));
-      }
-
-      const results = await Promise.all(countPromises);
-      const totalCount = results.reduce((sum, result) => sum + result.count, 0);
-      const elapsed = Date.now() - startTime;
-
-      console.log(`[${TABLE_NAME}] Quick count complete: ${totalCount} items in ${elapsed}ms`);
-
-      return {
-        totalLogs: totalCount,
-        isEstimate: false,
-        scannedInMs: elapsed,
-        method: 'parallel-count',
-        dateRange: { start: startDate, end: endDate }
-      };
-    } catch (error) {
-      console.error('Error in quick count:', error);
-      throw error;
-    }
-  }
-
-  // Helper: Count items in segment for date range (COUNT only)
-  static async _countSegmentInRange(segment, totalSegments, startDate, endDate) {
-    let count = 0;
-    let lastKey = null;
-
-    do {
       const params = {
         TableName: TABLE_NAME,
-        Select: 'COUNT',
-        Segment: segment,
-        TotalSegments: totalSegments,
-        FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
-        ExpressionAttributeValues: {
-          ':startDate': startDate,
-          ':endDate': endDate
-        }
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source',
+        ExpressionAttributeNames: { '#source': 'source' },
+        ExpressionAttributeValues: { ':source': source },
+        ScanIndexForward: false
       };
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
-
-      const result = await docClient.send(new ScanCommand(params));
-      count += result.Count || 0;
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
-
-    console.log(`Count segment ${segment}/${totalSegments}: ${count} items`);
-    return { segment, count };
-  }
-
-  // Parallel scan - 8x faster than sequential scan
-  static async getQuickStatsParallel() {
-    const segments = 8; // Use 8 parallel scans
-    const startTime = Date.now();
-
-    try {
-      console.log(`Starting parallel scan with ${segments} segments for ${TABLE_NAME}`);
-
-      // Create parallel scan promises
-      const scanPromises = [];
-      for (let segment = 0; segment < segments; segment++) {
-        scanPromises.push(this._scanSegment(segment, segments));
-      }
-
-      // Wait for all segments to complete
-      const results = await Promise.all(scanPromises);
-
-      // Sum up all counts
-      const totalCount = results.reduce((sum, result) => sum + result.count, 0);
-      const elapsed = Date.now() - startTime;
-
-      console.log(`Parallel scan complete: ${totalCount} items in ${elapsed}ms`);
-
-      return {
-        totalLogs: totalCount,
-        isEstimate: false,
-        scannedInMs: elapsed,
-        method: 'parallel'
-      };
-    } catch (error) {
-      console.error('Error in parallel scan:', error);
-      throw error;
-    }
-  }
-
-  // Helper method for parallel scanning
-  static async _scanSegment(segment, totalSegments) {
-    let count = 0;
-    let lastKey = null;
-
-    do {
-      const params = {
-        TableName: TABLE_NAME,
-        Select: 'COUNT',
-        Segment: segment,
-        TotalSegments: totalSegments
-      };
-
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
-
-      const result = await docClient.send(new ScanCommand(params));
-      count += result.Count || 0;
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
-
-    console.log(`Segment ${segment}/${totalSegments} complete: ${count} items`);
-    return { segment, count };
-  }
-
-  // Get comprehensive stats (OPTIMIZED for date ranges)
-  static async getStats(startDate = null, endDate = null) {
-    let allItems = [];
-    let lastKey = null;
-    const startTime = Date.now();
-
-    console.log(`[${TABLE_NAME}] Starting stats fetch for date range:`, startDate, 'to', endDate);
-
-    try {
-      // Use parallel scan with date filter for much faster results
       if (startDate && endDate) {
-        const segments = 8; // Increased from 4 to 8 for faster processing
-        const scanPromises = [];
-
-        for (let segment = 0; segment < segments; segment++) {
-          scanPromises.push(this._scanSegmentWithFilter(segment, segments, startDate, endDate));
-        }
-
-        const results = await Promise.all(scanPromises);
-        allItems = results.flat();
-
-        console.log(`[${TABLE_NAME}] Parallel filtered scan complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
-      } else {
-        // No date filter - regular scan (slower)
-        do {
-          const params = {
-            TableName: TABLE_NAME,
-            Limit: 1000
-          };
-
-          if (lastKey) {
-            params.ExclusiveStartKey = lastKey;
-          }
-
-          const result = await docClient.send(new ScanCommand(params));
-          allItems = allItems.concat(result.Items || []);
-          lastKey = result.LastEvaluatedKey;
-        } while (lastKey);
+        params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':startDate'] = startDate;
+        params.ExpressionAttributeValues[':endDate'] = endDate;
+      } else if (startDate) {
+        params.KeyConditionExpression += ' AND #createdAt >= :startDate';
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':startDate'] = startDate;
+      } else if (endDate) {
+        params.KeyConditionExpression += ' AND #createdAt <= :endDate';
+        params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
+        params.ExpressionAttributeValues[':endDate'] = endDate;
       }
 
-      // Initialize stats
-      const stats = {
-        totalLogs: allItems.length,
-        dateRange: {
-          start: startDate,
-          end: endDate
-        },
-        responseStatusBreakdown: {},
-        sourceBreakdown: {},
-        statusCategoryBreakdown: {
-          '403': 0,
-          'success': 0,
-          'duplicate': 0,
-          'other': 0
-        },
-        successRate: 0
-      };
-
-      // Process each log
-      allItems.forEach(item => {
-        // Response status breakdown
-        const status = item.responseStatus || 'unknown';
-        stats.responseStatusBreakdown[status] = (stats.responseStatusBreakdown[status] || 0) + 1;
-
-        // Source breakdown
-        const source = item.source || 'unknown';
-        stats.sourceBreakdown[source] = (stats.sourceBreakdown[source] || 0) + 1;
-
-        // Status category breakdown (Ovly specific)
-        const statusLower = String(status).toLowerCase();
-        if (statusLower === '403') {
-          stats.statusCategoryBreakdown['403']++;
-        } else if (statusLower === 'success' || statusLower === '200') {
-          stats.statusCategoryBreakdown['success']++;
-        } else if (statusLower === 'duplicate') {
-          stats.statusCategoryBreakdown['duplicate']++;
-        } else {
-          stats.statusCategoryBreakdown['other']++;
+      do {
+        if (lastKey) {
+          params.ExclusiveStartKey = lastKey;
         }
-      });
 
-      // Calculate success rate
-      const successCount = stats.statusCategoryBreakdown['success'];
-      stats.successRate = allItems.length > 0
-        ? ((successCount / allItems.length) * 100).toFixed(2) + '%'
-        : '0%';
+        const result = await docClient.send(new QueryCommand(params));
+        allItems = allItems.concat(result.Items || []);
+        lastKey = result.LastEvaluatedKey;
 
-      const elapsed = Date.now() - startTime;
-      console.log(`[${TABLE_NAME}] Stats processing complete in ${elapsed}ms`);
-      stats.processingTimeMs = elapsed;
+        delete params.ExclusiveStartKey;
+      } while (lastKey);
+
+      console.log(`✅ Query complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
+
+      // Calculate stats with SOURCE-WISE BREAKDOWN
+      const stats = this._calculateStatsWithSourceBreakdown(allItems, source, startDate, endDate);
+      stats.processingTimeMs = Date.now() - startTime;
+      stats.method = 'query';
+      stats.indexUsed = 'source-createdAt-index';
 
       return stats;
     } catch (error) {
@@ -342,94 +250,138 @@ class OvlyResponseLog {
     }
   }
 
-  // Helper: Parallel scan with date filter
-  static async _scanSegmentWithFilter(segment, totalSegments, startDate, endDate) {
-    let items = [];
-    let lastKey = null;
+  /**
+   * ✅ NEW: Calculate stats WITH SOURCE-WISE BREAKDOWN for eligible, success, etc.
+   */
+  static _calculateStatsWithSourceBreakdown(items, source, startDate, endDate) {
+    const stats = {
+      totalLogs: items.length,
+      source: source,
+      dateRange: {
+        start: startDate,
+        end: endDate
+      },
+      responseStatusBreakdown: {},
+      sourceBreakdown: {},
+      statusCategoryBreakdown: {
+        '403': 0,
+        'success': 0,
+        'duplicate': 0,
+        'other': 0
+      },
+      // ✅ NEW: Source-wise breakdowns
+      sourceWiseStats: {},
+      successRate: 0,
+      successRateBySource: {} // ✅ NEW: Success rate per source
+    };
 
-    do {
-      const params = {
-        TableName: TABLE_NAME,
-        Segment: segment,
-        TotalSegments: totalSegments,
-        FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
-        ExpressionAttributeValues: {
-          ':startDate': startDate,
-          ':endDate': endDate
-        }
-      };
+    items.forEach(item => {
+      // Response status breakdown
+      const status = item.responseStatus || 'unknown';
+      stats.responseStatusBreakdown[status] = (stats.responseStatusBreakdown[status] || 0) + 1;
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
+      // Source breakdown
+      const itemSource = item.source || 'unknown';
+      stats.sourceBreakdown[itemSource] = (stats.sourceBreakdown[itemSource] || 0) + 1;
+
+      // ✅ NEW: Initialize source-wise stats
+      if (!stats.sourceWiseStats[itemSource]) {
+        stats.sourceWiseStats[itemSource] = {
+          totalLogs: 0,
+          eligible: 0,
+          success: 0,
+          duplicate: 0,
+          forbidden: 0,
+          other: 0
+        };
       }
 
-      const result = await docClient.send(new ScanCommand(params));
-      items = items.concat(result.Items || []);
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
+      stats.sourceWiseStats[itemSource].totalLogs++;
 
-    console.log(`Segment ${segment}/${totalSegments} complete: ${items.length} items`);
-    return items;
+      // Status category breakdown
+      const statusLower = String(status).toLowerCase();
+      if (statusLower === '403') {
+        stats.statusCategoryBreakdown['403']++;
+        stats.sourceWiseStats[itemSource].forbidden++; // ✅ NEW
+      } else if (statusLower === 'success' || statusLower === '200') {
+        stats.statusCategoryBreakdown['success']++;
+        stats.sourceWiseStats[itemSource].success++; // ✅ NEW
+        stats.sourceWiseStats[itemSource].eligible++; // ✅ NEW: Success means eligible
+      } else if (statusLower === 'duplicate') {
+        stats.statusCategoryBreakdown['duplicate']++;
+        stats.sourceWiseStats[itemSource].duplicate++; // ✅ NEW
+      } else {
+        stats.statusCategoryBreakdown['other']++;
+        stats.sourceWiseStats[itemSource].other++; // ✅ NEW
+      }
+    });
+
+    // Calculate overall success rate
+    const successCount = stats.statusCategoryBreakdown['success'];
+    stats.successRate = items.length > 0
+      ? ((successCount / items.length) * 100).toFixed(2) + '%'
+      : '0%';
+
+    // ✅ NEW: Calculate success rate per source
+    Object.keys(stats.sourceWiseStats).forEach(src => {
+      const sourceStats = stats.sourceWiseStats[src];
+      const sourceSuccessRate = sourceStats.totalLogs > 0
+        ? ((sourceStats.success / sourceStats.totalLogs) * 100).toFixed(2) + '%'
+        : '0%';
+      
+      stats.successRateBySource[src] = sourceSuccessRate;
+      stats.sourceWiseStats[src].successRate = sourceSuccessRate;
+    });
+
+    return stats;
   }
 
-  // Get stats grouped by date (OPTIMIZED)
-  static async getStatsByDate(startDate, endDate) {
+  static async getStatsByDate(source, startDate, endDate) {
+    if (!source) {
+      throw new Error(
+        'source is required for getStatsByDate(). This prevents expensive Scans. ' +
+        'Example: getStatsByDate("OVLY", startDate, endDate)'
+      );
+    }
+
     const startTime = Date.now();
-    console.log(`[${TABLE_NAME}] Fetching stats by date:`, startDate, 'to', endDate);
+    console.log(`[${TABLE_NAME}] Fetching stats by date for source: ${source}, date range:`, startDate, 'to', endDate);
 
     try {
-      // Use parallel scan for faster results
-      const segments = 4;
-      const scanPromises = [];
+      let allItems = [];
+      let lastKey = null;
 
-      for (let segment = 0; segment < segments; segment++) {
-        scanPromises.push(this._scanSegmentWithFilter(segment, segments, startDate, endDate));
-      }
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source AND #createdAt BETWEEN :startDate AND :endDate',
+        ExpressionAttributeNames: {
+          '#source': 'source',
+          '#createdAt': 'createdAt'
+        },
+        ExpressionAttributeValues: {
+          ':source': source,
+          ':startDate': startDate,
+          ':endDate': endDate
+        },
+        ScanIndexForward: false
+      };
 
-      const results = await Promise.all(scanPromises);
-      const allItems = results.flat();
-
-      console.log(`[${TABLE_NAME}] Fetched ${allItems.length} items in ${Date.now() - startTime}ms`);
-
-      // Group by date
-      const statsByDate = {};
-
-      allItems.forEach(item => {
-        const date = item.createdAt.split('T')[0];
-
-        if (!statsByDate[date]) {
-          statsByDate[date] = {
-            date,
-            total: 0,
-            statusBreakdown: {},
-            statusCategories: {
-              '403': 0,
-              'success': 0,
-              'duplicate': 0,
-              'other': 0
-            }
-          };
+      do {
+        if (lastKey) {
+          params.ExclusiveStartKey = lastKey;
         }
 
-        statsByDate[date].total++;
+        const result = await docClient.send(new QueryCommand(params));
+        allItems = allItems.concat(result.Items || []);
+        lastKey = result.LastEvaluatedKey;
 
-        // Status breakdown
-        const status = item.responseStatus || 'unknown';
-        statsByDate[date].statusBreakdown[status] =
-          (statsByDate[date].statusBreakdown[status] || 0) + 1;
+        delete params.ExclusiveStartKey;
+      } while (lastKey);
 
-        // Status categories
-        const statusLower = String(status).toLowerCase();
-        if (statusLower === '403') {
-          statsByDate[date].statusCategories['403']++;
-        } else if (statusLower === 'success' || statusLower === '200') {
-          statsByDate[date].statusCategories['success']++;
-        } else if (statusLower === 'duplicate') {
-          statsByDate[date].statusCategories['duplicate']++;
-        } else {
-          statsByDate[date].statusCategories['other']++;
-        }
-      });
+      console.log(`✅ Query complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
+
+      const statsByDate = this._groupByDate(allItems);
 
       return Object.values(statsByDate).sort((a, b) =>
         a.date.localeCompare(b.date)
@@ -440,7 +392,132 @@ class OvlyResponseLog {
     }
   }
 
-  // Update currentStatus on a log row (called after CSV/XLSX match)
+  static _groupByDate(items) {
+    const statsByDate = {};
+
+    items.forEach(item => {
+      const date = item.createdAt.split('T')[0];
+
+      if (!statsByDate[date]) {
+        statsByDate[date] = {
+          date,
+          total: 0,
+          statusBreakdown: {},
+          statusCategories: {
+            '403': 0,
+            'success': 0,
+            'duplicate': 0,
+            'other': 0
+          }
+        };
+      }
+
+      statsByDate[date].total++;
+
+      const status = item.responseStatus || 'unknown';
+      statsByDate[date].statusBreakdown[status] =
+        (statsByDate[date].statusBreakdown[status] || 0) + 1;
+
+      const statusLower = String(status).toLowerCase();
+      if (statusLower === '403') {
+        statsByDate[date].statusCategories['403']++;
+      } else if (statusLower === 'success' || statusLower === '200') {
+        statsByDate[date].statusCategories['success']++;
+      } else if (statusLower === 'duplicate') {
+        statsByDate[date].statusCategories['duplicate']++;
+      } else {
+        statsByDate[date].statusCategories['other']++;
+      }
+    });
+
+    return statsByDate;
+  }
+
+  /**
+   * ✅ ENHANCED: Batch get stats for multiple sources with combined source breakdown
+   */
+  static async getStatsBatch(sources, startDate, endDate) {
+    if (!sources || !Array.isArray(sources) || sources.length === 0) {
+      throw new Error('sources array is required. Example: ["OVLY", "FREO", "SML"]');
+    }
+
+    console.log(`Fetching stats for ${sources.length} sources:`, sources);
+
+    const promises = sources.map(source =>
+      this.getStats(source, startDate, endDate)
+        .catch(err => {
+          console.error(`Error fetching stats for ${source}:`, err);
+          return null;
+        })
+    );
+
+    const results = await Promise.all(promises);
+    const successfulResults = results.filter(r => r !== null);
+
+    // Combine stats with detailed source breakdown
+    const combined = {
+      totalLogs: successfulResults.reduce((sum, r) => sum + r.totalLogs, 0),
+      sources: successfulResults.map(r => r.source),
+      dateRange: { start: startDate, end: endDate },
+      bySource: {},
+      sourceWiseStats: {},
+      overallSuccessRate: 0
+    };
+
+    let totalSuccess = 0;
+    
+    successfulResults.forEach(result => {
+      combined.bySource[result.source] = {
+        totalLogs: result.totalLogs,
+        successRate: result.successRate,
+        responseStatusBreakdown: result.responseStatusBreakdown
+      };
+
+      // ✅ NEW: Merge source-wise stats
+      if (result.sourceWiseStats) {
+        Object.keys(result.sourceWiseStats).forEach(src => {
+          if (!combined.sourceWiseStats[src]) {
+            combined.sourceWiseStats[src] = {
+              totalLogs: 0,
+              eligible: 0,
+              success: 0,
+              duplicate: 0,
+              forbidden: 0,
+              other: 0
+            };
+          }
+          
+          const srcStats = result.sourceWiseStats[src];
+          combined.sourceWiseStats[src].totalLogs += srcStats.totalLogs;
+          combined.sourceWiseStats[src].eligible += srcStats.eligible;
+          combined.sourceWiseStats[src].success += srcStats.success;
+          combined.sourceWiseStats[src].duplicate += srcStats.duplicate;
+          combined.sourceWiseStats[src].forbidden += srcStats.forbidden;
+          combined.sourceWiseStats[src].other += srcStats.other;
+        });
+      }
+
+      // Extract success count for overall rate
+      const successCount = result.statusCategoryBreakdown?.success || 0;
+      totalSuccess += successCount;
+    });
+
+    // Calculate overall success rate
+    combined.overallSuccessRate = combined.totalLogs > 0
+      ? ((totalSuccess / combined.totalLogs) * 100).toFixed(2) + '%'
+      : '0%';
+
+    // Calculate success rate for each source in combined stats
+    Object.keys(combined.sourceWiseStats).forEach(src => {
+      const srcStats = combined.sourceWiseStats[src];
+      srcStats.successRate = srcStats.totalLogs > 0
+        ? ((srcStats.success / srcStats.totalLogs) * 100).toFixed(2) + '%'
+        : '0%';
+    });
+
+    return combined;
+  }
+
   static async updateStatusWithData(logId, data) {
     const updateParts = [];
     const expressionAttributeNames = {};
@@ -490,11 +567,6 @@ class OvlyResponseLog {
       ExpressionAttributeValues: expressionAttributeValues,
       ReturnValues: 'ALL_NEW'
     };
-
-    console.log(`[updateStatusWithData] Updating ${logId}:`, {
-      rejection_reason: data.rejection_reason,
-      fieldCount: Object.keys(data).length
-    });
 
     const result = await docClient.send(new UpdateCommand(params));
     return result.Attributes;

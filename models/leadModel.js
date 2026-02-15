@@ -16,7 +16,6 @@ class Lead {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }
 
-  // Get all month partitions between two dates
   static getMonthPartitions(startDate, endDate) {
     const start = new Date(startDate);
     const end = new Date(endDate);
@@ -33,7 +32,6 @@ class Lead {
     return partitions;
   }
 
-  // Calculate age from date of birth
   static calculateAge(dateOfBirth) {
     if (!dateOfBirth) return null;
     const dob = new Date(dateOfBirth);
@@ -46,7 +44,6 @@ class Lead {
     return age;
   }
 
-  // Get age range category
   static getAgeRange(age) {
     if (!age || age < 18) return 'Below 18';
     if (age >= 18 && age <= 25) return '18-25';
@@ -64,14 +61,12 @@ class Lead {
   static validate(data) {
     const errors = [];
 
-    // Required fields
     if (!data.source) errors.push('Source is required');
     if (!data.fullName) errors.push('Full name is required');
     if (!data.phone) errors.push('Phone is required');
     if (!data.email) errors.push('Email is required');
     if (!data.panNumber) errors.push('PAN number is required');
 
-    // String length validations
     if (data.fullName && (data.fullName.length < 1 || data.fullName.length > 100)) {
       errors.push('Full name must be between 1 and 100 characters');
     }
@@ -82,24 +77,20 @@ class Lead {
       errors.push('Last name must be between 1 and 50 characters');
     }
 
-    // Email validation
     const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9]{2,4}$/;
     if (data.email && !emailRegex.test(data.email)) {
       errors.push('Invalid email format');
     }
 
-    // PAN number validation
     const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
     if (data.panNumber && !panRegex.test(data.panNumber)) {
       errors.push('Invalid PAN number format (e.g., ABCDE1234F)');
     }
 
-    // Age validation
     if (data.age !== undefined && (data.age < 18 || data.age > 120)) {
       errors.push('Age must be between 18 and 120');
     }
 
-    // Date of birth validation
     if (data.dateOfBirth) {
       const dob = new Date(data.dateOfBirth);
       if (dob > new Date()) {
@@ -107,7 +98,6 @@ class Lead {
       }
     }
 
-    // Credit score validation
     if (data.creditScore !== undefined && (data.creditScore < 300 || data.creditScore > 900)) {
       errors.push('Credit score must be between 300 and 900');
     }
@@ -120,7 +110,7 @@ class Lead {
   }
 
   // ============================================================================
-  // CRUD OPERATIONS (Unchanged)
+  // CRUD OPERATIONS
   // ============================================================================
 
   static async create(leadData) {
@@ -403,31 +393,30 @@ class Lead {
   }
 
   // ============================================================================
-  // OPTIMIZED STATISTICS FUNCTIONS
+  // OPTIMIZED STATISTICS FUNCTIONS WITH SOURCE BREAKDOWN
   // ============================================================================
 
   /**
-   * Get REAL-TIME accurate total count using GSI pagination
-   * This is fast and accurate, unlike table metadata
+   * Get accurate total count with SOURCE BREAKDOWN
    */
   static async getAccurateTotalCount() {
     const startTime = Date.now();
-    console.log('[ANALYTICS] Getting accurate total count via GSI...');
+    console.log('[ANALYTICS] Getting accurate total count via GSI with source breakdown...');
     
     try {
-      // Get all known sources from environment or use a default approach
       const sources = process.env.LEAD_SOURCES?.split(',') || [];
       
       if (sources.length === 0) {
-        // If no sources configured, count via createdAt-index with all partitions
         return await this._countViaDatePartitions();
       }
 
-      // Count via source-createdAt-index (usually faster)
       let totalCount = 0;
+      const sourceBreakdown = {}; // ✅ NEW: Track per source
+
       for (const source of sources) {
         const count = await this.countBySource(source.trim());
         totalCount += count;
+        sourceBreakdown[source.trim()] = count; // ✅ NEW
         console.log(`  Source "${source.trim()}": ${count.toLocaleString()} records`);
       }
 
@@ -436,6 +425,7 @@ class Lead {
 
       return {
         totalLogs: totalCount,
+        sourceBreakdown, // ✅ NEW: Include source breakdown
         isEstimate: false,
         scannedInMs: elapsed,
         method: 'gsi-source-count',
@@ -447,13 +437,9 @@ class Lead {
     }
   }
 
-  /**
-   * Count via date partitions (fallback method)
-   */
   static async _countViaDatePartitions() {
     const startTime = Date.now();
     
-    // Generate partitions for last 2 years as reasonable default
     const endDate = new Date();
     const startDate = new Date();
     startDate.setFullYear(startDate.getFullYear() - 2);
@@ -482,9 +468,6 @@ class Lead {
     };
   }
 
-  /**
-   * Count all items in a partition (no date filter)
-   */
   static async _countFullPartition(partition) {
     let count = 0;
     let lastKey = null;
@@ -511,7 +494,7 @@ class Lead {
   }
 
   /**
-   * Get quick stats - NOW RETURNS REAL-TIME COUNT
+   * Get quick stats with SOURCE BREAKDOWN for date range
    */
   static async getQuickStats(source = null, startDate = null, endDate = null) {
     try {
@@ -524,11 +507,10 @@ class Lead {
           method: 'gsi-source-count'
         };
       } else if (startDate && endDate) {
-        return this.getQuickStatsForDateRange(startDate, endDate);
+        return this.getQuickStatsForDateRange(startDate, endDate); // ✅ NOW WITH SOURCE BREAKDOWN
       } else {
-        // CHANGED: Return accurate real-time count instead of stale estimate
-        console.log('[INFO] Getting accurate total count (real-time via GSI)');
-        return this.getAccurateTotalCount();
+        console.log('[INFO] Getting accurate total count with source breakdown (real-time via GSI)');
+        return this.getAccurateTotalCount(); // ✅ Already has source breakdown
       }
     } catch (error) {
       console.error('Error in getQuickStats:', error);
@@ -536,34 +518,109 @@ class Lead {
     }
   }
 
+  /**
+   * ✅ NEW: Get quick count for date range WITH SOURCE BREAKDOWN
+   */
   static async getQuickStatsForDateRange(startDate, endDate) {
     const startTime = Date.now();
 
     try {
-      console.log(`[${TABLE_NAME}] Quick count for date range:`, startDate, 'to', endDate);
+      console.log(`[${TABLE_NAME}] Quick count with source breakdown:`, startDate, 'to', endDate);
 
-      const partitions = this.getMonthPartitions(startDate, endDate);
-      const countPromises = partitions.map(partition => 
-        this._countDatePartition(partition, startDate, endDate)
-      );
+      const sources = process.env.LEAD_SOURCES?.split(',') || [];
+      
+      if (sources.length === 0) {
+        // Fallback without source breakdown
+        return this._countDateRangeWithoutSources(startDate, endDate);
+      }
+
+      // Count each source in parallel
+      const countPromises = sources.map(async (source) => {
+        const trimmedSource = source.trim();
+        const count = await this._countSourceInDateRange(trimmedSource, startDate, endDate);
+        return { source: trimmedSource, count };
+      });
 
       const results = await Promise.all(countPromises);
-      const totalCount = results.reduce((sum, count) => sum + count, 0);
-      const elapsed = Date.now() - startTime;
+      
+      // Build source breakdown
+      const sourceBreakdown = {};
+      let totalCount = 0;
+      
+      results.forEach(({ source, count }) => {
+        sourceBreakdown[source] = count;
+        totalCount += count;
+        console.log(`  Source "${source}": ${count.toLocaleString()} records`);
+      });
 
+      const elapsed = Date.now() - startTime;
       console.log(`[${TABLE_NAME}] Quick count complete: ${totalCount} items in ${elapsed}ms`);
 
       return {
         totalLogs: totalCount,
+        sourceBreakdown, // ✅ NEW: Source breakdown included
         isEstimate: false,
         scannedInMs: elapsed,
-        method: 'gsi-query',
+        method: 'gsi-query-by-source',
         dateRange: { start: startDate, end: endDate }
       };
     } catch (error) {
       console.error('Error in quick count:', error);
       throw error;
     }
+  }
+
+  /**
+   * ✅ NEW: Count specific source in date range
+   */
+  static async _countSourceInDateRange(source, startDate, endDate) {
+    let count = 0;
+    let lastKey = null;
+
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source AND createdAt BETWEEN :start AND :end',
+        ExpressionAttributeNames: { '#source': 'source' },
+        ExpressionAttributeValues: {
+          ':source': source,
+          ':start': startDate,
+          ':end': endDate
+        },
+        Select: 'COUNT'
+      };
+
+      if (lastKey) {
+        params.ExclusiveStartKey = lastKey;
+      }
+
+      const result = await docClient.send(new QueryCommand(params));
+      count += result.Count || 0;
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    return count;
+  }
+
+  /**
+   * Fallback count without source breakdown
+   */
+  static async _countDateRangeWithoutSources(startDate, endDate) {
+    const partitions = this.getMonthPartitions(startDate, endDate);
+    const countPromises = partitions.map(partition => 
+      this._countDatePartition(partition, startDate, endDate)
+    );
+
+    const results = await Promise.all(countPromises);
+    const totalCount = results.reduce((sum, count) => sum + count, 0);
+
+    return {
+      totalLogs: totalCount,
+      isEstimate: false,
+      method: 'gsi-query',
+      dateRange: { start: startDate, end: endDate }
+    };
   }
 
   static async _countDatePartition(partition, startDate, endDate) {
@@ -596,8 +653,7 @@ class Lead {
   }
 
   /**
-   * STREAMING STATISTICS - Process data in chunks without loading all into memory
-   * This is the KEY optimization for large datasets (200k+)
+   * STREAMING STATISTICS (unchanged - already has source breakdown)
    */
   static async getStats(startDate, endDate, options = {}) {
     const startTime = Date.now();
@@ -610,14 +666,10 @@ class Lead {
     console.log(`[${TABLE_NAME}] Starting STREAMING stats for:`, startDate, 'to', endDate);
 
     try {
-      // Initialize stats accumulator
       const statsAggregator = this._createStatsAggregator();
-      
-      // Get partitions
       const partitions = this.getMonthPartitions(startDate, endDate);
       console.log(`[${TABLE_NAME}] Processing ${partitions.length} partitions...`);
 
-      // Process each partition with streaming
       let totalProcessed = 0;
       for (let i = 0; i < partitions.length; i++) {
         const partition = partitions[i];
@@ -643,7 +695,6 @@ class Lead {
         console.log(`    Processed ${partitionCount.toLocaleString()} records from ${partition}`);
       }
 
-      // Finalize stats
       const stats = this._finalizeStats(statsAggregator, startDate, endDate, startTime);
       
       const elapsed = Date.now() - startTime;
@@ -656,9 +707,6 @@ class Lead {
     }
   }
 
-  /**
-   * Create stats aggregator object
-   */
   static _createStatsAggregator() {
     return {
       totalLogs: 0,
@@ -686,13 +734,10 @@ class Lead {
     };
   }
 
-  /**
-   * Stream process a single partition in chunks
-   */
   static async _streamProcessPartition(partition, startDate, endDate, aggregator, progressCallback) {
     let lastKey = null;
     let partitionCount = 0;
-    const CHUNK_SIZE = 1000; // Process 1000 records at a time
+    const CHUNK_SIZE = 1000;
 
     do {
       const params = {
@@ -714,18 +759,15 @@ class Lead {
       const result = await docClient.send(new QueryCommand(params));
       const items = result.Items || [];
       
-      // Process this chunk
       this._processChunk(items, aggregator);
       
       partitionCount += items.length;
       lastKey = result.LastEvaluatedKey;
       
-      // Report progress
       if (progressCallback) {
         progressCallback(items.length);
       }
       
-      // Small delay to avoid throttling
       if (lastKey) {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
@@ -734,14 +776,10 @@ class Lead {
     return partitionCount;
   }
 
-  /**
-   * Process a chunk of items and update aggregator
-   */
   static _processChunk(items, aggregator) {
     items.forEach(item => {
       aggregator.totalLogs++;
 
-      // Track duplicates
       if (item.phone) {
         if (aggregator.seenPhones.has(item.phone)) {
           aggregator.duplicatePhones.add(item.phone);
@@ -755,11 +793,9 @@ class Lead {
         aggregator.seenPans.add(item.panNumber);
       }
 
-      // Source
       const source = item.source || 'unknown';
       aggregator.sourceBreakdown[source] = (aggregator.sourceBreakdown[source] || 0) + 1;
 
-      // Gender
       const gender = item.gender || 'Unknown';
       if (aggregator.genderBreakdown[gender] !== undefined) {
         aggregator.genderBreakdown[gender]++;
@@ -767,7 +803,6 @@ class Lead {
         aggregator.genderBreakdown['Other']++;
       }
 
-      // Age range
       let age = item.age;
       if (!age && item.dateOfBirth) {
         age = this.calculateAge(item.dateOfBirth);
@@ -775,17 +810,14 @@ class Lead {
       const ageRange = age ? this.getAgeRange(age) : 'Unknown';
       aggregator.ageRangeBreakdown[ageRange]++;
 
-      // Job type
       if (item.jobType) {
         aggregator.jobTypeBreakdown[item.jobType] = (aggregator.jobTypeBreakdown[item.jobType] || 0) + 1;
       }
 
-      // Business type
       if (item.businessType) {
         aggregator.businessTypeBreakdown[item.businessType] = (aggregator.businessTypeBreakdown[item.businessType] || 0) + 1;
       }
 
-      // Salary range
       if (item.salary) {
         const salary = parseInt(item.salary);
         if (salary < 20000) aggregator.salaryRangeBreakdown['Below 20k']++;
@@ -798,7 +830,6 @@ class Lead {
         aggregator.salaryRangeBreakdown['Unknown']++;
       }
 
-      // Credit score
       if (item.creditScore || item.cibilScore) {
         const score = item.creditScore || item.cibilScore;
         if (score < 580) aggregator.creditScoreBreakdown['Poor (300-579)']++;
@@ -810,17 +841,12 @@ class Lead {
         aggregator.creditScoreBreakdown['Unknown']++;
       }
 
-      // Consent
       const consent = item.consent === true ? 'true' : item.consent === false ? 'false' : 'unknown';
       aggregator.consentBreakdown[consent]++;
     });
   }
 
-  /**
-   * Finalize stats from aggregator
-   */
   static _finalizeStats(aggregator, startDate, endDate, startTime) {
-    // Count unique vs duplicate
     let uniqueLeads = 0;
     let duplicateLeads = 0;
     
@@ -854,9 +880,6 @@ class Lead {
     };
   }
 
-  /**
-   * Get stats by date with streaming (also optimized)
-   */
   static async getStatsByDate(startDate, endDate) {
     const startTime = Date.now();
     console.log(`[${TABLE_NAME}] Fetching stats by date (streaming):`, startDate, 'to', endDate);
@@ -954,10 +977,7 @@ class Lead {
     } while (lastKey);
   }
 
-  // ============================================================================
-  // MIGRATION / UTILITY FUNCTIONS (Unchanged)
-  // ============================================================================
-
+  // Migration functions (unchanged)
   static async backfillDatePartitions(sourceToMigrate = null) {
     let totalProcessed = 0;
     
