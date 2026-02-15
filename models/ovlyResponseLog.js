@@ -546,7 +546,8 @@ class OvlyResponseLog {
     return stats;
   }
 
-  static async getStatsByDate(source, startDate, endDate) {
+  static async getStatsByDate(startDate, endDate) {
+    const source = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
     if (!source) {
       throw new Error(
         'source is required for getStatsByDate(). This prevents expensive Scans. ' +
