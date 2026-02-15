@@ -547,63 +547,80 @@ class OvlyResponseLog {
   }
 
   /**
-   * Get stats grouped by date - supports multiple sources
-   * ✅ FIXED: Handles call from controller: getStatsByDate(startDate, endDate)
-   */
-  static async getStatsByDate(startDateOrSource, endDateOrStart, endDate = null) {
+ * Get stats grouped by date WITH source-wise breakdown
+ */
+  static async getStatsByDate(source, startDate, endDate) {
     const startTime = Date.now();
 
     try {
-      // ✅ Detect call pattern from controller
-      let source, startDate, actualEndDate;
-
-      // Pattern 1: getStatsByDate(startDate, endDate) - from controller
-      if (!endDate && startDateOrSource && endDateOrStart) {
-        source = null;
-        startDate = startDateOrSource;
-        actualEndDate = endDateOrStart;
-      }
-      // Pattern 2: getStatsByDate(source, startDate, endDate) - direct call
-      else {
-        source = startDateOrSource;
-        startDate = endDateOrStart;
-        actualEndDate = endDate;
-      }
-
-      console.log(`[${TABLE_NAME}] getStatsByDate called with source=${source}, startDate=${startDate}, endDate=${actualEndDate}`);
-
-      // If no source provided, get stats for all sources
+      // ✅ If no source, get source-wise breakdown by date
       if (!source) {
         const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
-        console.log(`[${TABLE_NAME}] Fetching stats by date for all sources:`, sources);
+        console.log(`[${TABLE_NAME}] Fetching source-wise stats by date for:`, sources);
 
-        // Fetch stats for each source in parallel
-        const promises = sources.map(src =>
-          this._getStatsByDateForSource(src, startDate, actualEndDate).catch(err => {
-            console.error(`Error fetching stats by date for ${src}:`, err);
-            return [];
-          })
-        );
+        // Collect items from all sources
+        let allItems = [];
+        for (const src of sources) {
+          const items = await this._fetchItemsBySource(src, startDate, endDate);
+          allItems = allItems.concat(items);
+        }
 
-        const results = await Promise.all(promises);
+        console.log(`✅ Query complete: ${allItems.length} items from ${sources.length} sources in ${Date.now() - startTime}ms`);
 
-        // Merge results by date
-        const mergedByDate = this._mergeStatsByDate(results.flat());
-
-        return Object.values(mergedByDate).sort((a, b) => a.date.localeCompare(b.date));
+        // Group by date WITH source breakdown
+        const statsByDate = this._groupByDateWithSourceBreakdown(allItems);
+        return Object.values(statsByDate).sort((a, b) => a.date.localeCompare(b.date));
       }
 
-      // Single source logic
-      return this._getStatsByDateForSource(source, startDate, actualEndDate);
+      // ✅ Single source - original working code
+      console.log(`[${TABLE_NAME}] Fetching stats by date for source: ${source}, date range:`, startDate, 'to', endDate);
+
+      let allItems = [];
+      let lastKey = null;
+
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source AND #createdAt BETWEEN :startDate AND :endDate',
+        ExpressionAttributeNames: {
+          '#source': 'source',
+          '#createdAt': 'createdAt'
+        },
+        ExpressionAttributeValues: {
+          ':source': source,
+          ':startDate': startDate,
+          ':endDate': endDate
+        },
+        ScanIndexForward: false
+      };
+
+      do {
+        if (lastKey) {
+          params.ExclusiveStartKey = lastKey;
+        }
+
+        const result = await docClient.send(new QueryCommand(params));
+        allItems = allItems.concat(result.Items || []);
+        lastKey = result.LastEvaluatedKey;
+
+        delete params.ExclusiveStartKey;
+      } while (lastKey);
+
+      console.log(`✅ Query complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
+
+      // Group by date (simple)
+      const statsByDate = this._groupByDate(allItems);
+      return Object.values(statsByDate).sort((a, b) => a.date.localeCompare(b.date));
     } catch (error) {
       console.error('Error in getStatsByDate:', error);
       throw error;
     }
   }
 
-  static async _getStatsByDateForSource(source, startDate, endDate) {
-    console.log(`[${TABLE_NAME}] Fetching stats by date for source: ${source}, ${startDate} to ${endDate}`);
-
+  /**
+   * ✅ Helper to fetch items for a single source
+   */
+  static async _fetchItemsBySource(source, startDate, endDate) {
     let allItems = [];
     let lastKey = null;
 
@@ -636,53 +653,18 @@ class OvlyResponseLog {
     } while (lastKey);
 
     console.log(`  ✅ ${source}: ${allItems.length} items`);
-
-    // Group by date and return array
-    return this._groupByDateArray(allItems);
+    return allItems;
   }
 
-  static _mergeStatsByDate(statsArray) {
-    const merged = {};
-
-    statsArray.forEach(dayStat => {
-      const date = dayStat.date;
-
-      if (!merged[date]) {
-        merged[date] = {
-          date,
-          total: 0,
-          statusBreakdown: {},
-          statusCategories: {
-            '403': 0,
-            'success': 0,
-            'duplicate': 0,
-            'other': 0
-          }
-        };
-      }
-
-      merged[date].total += dayStat.total;
-
-      // Merge status breakdown
-      Object.keys(dayStat.statusBreakdown || {}).forEach(status => {
-        merged[date].statusBreakdown[status] =
-          (merged[date].statusBreakdown[status] || 0) + dayStat.statusBreakdown[status];
-      });
-
-      // Merge status categories
-      Object.keys(dayStat.statusCategories || {}).forEach(category => {
-        merged[date].statusCategories[category] += dayStat.statusCategories[category] || 0;
-      });
-    });
-
-    return merged;
-  }
-
-  static _groupByDateArray(items) {
+  /**
+   * ✅ NEW: Group by date WITH source-wise breakdown
+   */
+  static _groupByDateWithSourceBreakdown(items) {
     const statsByDate = {};
 
     items.forEach(item => {
       const date = item.createdAt.split('T')[0];
+      const itemSource = item.source || 'unknown';
 
       if (!statsByDate[date]) {
         statsByDate[date] = {
@@ -694,12 +676,16 @@ class OvlyResponseLog {
             'success': 0,
             'duplicate': 0,
             'other': 0
-          }
+          },
+          // ✅ NEW: Source-wise breakdown
+          sourceBreakdown: {},
+          bySource: {}
         };
       }
 
       statsByDate[date].total++;
 
+      // Overall status tracking
       const status = item.responseStatus || 'unknown';
       statsByDate[date].statusBreakdown[status] =
         (statsByDate[date].statusBreakdown[status] || 0) + 1;
@@ -714,11 +700,40 @@ class OvlyResponseLog {
       } else {
         statsByDate[date].statusCategories['other']++;
       }
+
+      // ✅ NEW: Track by source
+      if (!statsByDate[date].bySource[itemSource]) {
+        statsByDate[date].bySource[itemSource] = {
+          total: 0,
+          success: 0,
+          duplicate: 0,
+          forbidden: 0,
+          other: 0
+        };
+      }
+
+      statsByDate[date].sourceBreakdown[itemSource] =
+        (statsByDate[date].sourceBreakdown[itemSource] || 0) + 1;
+
+      statsByDate[date].bySource[itemSource].total++;
+
+      if (statusLower === '403') {
+        statsByDate[date].bySource[itemSource].forbidden++;
+      } else if (statusLower === 'success' || statusLower === '200') {
+        statsByDate[date].bySource[itemSource].success++;
+      } else if (statusLower === 'duplicate') {
+        statsByDate[date].bySource[itemSource].duplicate++;
+      } else {
+        statsByDate[date].bySource[itemSource].other++;
+      }
     });
 
-    return Object.values(statsByDate).sort((a, b) => a.date.localeCompare(b.date));
+    return statsByDate;
   }
 
+  /**
+   * ✅ Original simple grouping (for single source calls)
+   */
   static _groupByDate(items) {
     const statsByDate = {};
 
