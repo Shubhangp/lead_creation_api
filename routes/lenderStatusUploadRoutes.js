@@ -22,15 +22,6 @@ const upload = multer({
 });
 
 router.get('/lenders', lenderSyncController.getLenders);
-
-/**
- * POST /api/lender-sync/upload
- * Upload file and sync status for selected lender
- * 
- * Body (multipart/form-data):
- *   - file: uploaded CSV/XLSX file
- *   - lender: lender key (e.g., 'ovly', 'lenderA')
- */
 router.post('/upload', upload.single('file'), lenderSyncController.uploadAndSync);
 router.get('/stats/:lender', lenderSyncController.getStats);
 
