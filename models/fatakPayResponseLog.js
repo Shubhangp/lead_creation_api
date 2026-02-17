@@ -1,10 +1,9 @@
 const { docClient } = require('../dynamodb');
-const { PutCommand, GetCommand, QueryCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
+const { PutCommand, GetCommand, QueryCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'fatakpay_response_logs';
 
-// Response message categories
 const PERMANENT_BLOCKS = [
   'application is permanently block.',
   'Attribute Error',
@@ -20,520 +19,309 @@ const PERMANENT_BLOCKS = [
 ];
 
 class FatakPayResponseLog {
-  // Create log entry
+
+  static async _queryAll(params) {
+    const items = [];
+    let lastKey;
+    const p = { ...params };
+    do {
+      if (lastKey) p.ExclusiveStartKey = lastKey;
+      const res = await docClient.send(new QueryCommand(p));
+      items.push(...(res.Items || []));
+      lastKey = res.LastEvaluatedKey;
+      delete p.ExclusiveStartKey;
+    } while (lastKey);
+    return items;
+  }
+
+  static async _queryCount(params) {
+    let total = 0;
+    let lastKey;
+    const p = { ...params, Select: 'COUNT' };
+    do {
+      if (lastKey) p.ExclusiveStartKey = lastKey;
+      const res = await docClient.send(new QueryCommand(p));
+      total += res.Count || 0;
+      lastKey = res.LastEvaluatedKey;
+      delete p.ExclusiveStartKey;
+    } while (lastKey);
+    return total;
+  }
+
+  // ─── write ────────────────────────────────────────────────────────────────
+
   static async create(logData) {
+    if (!logData.leadId) throw new Error('leadId is required');
+    if (!logData.source) throw new Error('source is required (needed once source-createdAt-index becomes ACTIVE)');
+
     const item = {
       logId: uuidv4(),
       leadId: logData.leadId,
-      source: logData.source || null,
+      source: logData.source,
       requestPayload: logData.requestPayload || null,
       responseStatus: logData.responseStatus || null,
       responseBody: logData.responseBody || null,
       createdAt: new Date().toISOString()
     };
 
-    await docClient.send(new PutCommand({
-      TableName: TABLE_NAME,
-      Item: item
-    }));
-
+    await docClient.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
     return item;
   }
 
-  // Find by ID
+  // ─── reads ────────────────────────────────────────────────────────────────
+
   static async findById(logId) {
-    const result = await docClient.send(new GetCommand({
-      TableName: TABLE_NAME,
-      Key: { logId }
-    }));
-    return result.Item || null;
+    const res = await docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { logId } }));
+    return res.Item || null;
   }
 
-  // Find by leadId (requires GSI: leadId-index)
-  static async findByLeadId(leadId) {
-    const result = await docClient.send(new QueryCommand({
+  // Uses leadId-index (ACTIVE ✅)
+  static async findByLeadId(leadId, options = {}) {
+    if (!leadId) throw new Error('leadId is required');
+    const { limit = 100, lastEvaluatedKey } = options;
+
+    const params = {
       TableName: TABLE_NAME,
       IndexName: 'leadId-index',
-      KeyConditionExpression: 'leadId = :leadId',
-      ExpressionAttributeValues: { ':leadId': leadId }
-    }));
-    return result.Items || [];
-  }
-
-  // Find all logs (paginated)
-  static async findAll(options = {}) {
-    const { limit = 100, lastEvaluatedKey } = options;
-    const params = {
-      TableName: TABLE_NAME,
+      KeyConditionExpression: 'leadId = :lid',
+      ExpressionAttributeValues: { ':lid': leadId },
+      ScanIndexForward: false,
       Limit: limit
     };
+    if (lastEvaluatedKey) params.ExclusiveStartKey = lastEvaluatedKey;
 
-    if (lastEvaluatedKey) {
-      params.ExclusiveStartKey = lastEvaluatedKey;
-    }
-
-    const result = await docClient.send(new ScanCommand(params));
-    return {
-      items: result.Items || [],
-      lastEvaluatedKey: result.LastEvaluatedKey
-    };
+    const res = await docClient.send(new QueryCommand(params));
+    return { items: res.Items || [], lastEvaluatedKey: res.LastEvaluatedKey };
   }
 
-  // Get logs by date range (requires GSI: createdAt-index)
-  static async findByDateRange(startDate, endDate, options = {}) {
-    const { limit = 100, lastEvaluatedKey } = options;
-    
-    const params = {
-      TableName: TABLE_NAME,
-      IndexName: 'createdAt-index',
-      KeyConditionExpression: 'createdAt BETWEEN :startDate AND :endDate',
-      ExpressionAttributeValues: {
-        ':startDate': startDate,
-        ':endDate': endDate
-      },
-      Limit: limit
-    };
-
-    if (lastEvaluatedKey) {
-      params.ExclusiveStartKey = lastEvaluatedKey;
-    }
-
-    const result = await docClient.send(new QueryCommand(params));
-    return {
-      items: result.Items || [],
-      lastEvaluatedKey: result.LastEvaluatedKey
-    };
-  }
-
-  // Helper function to check if response is a permanent block
-  static isPermanentBlock(responseBody) {
-    if (!responseBody || !responseBody.message) return false;
-    
-    const message = responseBody.message.trim();
-    return PERMANENT_BLOCKS.some(blockMsg => 
-      message.toLowerCase() === blockMsg.toLowerCase()
+  // ⚠️  source-createdAt-index is CREATING – will throw a clear error instead of
+  //     silently falling back to a full table scan.
+  static async findBySource(source, options = {}) {
+    if (!source) throw new Error('source is required');
+    throw new Error(
+      `[${TABLE_NAME}] source-createdAt-index is still CREATING. ` +
+      `Query by leadId instead, or wait until the index status becomes ACTIVE.`
     );
   }
 
-  // Get permanent block logs
-  static async getPermanentBlocks(options = {}) {
-    const { limit = 1000 } = options;
-    let allItems = [];
-    let lastKey = null;
-
-    do {
-      const params = {
-        TableName: TABLE_NAME,
-        Limit: limit
-      };
-
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
-
-      const result = await docClient.send(new ScanCommand(params));
-      const items = result.Items || [];
-      
-      // Filter permanent blocks
-      const permanentBlocks = items.filter(item => 
-        this.isPermanentBlock(item.responseBody)
-      );
-      
-      allItems = allItems.concat(permanentBlocks);
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey && allItems.length < limit);
-
-    return allItems;
+  // findAll replaced: requires leadId to stay scan-free
+  static async findAll() {
+    throw new Error(
+      `[${TABLE_NAME}] findAll() removed – no full-table index available. ` +
+      `Use findByLeadId(leadId) instead.`
+    );
   }
 
-  // Get comprehensive stats (OPTIMIZED for date ranges)
-  static async getStats(startDate = null, endDate = null) {
-    let allItems = [];
-    const startTime = Date.now();
+  // findByDateRange replaced: no usable date index yet
+  static async findByDateRange() {
+    throw new Error(
+      `[${TABLE_NAME}] findByDateRange() requires source-createdAt-index which is CREATING. ` +
+      `Use findByLeadId(leadId) instead.`
+    );
+  }
 
-    console.log(`[${TABLE_NAME}] Starting stats fetch for date range:`, startDate, 'to', endDate);
+  // ─── domain helpers ───────────────────────────────────────────────────────
 
-    try {
-      // Use parallel scan with date filter for much faster results
-      if (startDate && endDate) {
-        const segments = 8; // Increased from 4 to 8 for faster processing
-        const scanPromises = [];
+  static isPermanentBlock(responseBody) {
+    if (!responseBody?.message) return false;
+    const msg = responseBody.message.trim().toLowerCase();
+    return PERMANENT_BLOCKS.some(b => b.toLowerCase() === msg);
+  }
 
-        for (let segment = 0; segment < segments; segment++) {
-          scanPromises.push(this._scanSegmentWithFilter(segment, segments, startDate, endDate));
-        }
+  // Get permanent blocks for a specific lead
+  static async getPermanentBlocksByLeadId(leadId) {
+    if (!leadId) throw new Error('leadId is required');
+    const { items } = await this.findByLeadId(leadId, { limit: 1000 });
+    return items.filter(item => this.isPermanentBlock(item.responseBody));
+  }
 
-        const results = await Promise.all(scanPromises);
-        allItems = results.flat();
+  // ─── stats ────────────────────────────────────────────────────────────────
 
-        console.log(`[${TABLE_NAME}] Parallel filtered scan complete: ${allItems.length} items in ${Date.now() - startTime}ms`);
-      } else {
-        // No date filter - regular scan
-        let lastKey = null;
-        do {
-          const params = {
-            TableName: TABLE_NAME,
-            Limit: 1000
-          };
+  // getQuickStats: count by leadId (source-createdAt unavailable)
+  static async getQuickStats(leadId, startDate = null, endDate = null) {
+    if (!leadId) throw new Error(
+      `[${TABLE_NAME}] leadId is required for getQuickStats(). ` +
+      `source-createdAt-index is still CREATING.`
+    );
 
-          if (lastKey) {
-            params.ExclusiveStartKey = lastKey;
-          }
+    const t0 = Date.now();
+    const params = {
+      TableName: TABLE_NAME,
+      IndexName: 'leadId-index',
+      KeyConditionExpression: 'leadId = :lid',
+      ExpressionAttributeValues: { ':lid': leadId }
+    };
 
-          const result = await docClient.send(new ScanCommand(params));
-          allItems = allItems.concat(result.Items || []);
-          lastKey = result.LastEvaluatedKey;
-        } while (lastKey);
-      }
+    // post-filter by date client-side (no sort-key on leadId-index)
+    const items = await this._queryAll(params);
+    const filtered = this._filterByDate(items, startDate, endDate);
 
-      // Initialize stats
-      const stats = {
-        totalLogs: allItems.length,
-        dateRange: {
-          start: startDate,
-          end: endDate
-        },
-        responseStatusBreakdown: {},
-        messageBreakdown: {},
-        permanentBlocks: {
-          total: 0,
-          byMessage: {},
-          percentage: '0%'
-        },
-        sourceBreakdown: {},
-        successRate: 0,
-        eligibilityStats: {
-          eligible: 0,
-          notEligible: 0,
-          ageNotEligible: 0
-        }
-      };
+    return {
+      totalLogs: filtered.length,
+      leadId,
+      dateRange: startDate ? { start: startDate, end: endDate } : null,
+      scannedInMs: Date.now() - t0,
+      method: 'query-leadId-index',
+      indexUsed: 'leadId-index',
+      note: 'source-createdAt-index is CREATING; switch to it once ACTIVE for cheaper counts'
+    };
+  }
 
-      // Process each log
-      allItems.forEach(item => {
-        // Response status breakdown
-        const status = item.responseStatus || 'unknown';
-        stats.responseStatusBreakdown[status] = (stats.responseStatusBreakdown[status] || 0) + 1;
+  // getStats: full stats by leadId
+  static async getStats(leadId, startDate = null, endDate = null) {
+    if (!leadId) throw new Error(
+      `[${TABLE_NAME}] leadId is required for getStats(). ` +
+      `source-createdAt-index is still CREATING.`
+    );
 
-        // Source breakdown
-        const source = item.source || 'unknown';
-        stats.sourceBreakdown[source] = (stats.sourceBreakdown[source] || 0) + 1;
+    const t0 = Date.now();
+    const params = {
+      TableName: TABLE_NAME,
+      IndexName: 'leadId-index',
+      KeyConditionExpression: 'leadId = :lid',
+      ExpressionAttributeValues: { ':lid': leadId },
+      ScanIndexForward: false
+    };
 
-        // Message breakdown and permanent blocks
-        if (item.responseBody && item.responseBody.message) {
-          const message = item.responseBody.message.trim();
-          stats.messageBreakdown[message] = (stats.messageBreakdown[message] || 0) + 1;
+    const allItems = this._filterByDate(await this._queryAll(params), startDate, endDate);
+    console.log(`[${TABLE_NAME}] getStats query done: ${allItems.length} items in ${Date.now() - t0}ms`);
 
-          // Check if permanent block
-          if (this.isPermanentBlock(item.responseBody)) {
+    const stats = {
+      totalLogs: allItems.length,
+      leadId,
+      dateRange: { start: startDate, end: endDate },
+      responseStatusBreakdown: {},
+      messageBreakdown: {},
+      permanentBlocks: { total: 0, byMessage: {}, percentage: '0%' },
+      sourceBreakdown: {},
+      eligibilityStats: { eligible: 0, notEligible: 0, ageNotEligible: 0 },
+      statusCategoryBreakdown: { 'ACCEPT': 0, 'REJECTED': 0, 'Failed': 0, 'other': 0 },
+      offerBreakdown: { withOffer: 0, withoutOffer: 0, totalOfferAmount: 0, averageOffer: 0 },
+      acceptanceRate: '0%',
+      processingTimeMs: 0,
+      method: 'query-leadId-index',
+      indexUsed: 'leadId-index',
+      note: 'source-createdAt-index is CREATING; switch once ACTIVE for cheaper cross-lead stats'
+    };
+
+    allItems.forEach(item => {
+      const st = item.responseStatus || 'unknown';
+      stats.responseStatusBreakdown[st] = (stats.responseStatusBreakdown[st] || 0) + 1;
+
+      const src = item.source || 'unknown';
+      stats.sourceBreakdown[src] = (stats.sourceBreakdown[src] || 0) + 1;
+
+      if (item.responseBody) {
+        let body = item.responseBody;
+        if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) {} }
+
+        if (body.message) {
+          const msg = body.message.trim();
+          stats.messageBreakdown[msg] = (stats.messageBreakdown[msg] || 0) + 1;
+          if (this.isPermanentBlock(body)) {
             stats.permanentBlocks.total++;
-            stats.permanentBlocks.byMessage[message] = 
-              (stats.permanentBlocks.byMessage[message] || 0) + 1;
+            stats.permanentBlocks.byMessage[msg] = (stats.permanentBlocks.byMessage[msg] || 0) + 1;
           }
-
-          // Eligibility stats
-          const lowerMessage = message.toLowerCase();
-          if (lowerMessage.includes('you are eligible')) {
-            stats.eligibilityStats.eligible++;
-          } else if (lowerMessage.includes('not eligible due to age')) {
-            stats.eligibilityStats.ageNotEligible++;
-          } else if (lowerMessage.includes('not eligible')) {
-            stats.eligibilityStats.notEligible++;
-          }
+          const low = msg.toLowerCase();
+          if (low.includes('you are eligible')) stats.eligibilityStats.eligible++;
+          else if (low.includes('not eligible due to age')) stats.eligibilityStats.ageNotEligible++;
+          else if (low.includes('not eligible')) stats.eligibilityStats.notEligible++;
         }
-      });
 
-      // Calculate success rate
-      const successCount = stats.responseStatusBreakdown['200'] || 0;
-      stats.successRate = allItems.length > 0 
-        ? ((successCount / allItems.length) * 100).toFixed(2) + '%'
-        : '0%';
+        const bodyStatus = body.status || 'unknown';
+        if (bodyStatus === 'ACCEPT') {
+          stats.statusCategoryBreakdown['ACCEPT']++;
+          if (body.offer) {
+            stats.offerBreakdown.withOffer++;
+            stats.offerBreakdown.totalOfferAmount += parseInt(body.offer) || 0;
+          }
+        } else if (bodyStatus === 'REJECTED') {
+          stats.statusCategoryBreakdown['REJECTED']++;
+        } else if (bodyStatus === 'Failed') {
+          stats.statusCategoryBreakdown['Failed']++;
+        } else {
+          stats.statusCategoryBreakdown['other']++;
+        }
+      }
+    });
 
-      // Calculate permanent block percentage
-      stats.permanentBlocks.percentage = allItems.length > 0
-        ? ((stats.permanentBlocks.total / allItems.length) * 100).toFixed(2) + '%'
-        : '0%';
-
-      const elapsed = Date.now() - startTime;
-      console.log(`[${TABLE_NAME}] Stats processing complete in ${elapsed}ms`);
-      stats.processingTimeMs = elapsed;
-
-      return stats;
-    } catch (error) {
-      console.error('Error in getStats:', error);
-      throw error;
+    const accept = stats.statusCategoryBreakdown['ACCEPT'];
+    if (stats.offerBreakdown.withOffer > 0) {
+      stats.offerBreakdown.averageOffer = Math.round(stats.offerBreakdown.totalOfferAmount / stats.offerBreakdown.withOffer);
     }
+    stats.offerBreakdown.withoutOffer = accept - stats.offerBreakdown.withOffer;
+    stats.acceptanceRate = allItems.length > 0 ? ((accept / allItems.length) * 100).toFixed(2) + '%' : '0%';
+    if (allItems.length > 0) {
+      stats.permanentBlocks.percentage = ((stats.permanentBlocks.total / allItems.length) * 100).toFixed(2) + '%';
+    }
+    stats.processingTimeMs = Date.now() - t0;
+    return stats;
   }
 
-  // Helper: Parallel scan with date filter
-  static async _scanSegmentWithFilter(segment, totalSegments, startDate, endDate) {
-    let items = [];
-    let lastKey = null;
+  // getStatsByDate: group by date for a specific leadId
+  static async getStatsByDate(leadId, startDate, endDate) {
+    if (!leadId) throw new Error(`[${TABLE_NAME}] leadId is required for getStatsByDate()`);
 
-    do {
-      const params = {
+    const t0 = Date.now();
+    const allItems = this._filterByDate(
+      await this._queryAll({
         TableName: TABLE_NAME,
-        Segment: segment,
-        TotalSegments: totalSegments,
-        FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
-        ExpressionAttributeValues: {
-          ':startDate': startDate,
-          ':endDate': endDate
-        }
-      };
+        IndexName: 'leadId-index',
+        KeyConditionExpression: 'leadId = :lid',
+        ExpressionAttributeValues: { ':lid': leadId },
+        ScanIndexForward: true
+      }),
+      startDate, endDate
+    );
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
-
-      const result = await docClient.send(new ScanCommand(params));
-      items = items.concat(result.Items || []);
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
-
-    console.log(`Segment ${segment}/${totalSegments} complete: ${items.length} items`);
-    return items;
+    console.log(`[${TABLE_NAME}] getStatsByDate: ${allItems.length} items in ${Date.now() - t0}ms`);
+    return this._groupByDate(allItems);
   }
 
-  // Get stats grouped by date (OPTIMIZED)
-  static async getStatsByDate(startDate, endDate) {
-    const startTime = Date.now();
-    console.log(`[${TABLE_NAME}] Fetching stats by date:`, startDate, 'to', endDate);
+  // ─── private ──────────────────────────────────────────────────────────────
 
-    try {
-      // Use parallel scan
-      const segments = 4;
-      const scanPromises = [];
-
-      for (let segment = 0; segment < segments; segment++) {
-        scanPromises.push(this._scanSegmentWithFilter(segment, segments, startDate, endDate));
-      }
-
-      const results = await Promise.all(scanPromises);
-      const allItems = results.flat();
-
-      console.log(`[${TABLE_NAME}] Fetched ${allItems.length} items in ${Date.now() - startTime}ms`);
-
-      // Group by date
-      const statsByDate = {};
-
-      allItems.forEach(item => {
-        const date = item.createdAt.split('T')[0];
-        
-        if (!statsByDate[date]) {
-          statsByDate[date] = {
-            date,
-            total: 0,
-            statusBreakdown: {},
-            messageBreakdown: {},
-            permanentBlocks: 0,
-            eligible: 0,
-            notEligible: 0
-          };
-        }
-
-        statsByDate[date].total++;
-
-        // Status
-        const status = item.responseStatus || 'unknown';
-        statsByDate[date].statusBreakdown[status] = 
-          (statsByDate[date].statusBreakdown[status] || 0) + 1;
-
-        // Message
-        if (item.responseBody && item.responseBody.message) {
-          const message = item.responseBody.message.trim();
-          statsByDate[date].messageBreakdown[message] = 
-            (statsByDate[date].messageBreakdown[message] || 0) + 1;
-
-          // Permanent blocks
-          if (this.isPermanentBlock(item.responseBody)) {
-            statsByDate[date].permanentBlocks++;
-          }
-
-          // Eligibility
-          const lowerMessage = message.toLowerCase();
-          if (lowerMessage.includes('you are eligible')) {
-            statsByDate[date].eligible++;
-          } else if (lowerMessage.includes('not eligible')) {
-            statsByDate[date].notEligible++;
-          }
-        }
-      });
-
-      return Object.values(statsByDate).sort((a, b) => 
-        a.date.localeCompare(b.date)
-      );
-    } catch (error) {
-      console.error('Error in getStatsByDate:', error);
-      throw error;
-    }
+  static _filterByDate(items, startDate, endDate) {
+    if (!startDate && !endDate) return items;
+    return items.filter(item => {
+      const ca = item.createdAt;
+      if (startDate && ca < startDate) return false;
+      if (endDate && ca > endDate) return false;
+      return true;
+    });
   }
 
-  // Get quick stats with optional date range
-  static async getQuickStats(source = null, startDate = null, endDate = null) {
-    try {
-      if (source && !startDate) {
-        // Get count for specific source
-        let totalCount = 0;
-        let lastKey = null;
-
-        do {
-          const params = {
-            TableName: TABLE_NAME,
-            FilterExpression: 'source = :source',
-            ExpressionAttributeValues: { ':source': source },
-            Select: 'COUNT'
-          };
-
-          if (lastKey) {
-            params.ExclusiveStartKey = lastKey;
-          }
-
-          const result = await docClient.send(new ScanCommand(params));
-          totalCount += result.Count || 0;
-          lastKey = result.LastEvaluatedKey;
-        } while (lastKey);
-
-        return {
-          totalLogs: totalCount,
-          source: source,
-          isEstimate: false
+  static _groupByDate(items) {
+    const map = {};
+    items.forEach(item => {
+      const date = item.createdAt.split('T')[0];
+      if (!map[date]) {
+        map[date] = {
+          date, total: 0, statusBreakdown: {},
+          messageBreakdown: {}, permanentBlocks: 0, eligible: 0, notEligible: 0,
+          statusCategories: { 'ACCEPT': 0, 'REJECTED': 0, 'Failed': 0, 'other': 0 }
         };
-      } else if (startDate && endDate) {
-        // Quick count for date range
-        return this.getQuickStatsForDateRange(startDate, endDate);
-      } else {
-        // Use parallel scan for total count
-        return this.getQuickStatsParallel();
       }
-    } catch (error) {
-      console.error('Error in getQuickStats:', error);
-      throw error;
-    }
-  }
+      map[date].total++;
+      const st = item.responseStatus || 'unknown';
+      map[date].statusBreakdown[st] = (map[date].statusBreakdown[st] || 0) + 1;
 
-  // Quick count for date range (COUNT only, no data fetching)
-  static async getQuickStatsForDateRange(startDate, endDate) {
-    const segments = 8;
-    const startTime = Date.now();
-
-    try {
-      console.log(`[${TABLE_NAME}] Quick count for date range:`, startDate, 'to', endDate);
-
-      const countPromises = [];
-      for (let segment = 0; segment < segments; segment++) {
-        countPromises.push(this._countSegmentInRange(segment, segments, startDate, endDate));
-      }
-
-      const results = await Promise.all(countPromises);
-      const totalCount = results.reduce((sum, result) => sum + result.count, 0);
-      const elapsed = Date.now() - startTime;
-
-      console.log(`[${TABLE_NAME}] Quick count complete: ${totalCount} items in ${elapsed}ms`);
-
-      return {
-        totalLogs: totalCount,
-        isEstimate: false,
-        scannedInMs: elapsed,
-        method: 'parallel-count',
-        dateRange: { start: startDate, end: endDate }
-      };
-    } catch (error) {
-      console.error('Error in quick count:', error);
-      throw error;
-    }
-  }
-
-  // Helper: Count items in segment for date range (COUNT only)
-  static async _countSegmentInRange(segment, totalSegments, startDate, endDate) {
-    let count = 0;
-    let lastKey = null;
-
-    do {
-      const params = {
-        TableName: TABLE_NAME,
-        Select: 'COUNT',
-        Segment: segment,
-        TotalSegments: totalSegments,
-        FilterExpression: 'createdAt BETWEEN :startDate AND :endDate',
-        ExpressionAttributeValues: {
-          ':startDate': startDate,
-          ':endDate': endDate
+      if (item.responseBody) {
+        let body = item.responseBody;
+        if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) {} }
+        if (body.message) {
+          const msg = body.message.trim();
+          map[date].messageBreakdown[msg] = (map[date].messageBreakdown[msg] || 0) + 1;
+          if (this.isPermanentBlock(body)) map[date].permanentBlocks++;
+          const low = msg.toLowerCase();
+          if (low.includes('you are eligible')) map[date].eligible++;
+          else if (low.includes('not eligible')) map[date].notEligible++;
         }
-      };
-
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
+        const bs = body.status || 'unknown';
+        if (['ACCEPT','REJECTED','Failed'].includes(bs)) map[date].statusCategories[bs]++;
+        else map[date].statusCategories['other']++;
       }
-
-      const result = await docClient.send(new ScanCommand(params));
-      count += result.Count || 0;
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
-
-    console.log(`Count segment ${segment}/${totalSegments}: ${count} items`);
-    return { segment, count };
-  }
-
-  // Parallel scan - 8x faster than sequential scan
-  static async getQuickStatsParallel() {
-    const segments = 8; // Use 8 parallel scans
-    const startTime = Date.now();
-
-    try {
-      console.log(`Starting parallel scan with ${segments} segments for ${TABLE_NAME}`);
-
-      // Create parallel scan promises
-      const scanPromises = [];
-      for (let segment = 0; segment < segments; segment++) {
-        scanPromises.push(this._scanSegment(segment, segments));
-      }
-
-      // Wait for all segments to complete
-      const results = await Promise.all(scanPromises);
-      
-      // Sum up all counts
-      const totalCount = results.reduce((sum, result) => sum + result.count, 0);
-      const elapsed = Date.now() - startTime;
-
-      console.log(`Parallel scan complete: ${totalCount} items in ${elapsed}ms`);
-
-      return {
-        totalLogs: totalCount,
-        isEstimate: false,
-        scannedInMs: elapsed,
-        method: 'parallel'
-      };
-    } catch (error) {
-      console.error('Error in parallel scan:', error);
-      throw error;
-    }
-  }
-
-  // Helper method for parallel scanning
-  static async _scanSegment(segment, totalSegments) {
-    let count = 0;
-    let lastKey = null;
-
-    do {
-      const params = {
-        TableName: TABLE_NAME,
-        Select: 'COUNT',
-        Segment: segment,
-        TotalSegments: totalSegments
-      };
-
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
-
-      const result = await docClient.send(new ScanCommand(params));
-      count += result.Count || 0;
-      lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
-
-    console.log(`Segment ${segment}/${totalSegments} complete: ${count} items`);
-    return { segment, count };
+    });
+    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
   }
 }
 
