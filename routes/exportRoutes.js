@@ -1,44 +1,152 @@
 const express = require('express');
 const { docClient } = require('../dynamodb');
-const { QueryCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
+const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
 
 const router = express.Router();
 
-// Get list of all tables
-router.get('/tables', async (req, res) => {
-  try {
-    const tables = [
-      'leads', 'excel_leads', 'leads_uat', 'sml_response_logs',
-      'freo_response_logs', 'ovly_response_logs', 'lending_plate_response_logs',
-      'zype_response_logs', 'fintifi_response_logs', 'fatakpay_response_logs',
-      'ramfincrop_logs', 'mpokket_response_logs', 'indialends_response_logs',
-      'crmPaisa_response_logs', 'lead_distribution_stats', 'lead_success',
-      'lead_distribution_processing', 'rcs_queue', 'mmm_response_logs'
-    ];
-    res.json({ tables });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// ═══════════════════════════════════════════════════════════════════════════════
+// TABLE CONFIGURATION
+// Defines available GSIs and known sources per table
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// Flatten object recursively
+const TABLE_CONFIG = {
+  // ── Response log tables with source-createdAt-index ────────────────────────
+  'ovly_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+  'mpokket_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+  'indialends_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+  'mmm_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+  'sml_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+  'freo_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+  'crmPaisa_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+  'fintifi_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+
+  // ── Response log tables WITHOUT source-createdAt-index (use leadId-index) ──
+  'zype_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'leadId-index',
+    sortKey: null,
+    requiresLeadId: true
+  },
+  'ramfincrop_logs': {
+    type: 'response_log',
+    primaryGSI: 'leadId-index',
+    sortKey: null,
+    requiresLeadId: true
+  },
+  'lending_plate_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index', // NOW ACTIVE
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
+  'fatakpay_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'leadId-index',
+    sortKey: null,
+    requiresLeadId: true
+  },
+
+  // ── Leads tables ───────────────────────────────────────────────────────────
+  'leads': {
+    type: 'leads',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    partitionKey: 'source',
+    sources: process.env.LEAD_SOURCES?.split(',').map(s => s.trim()) || [],
+    alternativeGSIs: ['phone-index', 'panNumber-index']
+  },
+  'excel_leads': {
+    type: 'leads',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    partitionKey: 'source',
+    sources: process.env.LEAD_SOURCES?.split(',').map(s => s.trim()) || [],
+    alternativeGSIs: ['phone-index', 'panNumber-index']
+  },
+
+  // ── Lead success table ─────────────────────────────────────────────────────
+  'lead_success': {
+    type: 'lead_success',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    partitionKey: 'source',
+    sources: process.env.LEAD_SUCCESS_SOURCES?.split(',').map(s => s.trim()) || [],
+    alternativeGSIs: ['leadId-index', 'phone-index', 'panNumber-index']
+  },
+
+  // ── RCS Queue ──────────────────────────────────────────────────────────────
+  'rcs_queue': {
+    type: 'rcs_queue',
+    primaryGSI: 'status-scheduledTime-index',
+    sortKey: 'scheduledTime',
+    alternativeGSIs: ['leadId-rcsType-index', 'source-createdAt-index']
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPER: Flatten nested objects for CSV export
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
-  if (obj === null || obj === undefined) {
-    return { [prefix || 'value']: '' };
-  }
-
-  if (currentDepth >= maxDepth) {
-    return { [prefix]: JSON.stringify(obj) };
-  }
+  if (obj === null || obj === undefined) return { [prefix || 'value']: '' };
+  if (currentDepth >= maxDepth) return { [prefix]: JSON.stringify(obj) };
 
   const result = {};
-  
+
   try {
     if (typeof obj !== 'object' || obj === null) {
       result[prefix || 'value'] = obj === null ? '' : obj;
       return result;
     }
-
     if (Array.isArray(obj)) {
       result[prefix] = JSON.stringify(obj);
       return result;
@@ -46,10 +154,9 @@ function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
 
     for (const key in obj) {
       if (!obj.hasOwnProperty(key)) continue;
-      
       const value = obj[key];
       const newKey = prefix ? `${prefix}.${key}` : key;
-      
+
       if (value === null || value === undefined) {
         result[newKey] = '';
       } else if (Array.isArray(value)) {
@@ -63,515 +170,480 @@ function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
       }
     }
   } catch (error) {
-    console.error('Error flattening object:', error);
     result[prefix || 'error'] = `Error: ${error.message}`;
   }
-  
+
   return result;
 }
 
-// ✅ TABLE-SPECIFIC INDEX CONFIGURATION
-// This maps each table to its available and working GSIs
-const TABLE_INDEX_CONFIG = {
-  // Response logs with ACTIVE source-createdAt-index
-  'ovly_response_logs': {
-    primary: 'source-createdAt-index',
-    fallback: 'leadId-index',
-    sourceRequired: false // Has data in source-createdAt-index
-  },
-  'mpokket_response_logs': {
-    primary: 'source-createdAt-index',
-    fallback: 'leadId-index',
-    alternative: 'status-index', // Can use status + createdAt
-    sourceRequired: false
-  },
-  'indialends_response_logs': {
-    primary: 'source-createdAt-index',
-    fallback: 'leadId-createdAt-index', // Different pattern!
-    sourceRequired: false
-  },
-  'mmm_response_logs': {
-    primary: 'source-createdAt-index',
-    fallback: 'leadId-index',
-    sourceRequired: false
-  },
-  'sml_response_logs': {
-    primary: 'source-createdAt-index',
-    fallback: 'leadId-index',
-    sourceRequired: false
-  },
-  'freo_response_logs': {
-    primary: 'source-createdAt-index',
-    fallback: 'leadId-index',
-    sourceRequired: false
-  },
-  'crmPaisa_response_logs': {
-    primary: 'source-createdAt-index',
-    fallback: 'leadId-index',
-    sourceRequired: false
-  },
-  
-  // Response logs with CREATING source-createdAt-index (must use leadId)
-  'zype_response_logs': {
-    primary: 'leadId-index', // source-createdAt is Creating
-    sourceRequired: false
-  },
-  'ramfincrop_logs': {
-    primary: 'leadId-index', // source-createdAt is Creating
-    sourceRequired: false
-  },
-  'lending_plate_response_logs': {
-    primary: 'leadId-index', // source-createdAt is Creating
-    sourceRequired: false
-  },
-  'fatakpay_response_logs': {
-    primary: 'leadId-index', // source-createdAt is Creating
-    sourceRequired: false
-  },
-  'fintifi_response_logs': {
-    primary: 'source-createdAt-index',
-    fallback: 'leadId-index',
-    sourceRequired: false
-  },
-  
-  // Leads tables
-  'leads': {
-    primary: 'source-createdAt-index',
-    alternatives: ['phone-index', 'panNumber-index'],
-    sourceRequired: false
-  },
-  'excel_leads': {
-    primary: 'source-createdAt-index',
-    alternatives: ['phone-index', 'panNumber-index'],
-    sourceRequired: false
-  },
-  'lead_success': {
-    primary: 'leadId-index',
-    alternatives: ['phone-index', 'panNumber-index', 'source-createdAt-index'],
-    sourceRequired: false
-  },
-  
-  // RCS Queue - special table
-  'rcs_queue': {
-    primary: 'status-scheduledTime-index', // Most common query
-    alternatives: ['leadId-rcsType-index', 'status-attempts-index', 'source-createdAt-index'],
-    sourceRequired: false
-  }
-};
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE QUERY BUILDER
+// Figures out the best way to query based on available filters + table config
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ✅ SMART QUERY BUILDER - Detects best index automatically
-function buildQueryParams(tableName, filters) {
-  if (!filters || typeof filters !== 'object') {
-    throw new Error('Filters are required. Please specify at least one filter field.');
-  }
-
-  const config = TABLE_INDEX_CONFIG[tableName];
+function buildQueryParams(tableName, filters = {}) {
+  const config = TABLE_CONFIG[tableName];
   const MAX_LIMIT = 5000;
 
-  // STRATEGY 1: Try primary index based on table config
-  if (config) {
-    // Check if we can use primary index
-    if (config.primary === 'source-createdAt-index' && filters.source) {
-      return buildSourceCreatedAtQuery(tableName, filters, MAX_LIMIT);
-    }
-    
-    if (config.primary === 'leadId-index' && filters.leadId) {
-      return buildLeadIdQuery(tableName, filters, MAX_LIMIT);
-    }
-    
-    if (config.primary === 'leadId-createdAt-index' && filters.leadId) {
-      return buildLeadIdCreatedAtQuery(tableName, filters, MAX_LIMIT);
-    }
-    
-    if (config.primary === 'status-scheduledTime-index' && filters.status) {
-      return buildStatusScheduledTimeQuery(tableName, filters, MAX_LIMIT);
-    }
-    
-    // Try alternative indexes
-    if (config.alternatives) {
-      if (filters.phone && config.alternatives.includes('phone-index')) {
-        return buildPhoneQuery(tableName, filters, MAX_LIMIT);
-      }
-      if (filters.panNumber && config.alternatives.includes('panNumber-index')) {
-        return buildPanNumberQuery(tableName, filters, MAX_LIMIT);
-      }
-      if (filters.status && config.alternatives.includes('status-index')) {
-        return buildStatusQuery(tableName, filters, MAX_LIMIT);
-      }
-      if (filters.leadId && config.alternatives.includes('leadId-rcsType-index')) {
-        return buildLeadIdRcsTypeQuery(tableName, filters, MAX_LIMIT);
-      }
-    }
-    
-    // Try fallback index
-    if (config.fallback === 'leadId-index' && filters.leadId) {
-      return buildLeadIdQuery(tableName, filters, MAX_LIMIT);
-    }
-    
-    if (config.fallback === 'leadId-createdAt-index' && filters.leadId) {
-      return buildLeadIdCreatedAtQuery(tableName, filters, MAX_LIMIT);
-    }
+  // ─── 1. Direct source query → use source-createdAt-index ──────────────────
+  if (filters.source && (!config || config.primaryGSI === 'source-createdAt-index' || config.sources)) {
+    return {
+      type: 'SINGLE_SOURCE',
+      source: filters.source,
+      params: buildSourceDateParams(tableName, filters.source, filters, MAX_LIMIT)
+    };
   }
 
-  // FALLBACK: Generic strategies for tables without config
-  if (filters.source) {
-    return buildSourceCreatedAtQuery(tableName, filters, MAX_LIMIT);
-  }
-  
+  // ─── 2. leadId query → use leadId-index ───────────────────────────────────
   if (filters.leadId) {
-    return buildLeadIdQuery(tableName, filters, MAX_LIMIT);
-  }
-  
-  if (filters.phone) {
-    return buildPhoneQuery(tableName, filters, MAX_LIMIT);
-  }
-  
-  if (filters.panNumber) {
-    return buildPanNumberQuery(tableName, filters, MAX_LIMIT);
+    return {
+      type: 'LEADID',
+      params: buildLeadIdParams(tableName, filters, MAX_LIMIT)
+    };
   }
 
-  // ❌ No valid query path found
-  const availableFilters = config ? 
-    `Try: ${config.primary}${config.fallback ? `, ${config.fallback}` : ''}${config.alternatives ? `, ${config.alternatives.join(', ')}` : ''}` :
-    'Try: source, leadId, phone, or panNumber';
-  
+  // ─── 3. phone query ────────────────────────────────────────────────────────
+  if (filters.phone) {
+    return {
+      type: 'PHONE',
+      params: buildPhoneParams(tableName, filters, MAX_LIMIT)
+    };
+  }
+
+  // ─── 4. panNumber query ────────────────────────────────────────────────────
+  if (filters.panNumber) {
+    return {
+      type: 'PAN',
+      params: buildPanParams(tableName, filters, MAX_LIMIT)
+    };
+  }
+
+  // ─── 5. status query for RCS queue ────────────────────────────────────────
+  if (filters.status && config?.primaryGSI === 'status-scheduledTime-index') {
+    return {
+      type: 'STATUS',
+      params: buildStatusScheduledTimeParams(tableName, filters, MAX_LIMIT)
+    };
+  }
+
+  // ─── 6. No source given but table has known sources → multi-source ─────────
+  if (config?.sources?.length > 0) {
+    return {
+      type: 'MULTI_SOURCE',
+      sources: config.sources,
+      tableName
+    };
+  }
+
+  // ─── 7. Table requires leadId but none given ───────────────────────────────
+  if (config?.requiresLeadId) {
+    throw new Error(
+      `Table "${tableName}" requires a leadId filter. ` +
+      `The source-createdAt-index is not yet active for this table. ` +
+      `Please provide: leadId`
+    );
+  }
+
+  // ─── 8. Nothing useful ────────────────────────────────────────────────────
+  const hint = config
+    ? `Available: source (${config.sources?.join(', ') || 'any'}), leadId, phone, panNumber`
+    : 'Available: source, leadId, phone, panNumber';
+
   throw new Error(
-    `Cannot query ${tableName} with provided filters. ${availableFilters}. ` +
-    `Current filters: ${JSON.stringify(Object.keys(filters))}`
+    `Cannot query "${tableName}" without filters. ${hint}`
   );
 }
 
-// Query builders for different index patterns
-function buildSourceCreatedAtQuery(tableName, filters, MAX_LIMIT) {
+// ─── Individual param builders ────────────────────────────────────────────────
+
+function buildSourceDateParams(tableName, source, filters, MAX_LIMIT) {
   const params = {
     TableName: tableName,
     IndexName: 'source-createdAt-index',
-    KeyConditionExpression: '#source = :source',
-    ScanIndexForward: false,
-    ExpressionAttributeNames: { '#source': 'source' },
-    ExpressionAttributeValues: { ':source': filters.source }
+    KeyConditionExpression: '#src = :source',
+    ExpressionAttributeNames: { '#src': 'source' },
+    ExpressionAttributeValues: { ':source': source },
+    ScanIndexForward: false
   };
 
-  // Add date range to key condition
   if (filters.startDate && filters.endDate) {
-    params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
-    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+    params.KeyConditionExpression += ' AND #ca BETWEEN :start AND :end';
+    params.ExpressionAttributeNames['#ca'] = 'createdAt';
+    params.ExpressionAttributeValues[':start'] = filters.startDate;
+    params.ExpressionAttributeValues[':end'] = filters.endDate;
   } else if (filters.startDate) {
-    params.KeyConditionExpression += ' AND #createdAt >= :startDate';
-    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
+    params.KeyConditionExpression += ' AND #ca >= :start';
+    params.ExpressionAttributeNames['#ca'] = 'createdAt';
+    params.ExpressionAttributeValues[':start'] = filters.startDate;
   } else if (filters.endDate) {
-    params.KeyConditionExpression += ' AND #createdAt <= :endDate';
-    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
+    params.KeyConditionExpression += ' AND #ca <= :end';
+    params.ExpressionAttributeNames['#ca'] = 'createdAt';
+    params.ExpressionAttributeValues[':end'] = filters.endDate;
   }
 
-  addFilterExpression(params, filters, ['source', 'startDate', 'endDate']);
-  
-  if (filters.limit) {
-    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-  }
+  addExtraFilters(params, filters, ['source', 'startDate', 'endDate']);
+  if (filters.limit) params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
 
-  return { type: 'QUERY', params };
+  return params;
 }
 
-function buildLeadIdQuery(tableName, filters, MAX_LIMIT) {
+function buildLeadIdParams(tableName, filters, MAX_LIMIT) {
   const params = {
     TableName: tableName,
     IndexName: 'leadId-index',
-    KeyConditionExpression: '#leadId = :leadId',
-    ExpressionAttributeNames: { '#leadId': 'leadId' },
-    ExpressionAttributeValues: { ':leadId': filters.leadId }
+    KeyConditionExpression: '#lid = :lid',
+    ExpressionAttributeNames: { '#lid': 'leadId' },
+    ExpressionAttributeValues: { ':lid': filters.leadId }
   };
 
-  addFilterExpression(params, filters, ['leadId']);
-  
-  if (filters.limit) {
-    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-  }
+  addExtraFilters(params, filters, ['leadId']);
+  if (filters.limit) params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
 
-  return { type: 'QUERY', params };
+  return params;
 }
 
-function buildLeadIdCreatedAtQuery(tableName, filters, MAX_LIMIT) {
-  const params = {
-    TableName: tableName,
-    IndexName: 'leadId-createdAt-index',
-    KeyConditionExpression: '#leadId = :leadId',
-    ScanIndexForward: false,
-    ExpressionAttributeNames: { '#leadId': 'leadId' },
-    ExpressionAttributeValues: { ':leadId': filters.leadId }
-  };
-
-  // Add date range to key condition if available
-  if (filters.startDate && filters.endDate) {
-    params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
-    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
-  } else if (filters.startDate) {
-    params.KeyConditionExpression += ' AND #createdAt >= :startDate';
-    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-  }
-
-  addFilterExpression(params, filters, ['leadId', 'startDate', 'endDate']);
-  
-  if (filters.limit) {
-    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-  }
-
-  return { type: 'QUERY', params };
-}
-
-function buildPhoneQuery(tableName, filters, MAX_LIMIT) {
+function buildPhoneParams(tableName, filters, MAX_LIMIT) {
   const params = {
     TableName: tableName,
     IndexName: 'phone-index',
-    KeyConditionExpression: '#phone = :phone',
-    ExpressionAttributeNames: { '#phone': 'phone' },
-    ExpressionAttributeValues: { ':phone': filters.phone }
+    KeyConditionExpression: '#ph = :ph',
+    ExpressionAttributeNames: { '#ph': 'phone' },
+    ExpressionAttributeValues: { ':ph': filters.phone }
   };
 
-  addFilterExpression(params, filters, ['phone']);
-  
-  if (filters.limit) {
-    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-  }
+  addExtraFilters(params, filters, ['phone']);
+  if (filters.limit) params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
 
-  return { type: 'QUERY', params };
+  return params;
 }
 
-function buildPanNumberQuery(tableName, filters, MAX_LIMIT) {
+function buildPanParams(tableName, filters, MAX_LIMIT) {
   const params = {
     TableName: tableName,
     IndexName: 'panNumber-index',
-    KeyConditionExpression: '#panNumber = :panNumber',
-    ExpressionAttributeNames: { '#panNumber': 'panNumber' },
-    ExpressionAttributeValues: { ':panNumber': filters.panNumber }
+    KeyConditionExpression: '#pan = :pan',
+    ExpressionAttributeNames: { '#pan': 'panNumber' },
+    ExpressionAttributeValues: { ':pan': filters.panNumber }
   };
 
-  addFilterExpression(params, filters, ['panNumber']);
-  
-  if (filters.limit) {
-    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-  }
+  addExtraFilters(params, filters, ['panNumber']);
+  if (filters.limit) params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
 
-  return { type: 'QUERY', params };
+  return params;
 }
 
-function buildStatusQuery(tableName, filters, MAX_LIMIT) {
-  const params = {
-    TableName: tableName,
-    IndexName: 'status-index',
-    KeyConditionExpression: '#status = :status',
-    ScanIndexForward: false,
-    ExpressionAttributeNames: { '#status': 'status' },
-    ExpressionAttributeValues: { ':status': filters.status }
-  };
-
-  // Add date range if index has createdAt as sort key
-  if (filters.startDate && filters.endDate) {
-    params.KeyConditionExpression += ' AND #createdAt BETWEEN :startDate AND :endDate';
-    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-    params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
-  }
-
-  addFilterExpression(params, filters, ['status', 'startDate', 'endDate']);
-  
-  if (filters.limit) {
-    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-  }
-
-  return { type: 'QUERY', params };
-}
-
-function buildStatusScheduledTimeQuery(tableName, filters, MAX_LIMIT) {
+function buildStatusScheduledTimeParams(tableName, filters, MAX_LIMIT) {
   const params = {
     TableName: tableName,
     IndexName: 'status-scheduledTime-index',
-    KeyConditionExpression: '#status = :status',
+    KeyConditionExpression: '#st = :st',
     ScanIndexForward: false,
-    ExpressionAttributeNames: { '#status': 'status' },
-    ExpressionAttributeValues: { ':status': filters.status }
+    ExpressionAttributeNames: { '#st': 'status' },
+    ExpressionAttributeValues: { ':st': filters.status }
   };
 
   if (filters.scheduledTime) {
-    params.KeyConditionExpression += ' AND #scheduledTime = :scheduledTime';
-    params.ExpressionAttributeNames['#scheduledTime'] = 'scheduledTime';
-    params.ExpressionAttributeValues[':scheduledTime'] = filters.scheduledTime;
+    params.KeyConditionExpression += ' AND #stime = :stime';
+    params.ExpressionAttributeNames['#stime'] = 'scheduledTime';
+    params.ExpressionAttributeValues[':stime'] = filters.scheduledTime;
   }
 
-  addFilterExpression(params, filters, ['status', 'scheduledTime']);
-  
-  if (filters.limit) {
-    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-  }
+  addExtraFilters(params, filters, ['status', 'scheduledTime']);
+  if (filters.limit) params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
 
-  return { type: 'QUERY', params };
+  return params;
 }
 
-function buildLeadIdRcsTypeQuery(tableName, filters, MAX_LIMIT) {
-  const params = {
-    TableName: tableName,
-    IndexName: 'leadId-rcsType-index',
-    KeyConditionExpression: '#leadId = :leadId',
-    ExpressionAttributeNames: { '#leadId': 'leadId' },
-    ExpressionAttributeValues: { ':leadId': filters.leadId }
-  };
+// ─── Adds non-key filters as FilterExpression ─────────────────────────────────
+function addExtraFilters(params, filters, excludeFields) {
+  const conditions = [];
+  const filterable = ['responseStatus', 'status', 'rcsType', 'attempts'];
 
-  if (filters.rcsType) {
-    params.KeyConditionExpression += ' AND #rcsType = :rcsType';
-    params.ExpressionAttributeNames['#rcsType'] = 'rcsType';
-    params.ExpressionAttributeValues[':rcsType'] = filters.rcsType;
-  }
-
-  addFilterExpression(params, filters, ['leadId', 'rcsType']);
-  
-  if (filters.limit) {
-    params.Limit = Math.min(parseInt(filters.limit), MAX_LIMIT);
-  }
-
-  return { type: 'QUERY', params };
-}
-
-// Helper to add FilterExpression for non-key fields
-function addFilterExpression(params, filters, excludeFields) {
-  const filterConditions = [];
-  
-  // Common filter fields
-  const filterableFields = {
-    responseStatus: 'responseStatus',
-    leadId: 'leadId',
-    source: 'source',
-    status: 'status',
-    phone: 'phone',
-    panNumber: 'panNumber',
-    rcsType: 'rcsType',
-    attempts: 'attempts'
-  };
-
-  Object.keys(filterableFields).forEach(field => {
+  filterable.forEach(field => {
     if (filters[field] && !excludeFields.includes(field)) {
-      const attributeName = `#${field}`;
-      const attributeValue = `:${field}`;
-      
-      filterConditions.push(`${attributeName} = ${attributeValue}`);
-      params.ExpressionAttributeNames[attributeName] = filterableFields[field];
-      params.ExpressionAttributeValues[attributeValue] = filters[field];
+      conditions.push(`#${field} = :${field}`);
+      params.ExpressionAttributeNames[`#${field}`] = field;
+      params.ExpressionAttributeValues[`:${field}`] = filters[field];
     }
   });
 
-  // Date filters (if not in key condition)
-  if (filters.startDate && !excludeFields.includes('startDate') && !excludeFields.includes('endDate')) {
-    if (filters.endDate) {
-      filterConditions.push('#createdAt BETWEEN :startDate AND :endDate');
-      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-      params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-      params.ExpressionAttributeValues[':endDate'] = filters.endDate;
-    } else {
-      filterConditions.push('#createdAt >= :startDate');
-      params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-      params.ExpressionAttributeValues[':startDate'] = filters.startDate;
-    }
-  } else if (filters.endDate && !excludeFields.includes('endDate')) {
-    filterConditions.push('#createdAt <= :endDate');
-    params.ExpressionAttributeNames['#createdAt'] = 'createdAt';
-    params.ExpressionAttributeValues[':endDate'] = filters.endDate;
-  }
-
-  if (filterConditions.length > 0) {
-    params.FilterExpression = filterConditions.join(' AND ');
+  if (conditions.length > 0) {
+    params.FilterExpression = conditions.join(' AND ');
   }
 }
 
-// ✅ STREAMING EXPORT
-router.post('/export', async (req, res) => {
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE EXECUTOR: Runs a single-source query with pagination
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function executeQuery(params) {
+  let allItems = [];
+  let lastKey = null;
+
+  do {
+    if (lastKey) params.ExclusiveStartKey = lastKey;
+    const result = await docClient.send(new QueryCommand(params));
+    allItems = allItems.concat(result.Items || []);
+    lastKey = result.LastEvaluatedKey;
+    delete params.ExclusiveStartKey;
+  } while (lastKey);
+
+  return allItems;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE EXECUTOR: Runs a count-only query with pagination
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function executeCount(params) {
+  let totalCount = 0;
+  let lastKey = null;
+
+  do {
+    if (lastKey) params.ExclusiveStartKey = lastKey;
+    const result = await docClient.send(new QueryCommand(params));
+    totalCount += result.Count || 0;
+    lastKey = result.LastEvaluatedKey;
+    delete params.ExclusiveStartKey;
+  } while (lastKey);
+
+  return totalCount;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET TABLES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/tables', (req, res) => {
+  const tables = Object.keys(TABLE_CONFIG).concat([
+    'leads_uat', 'lead_distribution_stats',
+    'lead_distribution_processing'
+  ]);
+
+  res.json({
+    tables,
+    tableInfo: Object.entries(TABLE_CONFIG).map(([name, config]) => ({
+      name,
+      type: config.type,
+      primaryGSI: config.primaryGSI,
+      availableSources: config.sources || null,
+      requiresLeadId: config.requiresLeadId || false
+    }))
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PREVIEW ENDPOINT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.post('/preview', async (req, res) => {
   try {
-    const { tableName, filters } = req.body;
-    
-    console.log('Export request:', { tableName, filters });
-    
+    const { tableName, filters = {} } = req.body;
+
     if (!tableName) {
-      return res.status(400).json({ error: 'Table name is required' });
+      return res.status(400).json({ error: 'tableName is required' });
     }
 
     let queryConfig;
     try {
       queryConfig = buildQueryParams(tableName, filters);
-    } catch (error) {
-      return res.status(400).json({ 
-        error: error.message,
-        hint: 'Provide at least one indexed field (source, leadId, phone, panNumber, status, etc.)'
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    let items = [];
+
+    if (queryConfig.type === 'MULTI_SOURCE') {
+      // Fetch small sample from each source
+      for (const source of queryConfig.sources.slice(0, 3)) {
+        const params = buildSourceDateParams(tableName, source, filters, 5);
+        params.Limit = 3;
+        const result = await docClient.send(new QueryCommand(params));
+        items = items.concat(result.Items || []);
+        if (items.length >= 10) break;
+      }
+    } else {
+      const params = { ...queryConfig.params, Limit: 10 };
+      const result = await docClient.send(new QueryCommand(params));
+      items = result.Items || [];
+    }
+
+    const flattenedData = items.map(item => flattenObject(item));
+
+    res.json({
+      preview: flattenedData,
+      count: items.length,
+      queryType: queryConfig.type,
+      indexUsed: queryConfig.params?.IndexName || 'multi-source',
+      sources: queryConfig.sources || null
+    });
+
+  } catch (error) {
+    console.error('Preview error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COUNT ENDPOINT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.post('/export-count', async (req, res) => {
+  try {
+    const { tableName, filters = {} } = req.body;
+
+    if (!tableName) {
+      return res.status(400).json({ error: 'tableName is required' });
+    }
+
+    let queryConfig;
+    try {
+      queryConfig = buildQueryParams(tableName, filters);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    if (queryConfig.type === 'MULTI_SOURCE') {
+      // Count each source in parallel
+      const countPromises = queryConfig.sources.map(async source => {
+        const params = buildSourceDateParams(tableName, source, filters, 5000);
+        params.Select = 'COUNT';
+        const count = await executeCount(params);
+        return { source, count };
+      });
+
+      const results = await Promise.all(countPromises);
+      const sourceBreakdown = {};
+      let totalCount = 0;
+
+      results.forEach(({ source, count }) => {
+        sourceBreakdown[source] = count;
+        totalCount += count;
+      });
+
+      return res.json({
+        count: totalCount,
+        sourceBreakdown,
+        queryType: 'MULTI_SOURCE',
+        indexUsed: 'source-createdAt-index'
       });
     }
 
+    // Single query count
+    const countParams = { ...queryConfig.params, Select: 'COUNT' };
+    const count = await executeCount(countParams);
+
+    res.json({
+      count,
+      queryType: queryConfig.type,
+      indexUsed: queryConfig.params?.IndexName || 'primary'
+    });
+
+  } catch (error) {
+    console.error('Count error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPORT ENDPOINT (streaming CSV)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.post('/export', async (req, res) => {
+  try {
+    const { tableName, filters = {} } = req.body;
+
+    if (!tableName) {
+      return res.status(400).json({ error: 'tableName is required' });
+    }
+
+    let queryConfig;
+    try {
+      queryConfig = buildQueryParams(tableName, filters);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
     res.header('Content-Type', 'text/csv');
-    res.header('Content-Disposition', `attachment; filename="${tableName}_export_${new Date().toISOString().split('T')[0]}.csv"`);
+    res.header('Content-Disposition', `attachment; filename="${tableName}_${new Date().toISOString().split('T')[0]}.csv"`);
     res.header('Transfer-Encoding', 'chunked');
 
-    const params = queryConfig.params;
-    
-    let lastEvaluatedKey = null;
     let totalProcessed = 0;
     let headerWritten = false;
     let allFields = new Set();
-    let buffer = [];
-    const BATCH_SIZE = 1000;
+    let rowBuffer = [];
+    const FLUSH_EVERY = 1000;
 
-    console.log(`Using ${queryConfig.type} with index: ${params.IndexName || 'primary key'}`);
+    // ─── Helper: flush buffer to response ────────────────────────────────────
+    const flushBuffer = (force = false) => {
+      if (rowBuffer.length === 0) return;
+      if (!force && rowBuffer.length < FLUSH_EVERY) return;
 
-    do {
-      if (lastEvaluatedKey) {
-        params.ExclusiveStartKey = lastEvaluatedKey;
+      if (!headerWritten) {
+        res.write(Array.from(allFields).join(',') + '\n');
+        headerWritten = true;
       }
 
-      const result = await docClient.send(new QueryCommand(params));
-      const items = (result.Items || []).filter(item => item && typeof item === 'object');
-      
-      const flattenedBatch = items.map(item => flattenObject(item));
-      
-      flattenedBatch.forEach(item => {
-        Object.keys(item).forEach(key => allFields.add(key));
+      rowBuffer.forEach(row => {
+        const values = Array.from(allFields).map(field => {
+          const value = row[field];
+          if (value === null || value === undefined) return '';
+          const str = String(value);
+          return str.includes(',') || str.includes('"') || str.includes('\n')
+            ? `"${str.replace(/"/g, '""')}"`
+            : str;
+        });
+        res.write(values.join(',') + '\n');
       });
 
-      buffer = buffer.concat(flattenedBatch);
+      rowBuffer = [];
+    };
+
+    // ─── Helper: process a page of items ─────────────────────────────────────
+    const processItems = (items) => {
+      const flat = items.map(item => flattenObject(item));
+      flat.forEach(item => Object.keys(item).forEach(k => allFields.add(k)));
+      rowBuffer = rowBuffer.concat(flat);
       totalProcessed += items.length;
+      flushBuffer();
+    };
 
-      if (buffer.length >= BATCH_SIZE || !result.LastEvaluatedKey) {
-        if (!headerWritten && buffer.length > 0) {
-          const header = Array.from(allFields).join(',') + '\n';
-          res.write(header);
-          headerWritten = true;
-        }
+    // ─── Execute based on query type ─────────────────────────────────────────
+    if (queryConfig.type === 'MULTI_SOURCE') {
+      console.log(`[EXPORT] Multi-source export for ${tableName}: ${queryConfig.sources.join(', ')}`);
 
-        buffer.forEach(row => {
-          const values = Array.from(allFields).map(field => {
-            const value = row[field];
-            if (value === null || value === undefined) return '';
-            const stringValue = String(value);
-            if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-              return `"${stringValue.replace(/"/g, '""')}"`;
-            }
-            return stringValue;
-          });
-          res.write(values.join(',') + '\n');
-        });
+      for (const source of queryConfig.sources) {
+        console.log(`[EXPORT] Processing source: ${source}`);
+        const params = buildSourceDateParams(tableName, source, filters, 5000);
+        let lastKey = null;
 
-        buffer = [];
+        do {
+          if (lastKey) params.ExclusiveStartKey = lastKey;
+          const result = await docClient.send(new QueryCommand(params));
+          processItems(result.Items || []);
+          lastKey = result.LastEvaluatedKey;
+          delete params.ExclusiveStartKey;
+          console.log(`[EXPORT] ${source}: ${totalProcessed} total processed...`);
+        } while (lastKey);
       }
+    } else {
+      console.log(`[EXPORT] ${queryConfig.type} export for ${tableName}`);
+      const params = queryConfig.params;
+      let lastKey = null;
 
-      lastEvaluatedKey = result.LastEvaluatedKey;
-      console.log(`Processed ${totalProcessed} items...`);
+      do {
+        if (lastKey) params.ExclusiveStartKey = lastKey;
+        const result = await docClient.send(new QueryCommand(params));
+        processItems(result.Items || []);
+        lastKey = result.LastEvaluatedKey;
+        delete params.ExclusiveStartKey;
+        console.log(`[EXPORT] ${totalProcessed} total processed...`);
+      } while (lastKey);
+    }
 
-      delete params.ExclusiveStartKey;
-      
-    } while (lastEvaluatedKey);
-
-    console.log(`✅ Export complete: ${totalProcessed} items`);
+    // Final flush
+    flushBuffer(true);
+    console.log(`[EXPORT] ✅ Complete: ${totalProcessed} records from ${tableName}`);
     res.end();
 
   } catch (error) {
@@ -581,103 +653,6 @@ router.post('/export', async (req, res) => {
     } else {
       res.end();
     }
-  }
-});
-
-// ✅ COUNT ENDPOINT
-router.post('/export-count', async (req, res) => {
-  try {
-    const { tableName, filters } = req.body;
-    
-    if (!tableName) {
-      return res.status(400).json({ error: 'Table name is required' });
-    }
-
-    let queryConfig;
-    try {
-      queryConfig = buildQueryParams(tableName, filters);
-    } catch (error) {
-      return res.status(400).json({ 
-        error: error.message,
-        hint: 'Provide at least one indexed field to get count'
-      });
-    }
-
-    const params = { ...queryConfig.params, Select: 'COUNT' };
-
-    let totalCount = 0;
-    let lastEvaluatedKey = null;
-    let iterations = 0;
-    const MAX_ITERATIONS = 100;
-
-    do {
-      if (lastEvaluatedKey) {
-        params.ExclusiveStartKey = lastEvaluatedKey;
-      }
-
-      const result = await docClient.send(new QueryCommand(params));
-      totalCount += result.Count || 0;
-      lastEvaluatedKey = result.LastEvaluatedKey;
-      iterations++;
-
-      delete params.ExclusiveStartKey;
-
-      if (iterations >= MAX_ITERATIONS) {
-        console.warn(`Count reached max iterations (${MAX_ITERATIONS}), returning estimate`);
-        break;
-      }
-      
-    } while (lastEvaluatedKey);
-
-    res.json({ 
-      count: totalCount,
-      isComplete: !lastEvaluatedKey,
-      queryType: queryConfig.type,
-      indexUsed: params.IndexName || 'primary'
-    });
-
-  } catch (error) {
-    console.error('Count error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ✅ PREVIEW ENDPOINT
-router.post('/preview', async (req, res) => {
-  try {
-    const { tableName, filters } = req.body;
-    
-    if (!tableName) {
-      return res.status(400).json({ error: 'Table name is required' });
-    }
-
-    let queryConfig;
-    try {
-      queryConfig = buildQueryParams(tableName, filters);
-    } catch (error) {
-      return res.status(400).json({ 
-        error: error.message,
-        hint: 'Provide at least one indexed field to preview data'
-      });
-    }
-
-    const params = { ...queryConfig.params, Limit: 10 };
-
-    const result = await docClient.send(new QueryCommand(params));
-    const items = (result.Items || []).filter(item => item && typeof item === 'object');
-    const flattenedData = items.map(item => flattenObject(item));
-
-    res.json({
-      preview: flattenedData,
-      hasMore: !!result.LastEvaluatedKey,
-      count: items.length,
-      queryType: queryConfig.type,
-      indexUsed: params.IndexName || 'primary'
-    });
-
-  } catch (error) {
-    console.error('Preview error:', error);
-    res.status(500).json({ error: error.message });
   }
 });
 
