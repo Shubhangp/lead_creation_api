@@ -10,28 +10,6 @@ const bcrypt = require('bcryptjs');
 
 const TABLE_NAME = 'lender_users';
 
-/**
- * Lender User Model
- *
- * DynamoDB Table: lender_users
- * Primary Key  : userId (String)
- * GSI 1        : email-index          → email (PK)
- * GSI 2        : source-index         → source (PK)
- *
- * Item shape:
- * {
- *   userId       : uuid
- *   email        : string (unique)
- *   passwordHash : string (bcrypt)
- *   name         : string            — display name  e.g. "Arjun Mehta"
- *   lenderName   : string            — brand name    e.g. "CashKuber"
- *   source       : string            — must match leads.source / lead_success.source
- *   role         : string            — "lender" | "admin"
- *   isActive     : boolean
- *   createdAt    : ISO string
- *   updatedAt    : ISO string
- * }
- */
 class User {
 
   // ──────────────────────────────────────────────────────────────
