@@ -4,13 +4,8 @@ const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
 
 const router = express.Router();
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TABLE CONFIGURATION
-// Defines available GSIs and known sources per table
-// ═══════════════════════════════════════════════════════════════════════════════
 
 const TABLE_CONFIG = {
-  // ── Response log tables with source-createdAt-index ────────────────────────
   'ovly_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
@@ -67,38 +62,40 @@ const TABLE_CONFIG = {
     sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
     fallbackGSI: 'leadId-index'
   },
-
-  // ── Response log tables WITHOUT source-createdAt-index (use leadId-index) ──
   'zype_response_logs': {
     type: 'response_log',
-    primaryGSI: 'leadId-index',
-    sortKey: null,
-    requiresLeadId: true
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
   },
   'ramfincrop_logs': {
     type: 'response_log',
-    primaryGSI: 'leadId-index',
-    sortKey: null,
-    requiresLeadId: true
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
   },
   'lending_plate_response_logs': {
     type: 'response_log',
-    primaryGSI: 'source-createdAt-index', // NOW ACTIVE
+    primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
     sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
     fallbackGSI: 'leadId-index'
   },
   'fatakpay_response_logs': {
     type: 'response_log',
-    primaryGSI: 'leadId-index',
-    sortKey: null,
-    requiresLeadId: true
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
   },
   'fatakpay_pl__response_logs': {
     type: 'response_log',
-    primaryGSI: 'leadId-index',
-    sortKey: null,
-    requiresLeadId: true
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
   },
 
   // ── Leads tables ───────────────────────────────────────────────────────────
@@ -106,17 +103,15 @@ const TABLE_CONFIG = {
     type: 'leads',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    partitionKey: 'source',
-    sources: process.env.LEAD_SOURCES?.split(',').map(s => s.trim()) || [],
-    alternativeGSIs: ['phone-index', 'panNumber-index']
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    alternativeGSIs: ['phone-index', 'panNumber-index', 'leadId-index']
   },
   'excel_leads': {
     type: 'leads',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    partitionKey: 'source',
-    sources: process.env.LEAD_SOURCES?.split(',').map(s => s.trim()) || [],
-    alternativeGSIs: ['phone-index', 'panNumber-index']
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    alternativeGSIs: ['phone-index', 'panNumber-index', 'leadId-index']
   },
 
   // ── Lead success table ─────────────────────────────────────────────────────
@@ -124,8 +119,7 @@ const TABLE_CONFIG = {
     type: 'lead_success',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    partitionKey: 'source',
-    sources: process.env.LEAD_SUCCESS_SOURCES?.split(',').map(s => s.trim()) || [],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
     alternativeGSIs: ['leadId-index', 'phone-index', 'panNumber-index']
   },
 
@@ -138,9 +132,6 @@ const TABLE_CONFIG = {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// HELPER: Flatten nested objects for CSV export
-// ═══════════════════════════════════════════════════════════════════════════════
 
 function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
   if (obj === null || obj === undefined) return { [prefix || 'value']: '' };
@@ -182,10 +173,6 @@ function flattenObject(obj, prefix = '', maxDepth = 10, currentDepth = 0) {
   return result;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CORE QUERY BUILDER
-// Figures out the best way to query based on available filters + table config
-// ═══════════════════════════════════════════════════════════════════════════════
 
 function buildQueryParams(tableName, filters = {}) {
   const config = TABLE_CONFIG[tableName];
