@@ -27,6 +27,7 @@ class LeadSuccess {
       ZYPE: successData.ZYPE || false,
       FINTIFI: successData.FINTIFI || false,
       FATAKPAY: successData.FATAKPAY || false,
+      FATAKPAYPL: successData.FATAKPAYPL || false,
       RAMFINCROP: successData.RAMFINCROP || false,
       MyMoneyMantra: successData.MyMoneyMantra || false,
       INDIALENDS: successData.INDIALENDS || false,
@@ -149,7 +150,7 @@ class LeadSuccess {
   static async updateLenderStatus(successId, lenderName, status) {
     const validLenders = [
       'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI', 
-      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
+      'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
     ];
 
     if (!validLenders.includes(lenderName)) {
@@ -272,7 +273,7 @@ class LeadSuccess {
   static _calculateStats(items, source, startDate, endDate) {
     const lenders = [
       'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI', 
-      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
+      'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
     ];
 
     const stats = {
@@ -381,7 +382,7 @@ class LeadSuccess {
       // Transform to required format
       const lenders = [
         'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI', 
-        'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
+        'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
       ];
 
       const leadList = allItems.map(item => {
@@ -446,7 +447,7 @@ class LeadSuccess {
 
         const lenders = [
           'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI', 
-          'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
+          'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
         ];
 
         const leads = items.map(item => {

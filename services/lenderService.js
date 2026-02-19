@@ -10,6 +10,7 @@ const LendingPlateResponseLog = require('../models/leadingPlateResponseLog');
 const FintifiResponseLog = require('../models/fintifiResponseLog');
 const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 const FatakPayResponseLog = require('../models/fatakPayResponseLog');
+const FatakPayResponseLogPL = require('../models/fatakPayPLResponseLog')
 const RamFinCropLog = require('../models/ramFinCropLogModel');
 // const vrindaLog = require('../models/VrindaFintechResponseLog');
 const IndiaLendsResponseLog = require('../models/indiaLendsResponseLog');
@@ -570,6 +571,81 @@ async function sendToFATAKPAY(lead) {
       consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
     };
     const errorLog = await FatakPayResponseLog.create({
+      leadId: leadId,
+      source: source,
+      requestPayload: eligibilityPayload || {},
+      responseStatus: error.response?.status || 500,
+      responseBody: error.response?.data || { message: 'Unknown error' },
+    });
+    return errorLog;
+  }
+}
+
+async function sendToFATAKPAYPL(lead) {
+  console.log("FATAKPAY_PL", lead);
+  const {
+    leadId, fullName, firstName, lastName, phone, email, dateOfBirth,
+    address, pincode, jobType, panNumber, source
+  } = lead;
+  try {
+    const tokenResponse = await axios.post(
+      'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
+      {
+        username: process.env.FATAKPAY_USERNAME,
+        password: process.env.FATAKPAY_PL_PASSWORD,
+      }
+    );
+    const accessToken = tokenResponse.data.data.token;
+    const eligibilityPayload = {
+      mobile: phone,
+      first_name: firstName || fullName.split(' ')[0],
+      last_name: lastName || fullName.split(' ')[1] || fullName.split(' ')[0],
+      email,
+      employment_type_id: jobType,
+      pan: panNumber,
+      dob: formatToYYYYMMDD(dateOfBirth),
+      pincode,
+      home_address: address || '',
+      office_address: address || '',
+      consent: true,
+      consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
+    };
+    const eligibilityResponse = await axios.post(
+      'https://onboardingapi.fatakpay.com/external-api/v1/emi-insurance-eligibility',
+      eligibilityPayload,
+      {
+        headers: {
+          Authorization: `Token ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    // Save Response using DynamoDB model
+    const responseLog = await FatakPayResponseLogPL.create({
+      leadId: leadId,
+      source: source,
+      requestPayload: eligibilityPayload,
+      responseStatus: eligibilityResponse.data.status_code,
+      responseBody: eligibilityResponse.data,
+    });
+    return responseLog;
+  } catch (error) {
+    console.error('Error in FatakPay Eligibility API:', error.response?.data || error.message);
+    const eligibilityPayload = {
+      mobile: phone,
+      first_name: firstName || fullName.split(' ')[0],
+      last_name: lastName || fullName.split(' ')[1] || '',
+      email,
+      employment_type_id: jobType,
+      pan: panNumber,
+      dob: dateOfBirth,
+      pincode,
+      home_address: address || '',
+      office_address: address || '',
+      consent: true,
+      consent_timestamp: new Date().toISOString().replace('T', ' ').split('.')[0],
+    };
+    const errorLog = await FatakPayResponseLogPL.create({
       leadId: leadId,
       source: source,
       requestPayload: eligibilityPayload || {},
@@ -1447,6 +1523,7 @@ module.exports = {
   sendToLendingPlate,
   sendToFINTIFI,
   sendToFATAKPAY,
+  sendToFATAKPAYPL,
   sendToOVLY,
   sendToRAMFINCROP,
   sendToMyMoneyMantra,

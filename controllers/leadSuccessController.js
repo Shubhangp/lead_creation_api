@@ -24,7 +24,7 @@ exports.getLeadSuccessByLeadId = async (req, res) => {
     // Get all accepted lenders (lenders with true status)
     const lenderFields = [
       'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI',
-      'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 
+      'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 
       'CRMPaisa', 'SML', 'MPOKKET'
     ];
 

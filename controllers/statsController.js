@@ -12,6 +12,11 @@ const LENDER_CONFIG = {
     statsType: 'message',
     displayName: 'FatakPay'
   },
+  fatakpaypl: {
+    modelPath: '../models/FatakPayResponseLogPL',
+    statsType: 'message',
+    displayName: 'FatakPayPL'
+  },
   ovly: {
     modelPath: '../models/ovlyResponseLog',
     statsType: 'status',

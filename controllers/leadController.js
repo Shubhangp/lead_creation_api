@@ -12,6 +12,7 @@ const {
   sendToLendingPlate,
   sendToFINTIFI,
   sendToFATAKPAY,
+  sendToFATAKPAYPL,
   sendToOVLY,
   sendToRAMFINCROP,
   sendToMyMoneyMantra,
@@ -266,6 +267,7 @@ async function sendToLender(lead, lender) {
     'ZYPE': sendToZYPE,
     'FINTIFI': sendToFINTIFI,
     'FATAKPAY': sendToFATAKPAY,
+    'FATAKPAYPL': sendToFATAKPAYPL,
     'RAMFINCROP': sendToRAMFINCROP,
     "MyMoneyMantra": sendToMyMoneyMantra,
     "INDIALENDS": sendToIndiaLends,
@@ -639,6 +641,8 @@ const sendLeadsToLender = async (lender, leads) => {
       return Promise.all(leads.map((lead) => sendToFINTIFI(lead)));
     case "FATAKPAY":
       return Promise.all(leads.map((lead) => sendToFATAKPAY(lead)));
+    case "FATAKPAYPL":
+      return Promise.all(leads.map((lead) => sendToFATAKPAYPL(lead)));
     case "OVLY":
       return Promise.all(leads.map((lead) => sendToOVLY(lead)));
     default:

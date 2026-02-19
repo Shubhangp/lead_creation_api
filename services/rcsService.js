@@ -74,6 +74,12 @@ class RCSService {
         imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1758734319/fatakpay_giqt2z.jpg',
         actionUrl: 'https://web.fatakpay.com/authentication/login?utm_source=708_8FQLQ&source_caller=api&shortlink=708_8FQLQ&utm_medium='
       },
+      'FATAKPAYPL': {
+        title: 'FatakPay: Get Loan upto ₹2 Lakhs💵',
+        description: '✅Interest starting at as low as 1.5%* per month.\n💳EMIs as low as ₹512*.\n🤝 Trusted by over 4 crore Indians.\n🏦  Loans via RBI-registered lenders.\nT&C Apply.',
+        imageUrl: 'https://res.cloudinary.com/dha4otbzk/image/upload/v1758734319/fatakpay_giqt2z.jpg',
+        actionUrl: 'https://web.fatakpay.com/authentication/login?utm_source=708_8FQLQ&source_caller=api&shortlink=708_8FQLQ&utm_medium='
+      },
       'RAMFINCROP': {
         title: 'Loans upto Rs 8 Lakhs in 5 minutes',
         description: '✅Interest starting at as low as 1.5%* per month.\n💳EMIs as low as ₹512*.\n🤝 Trusted by over 4 crore Indians.\n🏦  Loans via RBI-registered lenders.\nT&C Apply.',

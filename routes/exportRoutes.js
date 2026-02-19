@@ -94,6 +94,12 @@ const TABLE_CONFIG = {
     sortKey: null,
     requiresLeadId: true
   },
+  'fatakpay_pl__response_logs': {
+    type: 'response_log',
+    primaryGSI: 'leadId-index',
+    sortKey: null,
+    requiresLeadId: true
+  },
 
   // ── Leads tables ───────────────────────────────────────────────────────────
   'leads': {

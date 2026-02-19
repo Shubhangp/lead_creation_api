@@ -7,7 +7,7 @@ const LeadSuccess = require('../models/leadSuccessModel');
 
 const LENDERS = [
   'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI',
-  'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET',
+  'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET',
 ];
 
 /**
