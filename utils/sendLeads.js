@@ -626,7 +626,7 @@ const sendToFatakpayPL = async (leads) => {
           'https://onboardingapi.fatakpay.com/external-api/v1/create-user-token',
           {
             username: process.env.FATAKPAY_USERNAME,
-            password: process.env.FATAKPAY_PL_PASSWORD,
+            password: "72b8538c9be9c2a53ef9",
           }
         );
 
