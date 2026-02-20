@@ -35,6 +35,7 @@ const MpokketResponseLog = require('../models/mpokketResponseLog');
 const CrmPaisaResponseLog = require('../models/crmPaisaResponseLogModel');
 const MMMResponseLog = require('../models/mmmResponseLog');
 const LeadSuccess = require('../models/leadSuccessModel');
+const FatakPayResponseLogPL = require('../models/fatakPayPLResponseLog');
 
 // Create a lead
 exports.createLead = async (req, res) => {
@@ -399,6 +400,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
   try {
     // Check SML
     const smlResults = await SMLResponseLog.findByLeadId(leadId);
+    console.log('sml', smlResults);
     const smlResult = smlResults.find(log => 
       log.responseBody?.message === 'Lead created successfully'
     );
@@ -406,6 +408,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // Check FREO  
     const freoResults = await FreoResponseLog.findByLeadId(leadId);
+    console.log('freo', freoResults);
     const freoResult = freoResults.find(log => 
       log.responseBody?.success === true
     );
@@ -413,13 +416,15 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // Check OVLY
     const ovlyResults = await OvlyResponseLog.findByLeadId(leadId);
-    const ovlyResult = ovlyResults.find(log => 
+    console.log('ovly', ovlyResults);
+    const ovlyResult = ovlyResults.items?.find(log => 
       log.responseStatus === 'success'
     );
     if (ovlyResult) successfulLenders.push('OVLY');
 
     // Check LendingPlate
     const lpResults = await LendingPlateResponseLog.findByLeadId(leadId);
+    console.log('lp', lpResults);
     const lpResult = lpResults.find(log => 
       log.responseStatus === 'Success'
     );
@@ -427,13 +432,15 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // Check ZYPE
     const zypeResults = await ZypeResponseLog.findByLeadId(leadId);
-    const zypeResult = zypeResults.find(log => 
+    console.log('zype', zypeResults);
+    const zypeResult = zypeResults.items?.find(log => 
       log.responseStatus === 'ACCEPT' || log.responseBody?.status === 'ACCEPT'
     );
     if (zypeResult) successfulLenders.push('ZYPE');
 
     // Check FINTIFI
     const fintifiResults = await FintifiResponseLog.findByLeadId(leadId);
+    console.log('fintifi', fintifiResults);
     const fintifiResult = fintifiResults.find(log => 
       log.responseStatus === 200
     );
@@ -441,13 +448,23 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // Check FATAKPAY
     const fatakResults = await FatakPayResponseLog.findByLeadId(leadId);
+    console.log('fatakpay', fatakResults);
     const fatakResult = fatakResults.find(log => 
       log.responseBody.message === 'You are eligible.'
     );
     if (fatakResult) successfulLenders.push('FATAKPAY');
 
+    // Check FATAKPAYPL
+    const fatakPLResults = await FatakPayResponseLogPL.findByLeadId(leadId);
+    console.log('fatakpl', fatakPLResults);
+    const fatakPLResult = fatakPLResults.find(log => 
+      log.responseBody.message === 'You are eligible.'
+    );
+    if (fatakPLResult) successfulLenders.push('FATAKPAY');
+
     // Check RAMFINCROP
     const ramResults = await RamFinCropLog.findByLeadId(leadId);
+    console.log('ram', ramResults);
     const ramResult = ramResults.find(log => 
       log.responseStatus === 'success'
     );
@@ -455,6 +472,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // Check MyMoneyMantra
     const mmmResults = await MMMResponseLog.findByLeadId(leadId);
+    console.log('mmm', mmmResults);
     const mmmResult = mmmResults.find(log => 
       log.responseStatus === 200 || log.responseStatus === 201
     );
@@ -462,6 +480,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // Check CRMPaisa
     const CRMPaisaResults = await CrmPaisaResponseLog.findByLeadId(leadId);
+    console.log('crmpaisa', CRMPaisaResults);
     const CRMPaisaResult = CRMPaisaResults.find(log => 
       log.responseBody?.Message === 'Lead generated successfully.'
     );
@@ -469,6 +488,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // Check IndiaLends
     const IndiaLendsResults = await IndiaLendsResponseLog.findByLeadId(leadId);
+    console.log('IL', IndiaLendsResults);
     const IndiaLendsResult = IndiaLendsResults.find(log => 
       log.responseBody?.info?.message === 'Verification code sent to your mobile phone'
     );
@@ -476,6 +496,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     // Check Mpokket
     const MpokketResults = await MpokketResponseLog.findByLeadId(leadId);
+    console.log('mpokket', MpokketResults);
     const MpokketResult = MpokketResults.find(log => 
       log.responseBody?.data?.message === 'Data Accepted Successfully'
     );
