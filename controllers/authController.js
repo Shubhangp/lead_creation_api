@@ -1,7 +1,7 @@
 const jwt    = require('jsonwebtoken');
 const User   = require('../models/userModel');
 
-const JWT_SECRET  = process.env.JWT_SECRET;
+const JWT_SECRET  = 'ratecut-super-secure-jwt-secret-key-here';
 const JWT_EXPIRES = process.env.JWT_EXPIRES || '7d';
 
 /**
