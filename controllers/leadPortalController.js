@@ -106,7 +106,7 @@ async function getStats(req, res) {
     // ✅ 1. Get all-time total sent using Lead.countBySource
     let totalSentAllTime = 0;
     try {
-      totalSentAllTime = await Lead.countBySource(source);
+      totalSentAllTime = await Lead.getQuickStats(source, null, null);
       console.log(`[getStats] All-time total sent: ${totalSentAllTime}`);
     } catch (leadError) {
       console.error('[getStats] Error fetching all-time count:', leadError.message);
