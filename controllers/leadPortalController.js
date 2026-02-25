@@ -27,9 +27,6 @@ function parseDateRange(query) {
   return { startDate, endDate };
 }
 
-/**
- * ✅ FIXED: Deduplicate by successId to prevent duplicates from DynamoDB
- */
 async function fetchAllSuccess(source, startDate, endDate) {
   let all     = [];
   let lastKey = null;
@@ -60,9 +57,6 @@ async function fetchAllSuccess(source, startDate, endDate) {
   return all;
 }
 
-/**
- * ✅ NEW: Fetch all leads from Lead table for date range (for accurate totalSent in range)
- */
 async function fetchAllLeadsInRange(source, startDate, endDate) {
   let all = [];
   let lastKey = null;
@@ -93,8 +87,7 @@ async function fetchAllLeadsInRange(source, startDate, endDate) {
 
 /**
  * ✅ FIXED: GET /api/lender/stats
- * Uses Lead model's optimized functions for accurate source-specific counts
- * Query: ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+ * Correctly extracts totalLogs from Lead.getQuickStats() and Lead.getQuickStatsForDateRange()
  */
 async function getStats(req, res) {
   try {
@@ -103,23 +96,32 @@ async function getStats(req, res) {
 
     console.log(`[getStats] Fetching stats for source: ${source}, ${startDate} to ${endDate}`);
 
-    // ✅ 1. Get all-time total sent using Lead.countBySource
+    // ✅ 1. Get all-time total sent using Lead.getQuickStats (returns object with totalLogs)
     let totalSentAllTime = 0;
     try {
-      totalSentAllTime = await Lead.getQuickStats(source, null, null);
+      const quickStats = await Lead.getQuickStats(source, null, null);
+      totalSentAllTime = quickStats.totalLogs || 0;
       console.log(`[getStats] All-time total sent: ${totalSentAllTime}`);
     } catch (leadError) {
       console.error('[getStats] Error fetching all-time count:', leadError.message);
     }
 
-    // ✅ 2. Get total sent IN DATE RANGE using Lead.findBySource with date filter
+    // ✅ 2. Get total sent IN DATE RANGE using Lead.getQuickStats with date range
     let totalSentInRange = 0;
     try {
-      const leadsInRange = await fetchAllLeadsInRange(source, startDate, endDate);
-      totalSentInRange = leadsInRange.length;
+      const rangeStats = await Lead.getQuickStats(source, startDate, endDate);
+      totalSentInRange = rangeStats.totalLogs || 0;
       console.log(`[getStats] Total sent in range (${startDate} to ${endDate}): ${totalSentInRange}`);
     } catch (rangeError) {
       console.error('[getStats] Error fetching range count:', rangeError.message);
+      // Fallback to manual fetch
+      try {
+        const leadsInRange = await fetchAllLeadsInRange(source, startDate, endDate);
+        totalSentInRange = leadsInRange.length;
+        console.log(`[getStats] Fallback: Total sent in range: ${totalSentInRange}`);
+      } catch (fallbackError) {
+        console.error('[getStats] Fallback also failed:', fallbackError.message);
+      }
     }
 
     // ✅ 3. Get LeadSuccess items for acceptance stats
@@ -136,8 +138,8 @@ async function getStats(req, res) {
       source,
       dateRange: { startDate, endDate },
       stats: {
-        totalSent: totalSentAllTime,           // ✅ All-time total
-        totalSentInRange: totalSentInRange,    // ✅ NEW: Total in this date range
+        totalSent: totalSentAllTime,           // ✅ All-time total (number)
+        totalSentInRange: totalSentInRange,    // ✅ Total in this date range (number)
         totalInRange: successItems.length,     // Total with lender status
         accepted: accepted.length,             // Accepted by at least 1 lender
         sent: sent.length,                     // Sent but 0 lenders accepted
