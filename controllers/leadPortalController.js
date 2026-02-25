@@ -3,8 +3,7 @@ const LeadSuccess = require('../models/leadSuccessModel');
 
 const LENDERS = [
   'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI',
-  'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-  'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET',
+  'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET',
 ];
 
 function countAccepted(record) {
@@ -28,74 +27,164 @@ function parseDateRange(query) {
   return { startDate, endDate };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/lender/stats
-// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * ✅ FIXED: Deduplicate by successId to prevent duplicates from DynamoDB
+ */
+async function fetchAllSuccess(source, startDate, endDate) {
+  let all     = [];
+  let lastKey = null;
+  const seenIds = new Set();
+
+  do {
+    const { items, lastEvaluatedKey } = await LeadSuccess.findBySource(source, {
+      limit:          500,
+      startDate,
+      endDate,
+      sortAscending:  false,
+      lastEvaluatedKey: lastKey,
+    });
+    
+    items.forEach(item => {
+      if (!seenIds.has(item.successId)) {
+        seenIds.add(item.successId);
+        all.push(item);
+      } else {
+        console.warn(`[fetchAllSuccess] Skipping duplicate successId: ${item.successId}`);
+      }
+    });
+    
+    lastKey = lastEvaluatedKey;
+  } while (lastKey);
+
+  console.log(`[fetchAllSuccess] Total items: ${all.length}, Unique IDs: ${seenIds.size}`);
+  return all;
+}
+
+/**
+ * ✅ NEW: Fetch all leads from Lead table for date range (for accurate totalSent in range)
+ */
+async function fetchAllLeadsInRange(source, startDate, endDate) {
+  let all = [];
+  let lastKey = null;
+  const seenIds = new Set();
+
+  do {
+    const { items, lastEvaluatedKey } = await Lead.findBySource(source, {
+      limit: 500,
+      startDate,
+      endDate,
+      sortAscending: false,
+      lastEvaluatedKey: lastKey,
+    });
+    
+    items.forEach(item => {
+      if (!seenIds.has(item.leadId)) {
+        seenIds.add(item.leadId);
+        all.push(item);
+      }
+    });
+    
+    lastKey = lastEvaluatedKey;
+  } while (lastKey);
+
+  console.log(`[fetchAllLeadsInRange] Total leads in range: ${all.length}, Unique IDs: ${seenIds.size}`);
+  return all;
+}
+
+/**
+ * ✅ FIXED: GET /api/lender/stats
+ * Uses Lead model's optimized functions for accurate source-specific counts
+ * Query: ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+ */
 async function getStats(req, res) {
   try {
-    const source                 = req.user.source;
+    const source = req.user.source;
     const { startDate, endDate } = parseDateRange(req.query);
 
-    // ✅ Run totalSent count + LeadSuccess fetch IN PARALLEL
-    const [totalSent, successItems] = await Promise.all([
-      Lead.countBySource(source),
-      LeadSuccess._fetchAllBySource(source, startDate, endDate)
-    ]);
-    console.log(successItems, totalSent);
+    console.log(`[getStats] Fetching stats for source: ${source}, ${startDate} to ${endDate}`);
+
+    // ✅ 1. Get all-time total sent using Lead.countBySource
+    let totalSentAllTime = 0;
+    try {
+      totalSentAllTime = await Lead.countBySource(source);
+      console.log(`[getStats] All-time total sent: ${totalSentAllTime}`);
+    } catch (leadError) {
+      console.error('[getStats] Error fetching all-time count:', leadError.message);
+    }
+
+    // ✅ 2. Get total sent IN DATE RANGE using Lead.findBySource with date filter
+    let totalSentInRange = 0;
+    try {
+      const leadsInRange = await fetchAllLeadsInRange(source, startDate, endDate);
+      totalSentInRange = leadsInRange.length;
+      console.log(`[getStats] Total sent in range (${startDate} to ${endDate}): ${totalSentInRange}`);
+    } catch (rangeError) {
+      console.error('[getStats] Error fetching range count:', rangeError.message);
+    }
+
+    // ✅ 3. Get LeadSuccess items for acceptance stats
+    const successItems = await fetchAllSuccess(source, startDate, endDate);
+    console.log(`[getStats] Success items in range: ${successItems.length}`);
+
     const accepted = successItems.filter(i => countAccepted(i) > 0);
     const sent     = successItems.filter(i => countAccepted(i) === 0);
+
+    console.log(`[getStats] Accepted: ${accepted.length}, Sent (0 lenders): ${sent.length}`);
 
     return res.status(200).json({
       success: true,
       source,
       dateRange: { startDate, endDate },
       stats: {
-        totalSent,
-        totalInRange: successItems.length,
-        accepted:     accepted.length,
-        sent:         sent.length,
+        totalSent: totalSentAllTime,           // ✅ All-time total
+        totalSentInRange: totalSentInRange,    // ✅ NEW: Total in this date range
+        totalInRange: successItems.length,     // Total with lender status
+        accepted: accepted.length,             // Accepted by at least 1 lender
+        sent: sent.length,                     // Sent but 0 lenders accepted
       },
     });
   } catch (err) {
-    console.error('[lender/getStats]', err);
+    console.error('[lender/getStats] Error:', err);
+    console.error('[lender/getStats] Stack:', err.stack);
     return res.status(500).json({ success: false, message: 'Failed to fetch stats.' });
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/lender/leads/accepted
-// ─────────────────────────────────────────────────────────────────────────────
 async function getAcceptedLeads(req, res) {
   try {
-    const source                 = req.user.source;
+    const source = req.user.source;
     const { startDate, endDate } = parseDateRange(req.query);
-    const page   = Math.max(1,   parseInt(req.query.page  || '1'));
+    const page   = Math.max(1, parseInt(req.query.page  || '1'));
     const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50')));
     const search = (req.query.search || '').toLowerCase().trim();
 
-    const successItems = await LeadSuccess._fetchAllBySource(source, startDate, endDate);
+    console.log(`[getAcceptedLeads] source=${source}, page=${page}, limit=${limit}`);
+
+    const successItems = await fetchAllSuccess(source, startDate, endDate);
 
     let accepted = successItems
       .filter(i => countAccepted(i) > 0)
       .map(i => ({
-        successId: i.successId,
-        leadId:    i.leadId,
-        name:      i.fullName    || null,
-        mobile:    i.phone       || null,
-        pan:       i.panNumber   || null,
-        email:     i.email       || null,
-        accepted:  countAccepted(i),
-        dateSent:  i.createdAt,
-        source:    i.source,
-        lenders:   LENDERS.reduce((acc, l) => ({ ...acc, [l]: i[l] === true }), {}),
+        successId:   i.successId,
+        leadId:      i.leadId,
+        name:        i.fullName    || null,
+        mobile:      i.phone       || null,
+        pan:         i.panNumber   || null,
+        email:       i.email       || null,
+        accepted:    countAccepted(i),
+        dateSent:    i.createdAt,
+        source:      i.source,
+        status:      'Accepted',
+        lenders: LENDERS.reduce((acc, l) => ({ ...acc, [l]: i[l] === true }), {}),
       }));
 
     if (search) {
-      accepted = accepted.filter(l =>
-        (l.name   && l.name.toLowerCase().includes(search))  ||
-        (l.mobile && l.mobile.includes(search))              ||
-        (l.pan    && l.pan.toLowerCase().includes(search))   ||
-        (l.email  && l.email.toLowerCase().includes(search))
+      accepted = accepted.filter(
+        l =>
+          (l.name   && l.name.toLowerCase().includes(search))   ||
+          (l.mobile && l.mobile.includes(search))               ||
+          (l.pan    && l.pan.toLowerCase().includes(search))    ||
+          (l.email  && l.email.toLowerCase().includes(search))
       );
     }
 
@@ -105,12 +194,14 @@ async function getAcceptedLeads(req, res) {
     const totalPages = Math.ceil(total / limit);
     const data       = accepted.slice((page - 1) * limit, page * limit);
 
+    console.log(`[getAcceptedLeads] Returning ${data.length} of ${total} leads`);
+
     return res.status(200).json({
-      success:    true,
+      success: true,
       source,
-      dateRange:  { startDate, endDate },
+      dateRange: { startDate, endDate },
       pagination: { page, limit, total, totalPages },
-      leads:      data,
+      leads: data,
     });
   } catch (err) {
     console.error('[lender/getAcceptedLeads]', err);
@@ -118,18 +209,15 @@ async function getAcceptedLeads(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/lender/leads/sent
-// ─────────────────────────────────────────────────────────────────────────────
 async function getSentLeads(req, res) {
   try {
-    const source                 = req.user.source;
+    const source = req.user.source;
     const { startDate, endDate } = parseDateRange(req.query);
-    const page   = Math.max(1,   parseInt(req.query.page  || '1'));
+    const page   = Math.max(1, parseInt(req.query.page  || '1'));
     const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50')));
     const search = (req.query.search || '').toLowerCase().trim();
 
-    const successItems = await LeadSuccess._fetchAllBySource(source, startDate, endDate);
+    const successItems = await fetchAllSuccess(source, startDate, endDate);
 
     let sent = successItems
       .filter(i => countAccepted(i) === 0)
@@ -143,14 +231,16 @@ async function getSentLeads(req, res) {
         accepted:  0,
         dateSent:  i.createdAt,
         source:    i.source,
+        status:    'Sent',
       }));
 
     if (search) {
-      sent = sent.filter(l =>
-        (l.name   && l.name.toLowerCase().includes(search)) ||
-        (l.mobile && l.mobile.includes(search))             ||
-        (l.pan    && l.pan.toLowerCase().includes(search))  ||
-        (l.email  && l.email.toLowerCase().includes(search))
+      sent = sent.filter(
+        l =>
+          (l.name   && l.name.toLowerCase().includes(search))  ||
+          (l.mobile && l.mobile.includes(search))              ||
+          (l.pan    && l.pan.toLowerCase().includes(search))   ||
+          (l.email  && l.email.toLowerCase().includes(search))
       );
     }
 
@@ -161,11 +251,11 @@ async function getSentLeads(req, res) {
     const data       = sent.slice((page - 1) * limit, page * limit);
 
     return res.status(200).json({
-      success:    true,
+      success: true,
       source,
-      dateRange:  { startDate, endDate },
+      dateRange: { startDate, endDate },
       pagination: { page, limit, total, totalPages },
-      leads:      data,
+      leads: data,
     });
   } catch (err) {
     console.error('[lender/getSentLeads]', err);
@@ -173,33 +263,33 @@ async function getSentLeads(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/lender/leads/all
-// ─────────────────────────────────────────────────────────────────────────────
 async function getAllLeads(req, res) {
   try {
-    const source                 = req.user.source;
+    const source = req.user.source;
     const { startDate, endDate } = parseDateRange(req.query);
-    const page   = Math.max(1,   parseInt(req.query.page  || '1'));
+    const page   = Math.max(1, parseInt(req.query.page  || '1'));
     const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit || '50')));
     const search = (req.query.search || '').toLowerCase().trim();
     const status = req.query.status || 'all';
 
-    const successItems = await LeadSuccess._fetchAllBySource(source, startDate, endDate);
+    console.log(`[getAllLeads] source=${source}, page=${page}, limit=${limit}, status=${status}`);
+
+    const successItems = await fetchAllSuccess(source, startDate, endDate);
+    console.log(`[getAllLeads] Fetched ${successItems.length} unique items from LeadSuccess`);
 
     let leads = successItems.map(i => {
       const acceptedCount = countAccepted(i);
       return {
-        successId: i.successId,
-        leadId:    i.leadId,
-        name:      i.fullName  || null,
-        mobile:    i.phone     || null,
-        pan:       i.panNumber || null,
-        email:     i.email     || null,
-        accepted:  acceptedCount,
-        status:    acceptedCount > 0 ? 'Accepted' : 'Sent',
-        dateSent:  i.createdAt,
-        source:    i.source,
+        successId:    i.successId,
+        leadId:       i.leadId,
+        name:         i.fullName  || null,
+        mobile:       i.phone     || null,
+        pan:          i.panNumber || null,
+        email:        i.email     || null,
+        accepted:     acceptedCount,
+        status:       acceptedCount > 0 ? 'Accepted' : 'Sent',
+        dateSent:     i.createdAt,
+        source:       i.source,
         ...(acceptedCount > 0 && {
           lenders: LENDERS.reduce((acc, l) => ({ ...acc, [l]: i[l] === true }), {}),
         }),
@@ -210,26 +300,31 @@ async function getAllLeads(req, res) {
     if (status === 'sent')     leads = leads.filter(l => l.status === 'Sent');
 
     if (search) {
-      leads = leads.filter(l =>
-        (l.name   && l.name.toLowerCase().includes(search)) ||
-        (l.mobile && l.mobile.includes(search))             ||
-        (l.pan    && l.pan.toLowerCase().includes(search))  ||
-        (l.email  && l.email.toLowerCase().includes(search))
+      leads = leads.filter(
+        l =>
+          (l.name   && l.name.toLowerCase().includes(search))  ||
+          (l.mobile && l.mobile.includes(search))              ||
+          (l.pan    && l.pan.toLowerCase().includes(search))   ||
+          (l.email  && l.email.toLowerCase().includes(search))
       );
     }
 
-    leads.sort((a, b) => b.accepted - a.accepted || new Date(b.dateSent) - new Date(a.dateSent));
+    leads.sort((a, b) =>
+      b.accepted - a.accepted || new Date(b.dateSent) - new Date(a.dateSent)
+    );
 
     const total      = leads.length;
     const totalPages = Math.ceil(total / limit);
     const data       = leads.slice((page - 1) * limit, page * limit);
 
+    console.log(`[getAllLeads] Returning ${data.length} of ${total} leads`);
+
     return res.status(200).json({
-      success:    true,
+      success:   true,
       source,
-      dateRange:  { startDate, endDate },
+      dateRange: { startDate, endDate },
       pagination: { page, limit, total, totalPages },
-      leads:      data,
+      leads:     data,
     });
   } catch (err) {
     console.error('[lender/getAllLeads]', err);
@@ -237,26 +332,29 @@ async function getAllLeads(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/lender/leads/:leadId
-// ─────────────────────────────────────────────────────────────────────────────
 async function getLeadById(req, res) {
   try {
-    const source     = req.user.source;
+    const source   = req.user.source;
     const { leadId } = req.params;
 
-    // ✅ Fetch successRecord + raw leadData in parallel
-    const [successRecord, leadData] = await Promise.all([
-      LeadSuccess.findByLeadId(leadId),
-      Lead.findById(leadId).catch(() => null)   // non-fatal
-    ]);
+    console.log(`[getLeadById] Fetching leadId=${leadId} for source=${source}`);
 
+    const successRecord = await LeadSuccess.findByLeadId(leadId);
     if (!successRecord) {
+      console.log(`[getLeadById] No success record found for leadId=${leadId}`);
       return res.status(404).json({ success: false, message: 'Lead not found.' });
     }
 
     if (successRecord.source !== source) {
+      console.log(`[getLeadById] Source mismatch: ${successRecord.source} !== ${source}`);
       return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+
+    let leadData = null;
+    try {
+      leadData = await Lead.findById(leadId);
+    } catch (err) {
+      console.log('[getLeadById] Raw lead not found, using success record only');
     }
 
     const acceptedCount = countAccepted(successRecord);
@@ -287,6 +385,7 @@ async function getLeadById(req, res) {
     });
   } catch (err) {
     console.error('[lender/getLeadById]', err);
+    console.error('[lender/getLeadById] Stack:', err.stack);
     return res.status(500).json({ success: false, message: 'Failed to fetch lead.' });
   }
 }
