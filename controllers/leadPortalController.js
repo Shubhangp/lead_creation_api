@@ -106,7 +106,7 @@ async function getStats(req, res) {
     // ✅ 1. Get all-time total sent using Lead.countBySource
     let totalSentAllTime = 0;
     try {
-      totalSentAllTime = await Lead.getQuickStats(source);
+      totalSentAllTime = await Lead.countBySource(source);
       console.log(`[getStats] All-time total sent: ${totalSentAllTime}`);
     } catch (leadError) {
       console.error('[getStats] Error fetching all-time count:', leadError.message);
@@ -136,11 +136,11 @@ async function getStats(req, res) {
       source,
       dateRange: { startDate, endDate },
       stats: {
-        totalSent: totalSentAllTime,           // ✅ All-time total
-        totalSentInRange: totalSentInRange,    // ✅ NEW: Total in this date range
-        totalInRange: successItems.length,     // Total with lender status
-        accepted: accepted.length,             // Accepted by at least 1 lender
-        sent: sent.length,                     // Sent but 0 lenders accepted
+        totalSent: totalSentAllTime,
+        totalSentInRange: totalSentInRange,
+        totalInRange: successItems.length,
+        accepted: accepted.length,
+        sent: sent.length,
       },
     });
   } catch (err) {

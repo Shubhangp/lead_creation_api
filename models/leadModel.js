@@ -20,15 +20,15 @@ class Lead {
     const start = new Date(startDate);
     const end = new Date(endDate);
     const partitions = [];
-    
+
     let current = new Date(start.getFullYear(), start.getMonth(), 1);
     const endMonth = new Date(end.getFullYear(), end.getMonth(), 1);
-    
+
     while (current <= endMonth) {
       partitions.push(this.getDatePartition(current));
       current.setMonth(current.getMonth() + 1);
     }
-    
+
     return partitions;
   }
 
@@ -110,17 +110,53 @@ class Lead {
   }
 
   // ============================================================================
+  // ATOMIC COUNTER HELPERS
+  // ============================================================================
+
+  static async _incrementCounter(source) {
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { leadId: `COUNT#${source}` },
+        UpdateExpression: 'ADD #count :inc',
+        ExpressionAttributeNames: { '#count': 'count' },
+        ExpressionAttributeValues: { ':inc': 1 }
+      }));
+    } catch (error) {
+      // Non-fatal: log but don't break the create flow
+      console.error(`[Counter] Failed to increment counter for "${source}":`, error.message);
+    }
+  }
+
+  static async _decrementCounter(source) {
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { leadId: `COUNT#${source}` },
+        UpdateExpression: 'ADD #count :dec',
+        ExpressionAttributeNames: { '#count': 'count' },
+        ExpressionAttributeValues: { ':dec': -1 }
+      }));
+    } catch (error) {
+      // Non-fatal: log but don't break the delete flow
+      console.error(`[Counter] Failed to decrement counter for "${source}":`, error.message);
+    }
+  }
+
+  // ============================================================================
   // CRUD OPERATIONS
   // ============================================================================
 
   static async create(leadData) {
     this.validate(leadData);
+
     const existingPhone = await this.findByPhone(leadData.phone);
     if (existingPhone) {
       const error = new Error('Phone number already exists');
       error.code = 'DUPLICATE_PHONE';
       throw error;
     }
+
     const existingPan = await this.findByPanNumber(leadData.panNumber);
     if (existingPan) {
       const error = new Error('PAN number already exists');
@@ -157,6 +193,9 @@ class Lead {
       TableName: TABLE_NAME,
       Item: item
     }));
+
+    // ✅ Increment atomic counter after successful insert
+    await this._incrementCounter(leadData.source);
 
     return item;
   }
@@ -240,18 +279,18 @@ class Lead {
   }
 
   static async findByDateRange(startDate, endDate, options = {}) {
-    const { limit = 1000, lastEvaluatedKey } = options;
-    
+    const { limit = 1000 } = options;
+
     try {
       const partitions = this.getMonthPartitions(startDate, endDate);
-      const promises = partitions.map(partition => 
+      const promises = partitions.map(partition =>
         this._queryByDatePartition(partition, startDate, endDate, limit)
       );
-      
+
       const results = await Promise.all(promises);
       const allItems = results.flat();
       const items = limit ? allItems.slice(0, limit) : allItems;
-      
+
       return {
         items,
         lastEvaluatedKey: null,
@@ -279,20 +318,14 @@ class Lead {
         }
       };
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
-      if (limit) {
-        params.Limit = limit;
-      }
+      if (lastKey) params.ExclusiveStartKey = lastKey;
+      if (limit) params.Limit = limit;
 
       const result = await docClient.send(new QueryCommand(params));
       items = items.concat(result.Items || []);
       lastKey = result.LastEvaluatedKey;
-      
-      if (limit && items.length >= limit) {
-        break;
-      }
+
+      if (limit && items.length >= limit) break;
     } while (lastKey);
 
     return items;
@@ -373,23 +406,36 @@ class Lead {
   }
 
   static async deleteById(leadId) {
+    // Fetch lead first to get source for counter decrement
+    const lead = await this.findById(leadId);
+
     await docClient.send(new DeleteCommand({
       TableName: TABLE_NAME,
       Key: { leadId }
     }));
+
+    // ✅ Decrement atomic counter after successful delete
+    if (lead?.source) {
+      await this._decrementCounter(lead.source);
+    }
+
     return { deleted: true };
   }
 
+  // ============================================================================
+  // COUNT OPERATIONS (ATOMIC COUNTER - FAST & CHEAP)
+  // ============================================================================
+
+  /**
+   * ✅ FAST & CHEAP: Reads from atomic counter (~free, <10ms)
+   * Requires backfill-counters.js to be run once first
+   */
   static async countBySource(source) {
-    const result = await docClient.send(new QueryCommand({
+    const result = await docClient.send(new GetCommand({
       TableName: TABLE_NAME,
-      IndexName: 'source-createdAt-index',
-      KeyConditionExpression: '#source = :source',
-      ExpressionAttributeNames: { '#source': 'source' },
-      ExpressionAttributeValues: { ':source': source },
-      Select: 'COUNT'
+      Key: { leadId: `COUNT#${source}` }
     }));
-    return result.Count || 0;
+    return result.Item?.count || 0;
   }
 
   // ============================================================================
@@ -401,22 +447,22 @@ class Lead {
    */
   static async getAccurateTotalCount() {
     const startTime = Date.now();
-    console.log('[ANALYTICS] Getting accurate total count via GSI with source breakdown...');
-    
+    console.log('[ANALYTICS] Getting accurate total count via atomic counters...');
+
     try {
       const sources = process.env.LEAD_SOURCES?.split(',') || [];
-      
+
       if (sources.length === 0) {
         return await this._countViaDatePartitions();
       }
 
       let totalCount = 0;
-      const sourceBreakdown = {}; // ✅ NEW: Track per source
+      const sourceBreakdown = {};
 
       for (const source of sources) {
         const count = await this.countBySource(source.trim());
         totalCount += count;
-        sourceBreakdown[source.trim()] = count; // ✅ NEW
+        sourceBreakdown[source.trim()] = count;
         console.log(`  Source "${source.trim()}": ${count.toLocaleString()} records`);
       }
 
@@ -425,10 +471,10 @@ class Lead {
 
       return {
         totalLogs: totalCount,
-        sourceBreakdown, // ✅ NEW: Include source breakdown
+        sourceBreakdown,
         isEstimate: false,
         scannedInMs: elapsed,
-        method: 'gsi-source-count',
+        method: 'atomic-counter',
         sources: sources.length
       };
     } catch (error) {
@@ -439,11 +485,11 @@ class Lead {
 
   static async _countViaDatePartitions() {
     const startTime = Date.now();
-    
+
     const endDate = new Date();
     const startDate = new Date();
     startDate.setFullYear(startDate.getFullYear() - 2);
-    
+
     const partitions = this.getMonthPartitions(
       startDate.toISOString(),
       endDate.toISOString()
@@ -451,7 +497,7 @@ class Lead {
 
     console.log(`  Counting ${partitions.length} monthly partitions...`);
 
-    const countPromises = partitions.map(partition => 
+    const countPromises = partitions.map(partition =>
       this._countFullPartition(partition)
     );
 
@@ -481,9 +527,7 @@ class Lead {
         Select: 'COUNT'
       };
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
+      if (lastKey) params.ExclusiveStartKey = lastKey;
 
       const result = await docClient.send(new QueryCommand(params));
       count += result.Count || 0;
@@ -504,13 +548,13 @@ class Lead {
           totalLogs: count,
           source: source,
           isEstimate: false,
-          method: 'gsi-source-count'
+          method: 'atomic-counter'
         };
       } else if (startDate && endDate) {
-        return this.getQuickStatsForDateRange(startDate, endDate); // ✅ NOW WITH SOURCE BREAKDOWN
+        return this.getQuickStatsForDateRange(startDate, endDate);
       } else {
-        console.log('[INFO] Getting accurate total count with source breakdown (real-time via GSI)');
-        return this.getAccurateTotalCount(); // ✅ Already has source breakdown
+        console.log('[INFO] Getting accurate total count with source breakdown (atomic counter)');
+        return this.getAccurateTotalCount();
       }
     } catch (error) {
       console.error('Error in getQuickStats:', error);
@@ -519,7 +563,7 @@ class Lead {
   }
 
   /**
-   * ✅ NEW: Get quick count for date range WITH SOURCE BREAKDOWN
+   * Get quick count for date range WITH SOURCE BREAKDOWN
    */
   static async getQuickStatsForDateRange(startDate, endDate) {
     const startTime = Date.now();
@@ -528,13 +572,11 @@ class Lead {
       console.log(`[${TABLE_NAME}] Quick count with source breakdown:`, startDate, 'to', endDate);
 
       const sources = process.env.LEAD_SOURCES?.split(',') || [];
-      
+
       if (sources.length === 0) {
-        // Fallback without source breakdown
         return this._countDateRangeWithoutSources(startDate, endDate);
       }
 
-      // Count each source in parallel
       const countPromises = sources.map(async (source) => {
         const trimmedSource = source.trim();
         const count = await this._countSourceInDateRange(trimmedSource, startDate, endDate);
@@ -542,11 +584,10 @@ class Lead {
       });
 
       const results = await Promise.all(countPromises);
-      
-      // Build source breakdown
+
       const sourceBreakdown = {};
       let totalCount = 0;
-      
+
       results.forEach(({ source, count }) => {
         sourceBreakdown[source] = count;
         totalCount += count;
@@ -558,7 +599,7 @@ class Lead {
 
       return {
         totalLogs: totalCount,
-        sourceBreakdown, // ✅ NEW: Source breakdown included
+        sourceBreakdown,
         isEstimate: false,
         scannedInMs: elapsed,
         method: 'gsi-query-by-source',
@@ -571,7 +612,7 @@ class Lead {
   }
 
   /**
-   * ✅ NEW: Count specific source in date range
+   * Count specific source in date range
    */
   static async _countSourceInDateRange(source, startDate, endDate) {
     let count = 0;
@@ -591,9 +632,7 @@ class Lead {
         Select: 'COUNT'
       };
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
+      if (lastKey) params.ExclusiveStartKey = lastKey;
 
       const result = await docClient.send(new QueryCommand(params));
       count += result.Count || 0;
@@ -608,7 +647,7 @@ class Lead {
    */
   static async _countDateRangeWithoutSources(startDate, endDate) {
     const partitions = this.getMonthPartitions(startDate, endDate);
-    const countPromises = partitions.map(partition => 
+    const countPromises = partitions.map(partition =>
       this._countDatePartition(partition, startDate, endDate)
     );
 
@@ -640,9 +679,7 @@ class Lead {
         Select: 'COUNT'
       };
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
+      if (lastKey) params.ExclusiveStartKey = lastKey;
 
       const result = await docClient.send(new QueryCommand(params));
       count += result.Count || 0;
@@ -652,9 +689,10 @@ class Lead {
     return count;
   }
 
-  /**
-   * STREAMING STATISTICS (unchanged - already has source breakdown)
-   */
+  // ============================================================================
+  // STREAMING STATISTICS
+  // ============================================================================
+
   static async getStats(startDate, endDate, options = {}) {
     const startTime = Date.now();
     const { progressCallback } = options;
@@ -674,7 +712,7 @@ class Lead {
       for (let i = 0; i < partitions.length; i++) {
         const partition = partitions[i];
         console.log(`  Processing partition ${i + 1}/${partitions.length}: ${partition}`);
-        
+
         const partitionCount = await this._streamProcessPartition(
           partition,
           startDate,
@@ -691,15 +729,15 @@ class Lead {
             }
           }
         );
-        
+
         console.log(`    Processed ${partitionCount.toLocaleString()} records from ${partition}`);
       }
 
       const stats = this._finalizeStats(statsAggregator, startDate, endDate, startTime);
-      
+
       const elapsed = Date.now() - startTime;
       console.log(`[${TABLE_NAME}] ✅ Streaming stats complete: ${stats.totalLogs.toLocaleString()} records in ${elapsed}ms`);
-      
+
       return stats;
     } catch (error) {
       console.error('Error in getStats:', error);
@@ -752,22 +790,18 @@ class Lead {
         Limit: CHUNK_SIZE
       };
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
+      if (lastKey) params.ExclusiveStartKey = lastKey;
 
       const result = await docClient.send(new QueryCommand(params));
       const items = result.Items || [];
-      
+
       this._processChunk(items, aggregator);
-      
+
       partitionCount += items.length;
       lastKey = result.LastEvaluatedKey;
-      
-      if (progressCallback) {
-        progressCallback(items.length);
-      }
-      
+
+      if (progressCallback) progressCallback(items.length);
+
       if (lastKey) {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
@@ -849,7 +883,7 @@ class Lead {
   static _finalizeStats(aggregator, startDate, endDate, startTime) {
     let uniqueLeads = 0;
     let duplicateLeads = 0;
-    
+
     aggregator.seenPhones.forEach(phone => {
       if (aggregator.duplicatePhones.has(phone)) {
         duplicateLeads++;
@@ -862,8 +896,8 @@ class Lead {
 
     return {
       totalLogs: aggregator.totalLogs,
-      uniqueLeads: uniqueLeads,
-      duplicateLeads: duplicateLeads,
+      uniqueLeads,
+      duplicateLeads,
       duplicateByPhone: aggregator.duplicatePhones.size,
       duplicateByPan: aggregator.duplicatePans.size,
       dateRange: { start: startDate, end: endDate },
@@ -929,9 +963,7 @@ class Lead {
         Limit: CHUNK_SIZE
       };
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
+      if (lastKey) params.ExclusiveStartKey = lastKey;
 
       const result = await docClient.send(new QueryCommand(params));
       const items = result.Items || [];
@@ -970,17 +1002,20 @@ class Lead {
       });
 
       lastKey = result.LastEvaluatedKey;
-      
+
       if (lastKey) {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
     } while (lastKey);
   }
 
-  // Migration functions (unchanged)
+  // ============================================================================
+  // MIGRATION / BACKFILL
+  // ============================================================================
+
   static async backfillDatePartitions(sourceToMigrate = null) {
     let totalProcessed = 0;
-    
+
     console.log('═══════════════════════════════════════════════════════════');
     console.log('  MIGRATION: Backfill datePartition Field');
     console.log('═══════════════════════════════════════════════════════════\n');
@@ -992,13 +1027,13 @@ class Lead {
         totalProcessed += processed;
       } else {
         const sources = process.env.LEAD_SOURCES?.split(',') || [];
-        
+
         if (sources.length === 0) {
           throw new Error('No sources configured. Set LEAD_SOURCES environment variable or provide source parameter.');
         }
 
         console.log(`[MIGRATION] Found ${sources.length} sources to process\n`);
-        
+
         for (const source of sources) {
           const processed = await this._backfillSource(source.trim());
           totalProcessed += processed;
@@ -1034,9 +1069,7 @@ class Lead {
         Limit: 100
       };
 
-      if (lastKey) {
-        params.ExclusiveStartKey = lastKey;
-      }
+      if (lastKey) params.ExclusiveStartKey = lastKey;
 
       const result = await docClient.send(new QueryCommand(params));
 
@@ -1053,7 +1086,7 @@ class Lead {
         processed += updates.length;
         console.log(`  ✓ Updated ${processed} records for ${source}...`);
       }
-      
+
       lastKey = result.LastEvaluatedKey;
     } while (lastKey);
 
