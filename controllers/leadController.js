@@ -441,7 +441,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     // Check FINTIFI
     const fintifiResults = await FintifiResponseLog.findByLeadId(leadId);
     console.log('fintifi', fintifiResults);
-    const fintifiResult = fintifiResults.find(log => 
+    const fintifiResult = fintifiResults.items.find(log => 
       log.responseStatus === 200
     );
     if (fintifiResult) successfulLenders.push('FINTIFI');
@@ -449,7 +449,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     // Check FATAKPAY
     const fatakResults = await FatakPayResponseLog.findByLeadId(leadId);
     console.log('fatakpay', fatakResults);
-    const fatakResult = fatakResults.find(log => 
+    const fatakResult = fatakResults.items.find(log => 
       log.responseBody.message === 'You are eligible.'
     );
     if (fatakResult) successfulLenders.push('FATAKPAY');
@@ -457,7 +457,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     // Check FATAKPAYPL
     const fatakPLResults = await FatakPayResponseLogPL.findByLeadId(leadId);
     console.log('fatakpl', fatakPLResults);
-    const fatakPLResult = fatakPLResults.find(log => 
+    const fatakPLResult = fatakPLResults.items.find(log => 
       log.responseBody.message === 'You are eligible.'
     );
     if (fatakPLResult) successfulLenders.push('FATAKPAY');
@@ -465,7 +465,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     // Check RAMFINCROP
     const ramResults = await RamFinCropLog.findByLeadId(leadId);
     console.log('ram', ramResults);
-    const ramResult = ramResults.find(log => 
+    const ramResult = ramResults.items.find(log => 
       log.responseStatus === 'success'
     );
     if (ramResult) successfulLenders.push('RAMFINCROP');
@@ -481,7 +481,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     // Check CRMPaisa
     const CRMPaisaResults = await CrmPaisaResponseLog.findByLeadId(leadId);
     console.log('crmpaisa', CRMPaisaResults);
-    const CRMPaisaResult = CRMPaisaResults.find(log => 
+    const CRMPaisaResult = CRMPaisaResults.items.find(log => 
       log.responseBody?.Message === 'Lead generated successfully.'
     );
     if (CRMPaisaResult) successfulLenders.push('CRMPaisa');
@@ -489,7 +489,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     // Check IndiaLends
     const IndiaLendsResults = await IndiaLendsResponseLog.findByLeadId(leadId);
     console.log('IL', IndiaLendsResults);
-    const IndiaLendsResult = IndiaLendsResults.find(log => 
+    const IndiaLendsResult = IndiaLendsResults.items.find(log => 
       log.responseBody?.info?.message === 'Verification code sent to your mobile phone'
     );
     if (IndiaLendsResult) successfulLenders.push('IndiaLends');
@@ -497,7 +497,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     // Check Mpokket
     const MpokketResults = await MpokketResponseLog.findByLeadId(leadId);
     console.log('mpokket', MpokketResults);
-    const MpokketResult = MpokketResults.find(log => 
+    const MpokketResult = MpokketResults.items.find(log => 
       log.responseBody?.data?.message === 'Data Accepted Successfully'
     );
     if (MpokketResult) successfulLenders.push('Mpokket');

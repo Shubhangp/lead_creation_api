@@ -2,6 +2,10 @@ const express = require('express');
 const rcsController = require('../controllers/rcsController');
 const router = express.Router();
 
+// ============RCS Webhook ==============
+// For tracking failed RCS response
+router.post('/rcs_webhook', rcsController.rcsWebhook);
+
 // ============ RCS PROCESSING ENDPOINTS ============
 // Manual trigger to process pending RCS messages
 router.post('/process-pending', rcsController.processPendingRCS);

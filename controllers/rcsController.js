@@ -1,6 +1,39 @@
 const rcsService = require('../services/rcsService');
 const { RCSQueue } = require('../models/rcsModels');
 const DistributionRule = require('../models/distributionRuleModel');
+const {
+  saveEvent,
+  listEventsByDate,
+  listEventsByPhone,
+  getEvent,
+} = require("../models/rcsWebhookModel");
+
+exports.rcsWebhook = async (req, res) => {
+  try {
+    const body = req.body;
+
+    console.log("📩 Incoming RCS Webhook:");
+    console.log(JSON.stringify(body, null, 2));
+
+    if (!body || Object.keys(body).length === 0) {
+      return res.status(400).json({ error: "Empty payload" });
+    }
+
+    const savedEvent = await saveEvent(body);
+
+    console.log(`✅ Saved: ${savedEvent.eventId} | type: ${savedEvent.eventType}`);
+
+    return res.status(200).json({
+      success: true,
+      eventId: savedEvent.eventId,
+      messageId: savedEvent.messageId,
+      eventType: savedEvent.eventType,
+    });
+  } catch (err) {
+    console.error("❌ Webhook error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
 
 /**
  * Manual trigger to process pending RCS messages
@@ -10,7 +43,7 @@ exports.processPendingRCS = async (req, res) => {
   try {
     console.log('Manual RCS processing triggered');
     await rcsService.processPendingRCS();
-    
+
     res.json({
       status: 'success',
       message: 'Pending RCS messages processed successfully',
@@ -75,7 +108,7 @@ exports.getRCSQueueStatus = async (req, res) => {
 exports.getRCSLogsForLead = async (req, res) => {
   try {
     const { leadId } = req.params;
-    
+
     if (!leadId) {
       return res.status(400).json({
         status: 'error',
@@ -140,7 +173,7 @@ exports.updateRCSConfig = async (req, res) => {
 
     // Update or create distribution rule
     const existingRule = await DistributionRule.findBySource(source);
-    
+
     let distributionRule;
     if (existingRule) {
       distributionRule = await DistributionRule.updateBySource(source, {
@@ -212,7 +245,7 @@ exports.getRCSConfig = async (req, res) => {
 exports.cancelRCSForLead = async (req, res) => {
   try {
     const { leadId } = req.params;
-    
+
     if (!leadId) {
       return res.status(400).json({
         status: 'error',
@@ -253,7 +286,7 @@ exports.cancelRCSForLead = async (req, res) => {
 exports.testRCS = async (req, res) => {
   try {
     const { phone, rcsType, lenderName } = req.body;
-    
+
     // Validation
     if (!phone || !rcsType) {
       return res.status(400).json({
@@ -278,13 +311,13 @@ exports.testRCS = async (req, res) => {
 
     // Create test payload
     let payload;
-    const mockLead = { 
-      _id: 'test_' + Date.now(), 
+    const mockLead = {
+      _id: 'test_' + Date.now(),
       phone: phone.replace('+91', ''),
       fullName: 'Test User',
       source: 'TEST'
     };
-    
+
     if (rcsType === 'LENDER_SUCCESS') {
       payload = rcsService.generateLenderSuccessPayload(phone, lenderName, mockLead);
     } else {
@@ -293,7 +326,7 @@ exports.testRCS = async (req, res) => {
 
     // Send test RCS
     const result = await rcsService.sendRCS(payload);
-    
+
     res.json({
       status: 'success',
       message: 'Test RCS sent',
