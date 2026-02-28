@@ -460,7 +460,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
     const fatakPLResult = fatakPLResults.items.find(log => 
       log.responseBody.message === 'You are eligible.'
     );
-    if (fatakPLResult) successfulLenders.push('FATAKPAY');
+    if (fatakPLResult) successfulLenders.push('FATAKPAYPL');
 
     // Check RAMFINCROP
     const ramResults = await RamFinCropLog.findByLeadId(leadId);
