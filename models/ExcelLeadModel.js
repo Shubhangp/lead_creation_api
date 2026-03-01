@@ -1,73 +1,54 @@
-// models/excelLeadModel.js
 const { docClient } = require('../dynamodb');
-const { 
-  PutCommand, 
-  GetCommand, 
-  QueryCommand, 
-  UpdateCommand, 
-  DeleteCommand, 
-  ScanCommand,
-  BatchWriteCommand 
+const {
+  PutCommand,
+  GetCommand,
+  QueryCommand,
+  UpdateCommand,
+  DeleteCommand,
+  BatchWriteCommand,
+  TransactWriteCommand,
 } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'excel_leads';
+const CONSTRAINTS_TABLE = 'excel_leads_unique_constraints';
 
 class ExcelLead {
-  // Validation helper
+
   static validate(data) {
     const errors = [];
 
-    // Required fields
-    if (!data.source) errors.push('Source is required');
-    if (!data.fullName) errors.push('Full name is required');
-    if (!data.phone) errors.push('Phone is required');
-    if (!data.email) errors.push('Email is required');
+    if (!data.source)    errors.push('Source is required');
+    if (!data.fullName)  errors.push('Full name is required');
+    if (!data.phone)     errors.push('Phone is required');
+    if (!data.email)     errors.push('Email is required');
     if (!data.panNumber) errors.push('PAN number is required');
-    if (data.consent !== true && data.consent !== false) {
+    if (data.consent !== true && data.consent !== false)
       errors.push('Consent is required');
-    }
 
-    // String length validations
-    if (data.fullName && (data.fullName.length < 1 || data.fullName.length > 100)) {
+    if (data.fullName && (data.fullName.length < 1 || data.fullName.length > 100))
       errors.push('Full name must be between 1 and 100 characters');
-    }
-    if (data.firstName && (data.firstName.length < 1 || data.firstName.length > 50)) {
+    if (data.firstName && (data.firstName.length < 1 || data.firstName.length > 50))
       errors.push('First name must be between 1 and 50 characters');
-    }
-    if (data.lastName && (data.lastName.length < 1 || data.lastName.length > 50)) {
+    if (data.lastName && (data.lastName.length < 1 || data.lastName.length > 50))
       errors.push('Last name must be between 1 and 50 characters');
-    }
 
-    // Email validation
     const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9]{2,4}$/;
-    if (data.email && !emailRegex.test(data.email)) {
+    if (data.email && !emailRegex.test(data.email))
       errors.push('Invalid email format');
-    }
 
-    // PAN number validation
     const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-    if (data.panNumber && !panRegex.test(data.panNumber)) {
+    if (data.panNumber && !panRegex.test(data.panNumber))
       errors.push('Invalid PAN number format (e.g., ABCDE1234F)');
-    }
 
-    // Age validation
-    if (data.age !== undefined && (data.age < 18 || data.age > 120)) {
+    if (data.age !== undefined && (data.age < 18 || data.age > 120))
       errors.push('Age must be between 18 and 120');
-    }
 
-    // Date of birth validation
-    if (data.dateOfBirth) {
-      const dob = new Date(data.dateOfBirth);
-      if (dob > new Date()) {
-        errors.push('Date of birth cannot be in the future');
-      }
-    }
+    if (data.dateOfBirth && new Date(data.dateOfBirth) > new Date())
+      errors.push('Date of birth cannot be in the future');
 
-    // Credit score validation
-    if (data.creditScore !== undefined && (data.creditScore < 300 || data.creditScore > 900)) {
+    if (data.creditScore !== undefined && (data.creditScore < 300 || data.creditScore > 900))
       errors.push('Credit score must be between 300 and 900');
-    }
 
     if (errors.length > 0) {
       const error = new Error('Validation failed');
@@ -76,165 +57,203 @@ class ExcelLead {
     }
   }
 
-  // Create single excel lead with uniqueness check
+  // ─── Build item ──────────────────────────────────────────────────────────────
+
+  static _buildItem(leadData, excelLeadId = uuidv4()) {
+    return {
+      excelLeadId,
+      source:       leadData.source,
+      fullName:     leadData.fullName,
+      firstName:    leadData.firstName    || null,
+      lastName:     leadData.lastName     || null,
+      phone:        leadData.phone,
+      email:        leadData.email,
+      age:          leadData.age          || null,
+      dateOfBirth:  leadData.dateOfBirth  ? new Date(leadData.dateOfBirth).toISOString() : null,
+      gender:       leadData.gender       || null,
+      panNumber:    leadData.panNumber,
+      jobType:      leadData.jobType      || null,
+      businessType: leadData.businessType || null,
+      salary:       leadData.salary       || null,
+      creditScore:  leadData.creditScore  || null,
+      cibilScore:   leadData.cibilScore   || null,
+      address:      leadData.address      || null,
+      pincode:      leadData.pincode      || null,
+      consent:      leadData.consent,
+      createdAt:    new Date().toISOString()
+    };
+  }
+
+  // ─── Sentinel helpers ────────────────────────────────────────────────────────
+
+  static async _reserveConstraints(phone, panNumber, excelLeadId) {
+    try {
+      await docClient.send(new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: CONSTRAINTS_TABLE,
+              Item: { constraintKey: `phone#${phone}`, excelLeadId, createdAt: new Date().toISOString() },
+              ConditionExpression: 'attribute_not_exists(constraintKey)'
+            }
+          },
+          {
+            Put: {
+              TableName: CONSTRAINTS_TABLE,
+              Item: { constraintKey: `pan#${panNumber}`, excelLeadId, createdAt: new Date().toISOString() },
+              ConditionExpression: 'attribute_not_exists(constraintKey)'
+            }
+          }
+        ]
+      }));
+    } catch (err) {
+      if (err.name === 'TransactionCanceledException') {
+        const reasons = err.CancellationReasons || [];
+        const phoneDup = reasons[0]?.Code === 'ConditionalCheckFailed';
+        const message  = phoneDup ? 'Phone number already exists' : 'PAN number already exists';
+        const code     = phoneDup ? 'DUPLICATE_PHONE' : 'DUPLICATE_PAN';
+        throw Object.assign(new Error(message), { code });
+      }
+      throw err;
+    }
+  }
+
+  static async _releaseConstraints(phone, panNumber) {
+    await docClient.send(new BatchWriteCommand({
+      RequestItems: {
+        [CONSTRAINTS_TABLE]: [
+          { DeleteRequest: { Key: { constraintKey: `phone#${phone}` } } },
+          { DeleteRequest: { Key: { constraintKey: `pan#${panNumber}` } } }
+        ]
+      }
+    }));
+  }
+
+  static async _constraintExists(key) {
+    const result = await docClient.send(new GetCommand({
+      TableName: CONSTRAINTS_TABLE,
+      Key: { constraintKey: key }
+    }));
+    return result.Item || null;
+  }
+
+  // ─── Create single ───────────────────────────────────────────────────────────
+
   static async create(leadData) {
     this.validate(leadData);
+    const item = this._buildItem(leadData);
 
-    // Check if phone already exists
-    const existingPhone = await this.findByPhone(leadData.phone);
-    if (existingPhone) {
-      const error = new Error('Phone number already exists');
-      error.code = 'DUPLICATE_PHONE';
-      throw error;
+    await this._reserveConstraints(item.phone, item.panNumber, item.excelLeadId);
+
+    try {
+      await docClient.send(new PutCommand({
+        TableName: TABLE_NAME,
+        Item: item,
+        ConditionExpression: 'attribute_not_exists(excelLeadId)'
+      }));
+    } catch (err) {
+      await this._releaseConstraints(item.phone, item.panNumber).catch(() => {});
+      throw err;
     }
-
-    // Check if PAN already exists
-    const existingPan = await this.findByPanNumber(leadData.panNumber);
-    if (existingPan) {
-      const error = new Error('PAN number already exists');
-      error.code = 'DUPLICATE_PAN';
-      throw error;
-    }
-
-    const item = {
-      excelLeadId: uuidv4(),
-      source: leadData.source,
-      fullName: leadData.fullName,
-      firstName: leadData.firstName || null,
-      lastName: leadData.lastName || null,
-      phone: leadData.phone,
-      email: leadData.email,
-      age: leadData.age || null,
-      dateOfBirth: leadData.dateOfBirth ? new Date(leadData.dateOfBirth).toISOString() : null,
-      gender: leadData.gender || null,
-      panNumber: leadData.panNumber,
-      jobType: leadData.jobType || null,
-      businessType: leadData.businessType || null,
-      salary: leadData.salary || null,
-      creditScore: leadData.creditScore || null,
-      cibilScore: leadData.cibilScore || null,
-      address: leadData.address || null,
-      pincode: leadData.pincode || null,
-      consent: leadData.consent,
-      createdAt: new Date().toISOString()
-    };
-
-    await docClient.send(new PutCommand({
-      TableName: TABLE_NAME,
-      Item: item
-    }));
 
     return item;
   }
 
-  // Batch create excel leads (for bulk imports)
+  // ─── Bulk create ─────────────────────────────────────────────────────────────
+
   static async createBulk(leadsArray) {
-    const results = {
-      successful: [],
-      failed: []
-    };
+    const results = { successful: [], failed: [] };
 
-    // Process in batches of 25 (DynamoDB limit)
-    const batchSize = 25;
-    
-    for (let i = 0; i < leadsArray.length; i += batchSize) {
-      const batch = leadsArray.slice(i, i + batchSize);
-      const putRequests = [];
-
-      for (const leadData of batch) {
-        try {
-          // Validate each lead
-          this.validate(leadData);
-
-          // Check for duplicates (you might want to skip this for performance in bulk imports)
-          const existingPhone = await this.findByPhone(leadData.phone);
-          const existingPan = await this.findByPanNumber(leadData.panNumber);
-
-          if (existingPhone || existingPan) {
-            results.failed.push({
-              data: leadData,
-              error: existingPhone ? 'Duplicate phone' : 'Duplicate PAN'
-            });
-            continue;
-          }
-
-          const item = {
-            excelLeadId: uuidv4(),
-            source: leadData.source,
-            fullName: leadData.fullName,
-            firstName: leadData.firstName || null,
-            lastName: leadData.lastName || null,
-            phone: leadData.phone,
-            email: leadData.email,
-            age: leadData.age || null,
-            dateOfBirth: leadData.dateOfBirth ? new Date(leadData.dateOfBirth).toISOString() : null,
-            gender: leadData.gender || null,
-            panNumber: leadData.panNumber,
-            jobType: leadData.jobType || null,
-            businessType: leadData.businessType || null,
-            salary: leadData.salary || null,
-            creditScore: leadData.creditScore || null,
-            cibilScore: leadData.cibilScore || null,
-            address: leadData.address || null,
-            pincode: leadData.pincode || null,
-            consent: leadData.consent,
-            createdAt: new Date().toISOString()
-          };
-
-          putRequests.push({
-            PutRequest: { Item: item }
-          });
-
-          results.successful.push(item);
-
-        } catch (err) {
-          results.failed.push({
-            data: leadData,
-            error: err.message
-          });
-        }
+    // Step 1 — Validate all synchronously (free, no I/O)
+    const validLeads = [];
+    for (const lead of leadsArray) {
+      try {
+        this.validate(lead);
+        validLeads.push({ lead, item: this._buildItem(lead) });
+      } catch (err) {
+        results.failed.push({ data: lead, error: err.message, errors: err.errors });
       }
+    }
 
-      // Execute batch write
-      if (putRequests.length > 0) {
-        try {
-          await docClient.send(new BatchWriteCommand({
-            RequestItems: {
-              [TABLE_NAME]: putRequests
-            }
+    if (validLeads.length === 0) return results;
+
+    // Step 2 — Reserve constraints in parallel (zero reads, atomic writes)
+    const reservationResults = await Promise.allSettled(
+      validLeads.map(({ item }) =>
+        this._reserveConstraints(item.phone, item.panNumber, item.excelLeadId)
+      )
+    );
+
+    // Step 3 — Separate passed vs failed
+    const toInsert = [];
+    validLeads.forEach(({ lead, item }, i) => {
+      const r = reservationResults[i];
+      if (r.status === 'fulfilled') {
+        toInsert.push(item);
+      } else {
+        results.failed.push({ data: lead, error: r.reason?.message || 'Constraint check failed' });
+      }
+    });
+
+    if (toInsert.length === 0) return results;
+
+    // Step 4 — Batch write in chunks of 25 with unprocessed retry
+    const BATCH_SIZE = 25;
+    for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
+      const chunk = toInsert.slice(i, i + BATCH_SIZE);
+
+      try {
+        let response = await docClient.send(new BatchWriteCommand({
+          RequestItems: { [TABLE_NAME]: chunk.map(item => ({ PutRequest: { Item: item } })) }
+        }));
+
+        // Retry unprocessed with exponential backoff
+        let unprocessed = response.UnprocessedItems?.[TABLE_NAME];
+        let attempt = 0;
+        while (unprocessed?.length > 0 && attempt < 5) {
+          await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 100));
+          response = await docClient.send(new BatchWriteCommand({
+            RequestItems: { [TABLE_NAME]: unprocessed }
           }));
-        } catch (err) {
-          console.error('Batch write error:', err);
-          // Mark all items in this batch as failed
-          putRequests.forEach(req => {
-            const item = req.PutRequest.Item;
-            results.failed.push({
-              data: item,
-              error: 'Batch write failed'
-            });
-            // Remove from successful
-            const index = results.successful.findIndex(s => s.excelLeadId === item.excelLeadId);
-            if (index > -1) results.successful.splice(index, 1);
-          });
+          unprocessed = response.UnprocessedItems?.[TABLE_NAME];
+          attempt++;
         }
+
+        if (unprocessed?.length > 0) {
+          const failedIds = new Set(unprocessed.map(r => r.PutRequest.Item.excelLeadId));
+          for (const req of unprocessed) {
+            const item = req.PutRequest.Item;
+            await this._releaseConstraints(item.phone, item.panNumber).catch(() => {});
+            results.failed.push({ data: item, error: 'Batch write failed after retries' });
+          }
+          results.successful.push(...chunk.filter(item => !failedIds.has(item.excelLeadId)));
+        } else {
+          results.successful.push(...chunk);
+        }
+
+      } catch (err) {
+        console.error('Batch write error:', err);
+        await Promise.allSettled(chunk.map(item => this._releaseConstraints(item.phone, item.panNumber)));
+        chunk.forEach(item => results.failed.push({ data: item, error: 'Batch write failed' }));
       }
     }
 
     return results;
   }
 
-  // Find by ID
+  // ─── Read by ID ──────────────────────────────────────────────────────────────
+
   static async findById(excelLeadId) {
     const result = await docClient.send(new GetCommand({
       TableName: TABLE_NAME,
       Key: { excelLeadId }
     }));
-
     return result.Item || null;
   }
 
-  // Find by phone (GSI)
-  static async findByPhone(phone) {
+  // ─── Read by phone (KEYS_ONLY GSI → GetCommand for full item) ───────────────
+
+  static async findByPhone(phone, { fullItem = true } = {}) {
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'phone-index',
@@ -242,12 +261,15 @@ class ExcelLead {
       ExpressionAttributeValues: { ':phone': phone },
       Limit: 1
     }));
-
-    return result.Items?.[0] || null;
+    const key = result.Items?.[0];
+    if (!key) return null;
+    if (!fullItem) return key;
+    return this.findById(key.excelLeadId);
   }
 
-  // Find by PAN number (GSI)
-  static async findByPanNumber(panNumber) {
+  // ─── Read by PAN (KEYS_ONLY GSI → GetCommand for full item) ─────────────────
+
+  static async findByPanNumber(panNumber, { fullItem = true } = {}) {
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'panNumber-index',
@@ -255,13 +277,17 @@ class ExcelLead {
       ExpressionAttributeValues: { ':panNumber': panNumber },
       Limit: 1
     }));
-
-    return result.Items?.[0] || null;
+    const key = result.Items?.[0];
+    if (!key) return null;
+    if (!fullItem) return key;
+    return this.findById(key.excelLeadId);
   }
 
-  // Find by source with date sorting
+  // ─── Read by source with pagination (INCLUDE GSI) ───────────────────────────
+  // Primary "list all" method — always query by source, never scan.
+
   static async findBySource(source, options = {}) {
-    const { limit = 100, startDate, endDate, sortAscending = false } = options;
+    const { limit = 100, startDate, endDate, sortAscending = false, lastEvaluatedKey } = options;
 
     let keyConditionExpression = 'source = :source';
     const expressionAttributeValues = { ':source': source };
@@ -278,68 +304,86 @@ class ExcelLead {
       expressionAttributeValues[':endDate'] = endDate;
     }
 
-    const result = await docClient.send(new QueryCommand({
+    const params = {
       TableName: TABLE_NAME,
       IndexName: 'source-createdAt-index',
       KeyConditionExpression: keyConditionExpression,
       ExpressionAttributeValues: expressionAttributeValues,
       ScanIndexForward: sortAscending,
-      Limit: limit
-    }));
-
-    return result.Items || [];
-  }
-
-  // Find all excel leads (paginated)
-  static async findAll(options = {}) {
-    const { limit = 100, lastEvaluatedKey } = options;
-
-    const params = {
-      TableName: TABLE_NAME,
-      Limit: limit
+      Limit: Math.min(limit, 1000)
     };
 
-    if (lastEvaluatedKey) {
-      params.ExclusiveStartKey = lastEvaluatedKey;
-    }
+    if (lastEvaluatedKey) params.ExclusiveStartKey = lastEvaluatedKey;
 
-    const result = await docClient.send(new ScanCommand(params));
-
+    const result = await docClient.send(new QueryCommand(params));
     return {
       items: result.Items || [],
-      lastEvaluatedKey: result.LastEvaluatedKey
+      lastEvaluatedKey: result.LastEvaluatedKey || null,
+      count: result.Count || 0
     };
   }
 
-  // Update excel lead
+  // ─── Count by source ─────────────────────────────────────────────────────────
+
+  static async countBySource(source) {
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'source-createdAt-index',
+      KeyConditionExpression: 'source = :source',
+      ExpressionAttributeValues: { ':source': source },
+      Select: 'COUNT'
+    }));
+    return result.Count || 0;
+  }
+
+  // ─── Update ──────────────────────────────────────────────────────────────────
+
   static async updateById(excelLeadId, updates) {
-    if (Object.keys(updates).length > 0) {
-      const existingLead = await this.findById(excelLeadId);
-      if (!existingLead) {
-        throw new Error('Excel lead not found');
-      }
+    if (!updates || Object.keys(updates).length === 0)
+      throw new Error('No updates provided');
 
-      const mergedData = { ...existingLead, ...updates };
-      this.validate(mergedData);
+    const existingLead = await this.findById(excelLeadId);
+    if (!existingLead) throw new Error('Excel lead not found');
 
-      // Check uniqueness if phone or PAN is being updated
-      if (updates.phone && updates.phone !== existingLead.phone) {
-        const existingPhone = await this.findByPhone(updates.phone);
-        if (existingPhone && existingPhone.excelLeadId !== excelLeadId) {
-          const error = new Error('Phone number already exists');
-          error.code = 'DUPLICATE_PHONE';
-          throw error;
-        }
-      }
+    const mergedData = { ...existingLead, ...updates };
+    this.validate(mergedData);
 
-      if (updates.panNumber && updates.panNumber !== existingLead.panNumber) {
-        const existingPan = await this.findByPanNumber(updates.panNumber);
-        if (existingPan && existingPan.excelLeadId !== excelLeadId) {
-          const error = new Error('PAN number already exists');
-          error.code = 'DUPLICATE_PAN';
-          throw error;
-        }
-      }
+    if (updates.phone && updates.phone !== existingLead.phone) {
+      const existing = await this._constraintExists(`phone#${updates.phone}`);
+      if (existing && existing.excelLeadId !== excelLeadId)
+        throw Object.assign(new Error('Phone number already exists'), { code: 'DUPLICATE_PHONE' });
+
+      await docClient.send(new TransactWriteCommand({
+        TransactItems: [
+          { Delete: { TableName: CONSTRAINTS_TABLE, Key: { constraintKey: `phone#${existingLead.phone}` } } },
+          {
+            Put: {
+              TableName: CONSTRAINTS_TABLE,
+              Item: { constraintKey: `phone#${updates.phone}`, excelLeadId, createdAt: new Date().toISOString() },
+              ConditionExpression: 'attribute_not_exists(constraintKey)'
+            }
+          }
+        ]
+      }));
+    }
+
+    if (updates.panNumber && updates.panNumber !== existingLead.panNumber) {
+      const existing = await this._constraintExists(`pan#${updates.panNumber}`);
+      if (existing && existing.excelLeadId !== excelLeadId)
+        throw Object.assign(new Error('PAN number already exists'), { code: 'DUPLICATE_PAN' });
+
+      await docClient.send(new TransactWriteCommand({
+        TransactItems: [
+          { Delete: { TableName: CONSTRAINTS_TABLE, Key: { constraintKey: `pan#${existingLead.panNumber}` } } },
+          {
+            Put: {
+              TableName: CONSTRAINTS_TABLE,
+              Item: { constraintKey: `pan#${updates.panNumber}`, excelLeadId, createdAt: new Date().toISOString() },
+              ConditionExpression: 'attribute_not_exists(constraintKey)'
+            }
+          }
+        ]
+      }));
     }
 
     const updateExpression = [];
@@ -364,84 +408,57 @@ class ExcelLead {
     return result.Attributes;
   }
 
-  // Delete excel lead
+  // ─── Delete ──────────────────────────────────────────────────────────────────
+
   static async deleteById(excelLeadId) {
-    await docClient.send(new DeleteCommand({
-      TableName: TABLE_NAME,
-      Key: { excelLeadId }
-    }));
+    const existing = await this.findById(excelLeadId);
+    if (!existing) return { deleted: false };
+
+    await Promise.all([
+      docClient.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { excelLeadId } })),
+      this._releaseConstraints(existing.phone, existing.panNumber)
+    ]);
 
     return { deleted: true };
   }
 
-  // Batch delete
   static async deleteBulk(excelLeadIds) {
-    const batchSize = 25;
     const results = { successful: [], failed: [] };
+    const BATCH_SIZE = 25;
 
-    for (let i = 0; i < excelLeadIds.length; i += batchSize) {
-      const batch = excelLeadIds.slice(i, i + batchSize);
-      const deleteRequests = batch.map(id => ({
-        DeleteRequest: { Key: { excelLeadId: id } }
-      }));
+    const fetchResults = await Promise.allSettled(
+      excelLeadIds.map(id => this.findById(id))
+    );
 
+    const validItems = [];
+    excelLeadIds.forEach((id, i) => {
+      const r = fetchResults[i];
+      if (r.status === 'fulfilled' && r.value) validItems.push(r.value);
+      else results.failed.push(id);
+    });
+
+    await Promise.allSettled(
+      validItems.map(item => this._releaseConstraints(item.phone, item.panNumber))
+    );
+
+    for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
+      const chunk = validItems.slice(i, i + BATCH_SIZE);
       try {
         await docClient.send(new BatchWriteCommand({
           RequestItems: {
-            [TABLE_NAME]: deleteRequests
+            [TABLE_NAME]: chunk.map(item => ({
+              DeleteRequest: { Key: { excelLeadId: item.excelLeadId } }
+            }))
           }
         }));
-        results.successful.push(...batch);
+        results.successful.push(...chunk.map(item => item.excelLeadId));
       } catch (err) {
         console.error('Batch delete error:', err);
-        results.failed.push(...batch);
+        results.failed.push(...chunk.map(item => item.excelLeadId));
       }
     }
 
     return results;
-  }
-
-  // Count leads by source
-  static async countBySource(source) {
-    const result = await docClient.send(new QueryCommand({
-      TableName: TABLE_NAME,
-      IndexName: 'source-createdAt-index',
-      KeyConditionExpression: 'source = :source',
-      ExpressionAttributeValues: { ':source': source },
-      Select: 'COUNT'
-    }));
-
-    return result.Count || 0;
-  }
-
-  // Query by multiple filters (uses Scan - use sparingly)
-  static async findByFilters(filters = {}, options = {}) {
-    const { limit = 100 } = options;
-    
-    const filterExpressions = [];
-    const expressionAttributeNames = {};
-    const expressionAttributeValues = {};
-
-    Object.keys(filters).forEach((key, index) => {
-      filterExpressions.push(`#field${index} = :value${index}`);
-      expressionAttributeNames[`#field${index}`] = key;
-      expressionAttributeValues[`:value${index}`] = filters[key];
-    });
-
-    const params = {
-      TableName: TABLE_NAME,
-      Limit: limit
-    };
-
-    if (filterExpressions.length > 0) {
-      params.FilterExpression = filterExpressions.join(' AND ');
-      params.ExpressionAttributeNames = expressionAttributeNames;
-      params.ExpressionAttributeValues = expressionAttributeValues;
-    }
-
-    const result = await docClient.send(new ScanCommand(params));
-
-    return result.Items || [];
   }
 }
 

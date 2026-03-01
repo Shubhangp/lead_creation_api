@@ -1,5 +1,8 @@
+const { v4: uuidv4 } = require('uuid');
 const Lead = require('../models/leadModel');
+const ExcelLead = require('../models/ExcelLeadModel');
 // const PendingLead = require('../models/pendingLeadModel');
+const { parseFileInChunks, deleteFile } = require('../utils/readFile');
 const DistributionRule = require('../models/distributionRuleModel');
 // const timeUtils = require('../utils/timeutils');
 const rcsService = require('../services/rcsService');
@@ -647,110 +650,265 @@ exports.createUATLead = async (req, res) => {
 ////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////
 
-// Bulk lead passing function
+// Excel lead passing function
+const CONFIG = {
+  DB_BATCH_SIZE: 500,
+  DB_CONCURRENCY: 3,
+  LENDER_BATCH_SIZE: 100,
+  LENDER_CONCURRENCY: 5,
+  LENDER_BATCH_DELAY: 200,
+};
+
+const jobs = new Map();
+
+const createJob = (jobId, meta) => {
+  jobs.set(jobId, {
+    jobId,
+    status: 'processing',
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    totalLeads: 0,
+    successfulLeads: 0,
+    failedLeads: 0,
+    lenderResponses: {},
+    errors: [],
+    ...meta
+  });
+  return jobs.get(jobId);
+};
+
+const updateJob = (jobId, updates) => {
+  const job = jobs.get(jobId);
+  if (job) Object.assign(job, updates);
+};
+
+async function runWithConcurrency(tasks, concurrency) {
+  const results = [];
+  let index = 0;
+
+  async function worker() {
+    while (index < tasks.length) {
+      const i = index++;
+      try {
+        results[i] = await tasks[i]();
+      } catch (err) {
+        results[i] = { error: err.message };
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ─── Lender dispatch ──────────────────────────────────────────────────────────
+
+const LENDER_MAP = {
+  SML:        sendToSML,
+  FREO:       sendToFreo,
+  OVLY:       sendToOVLY,
+  LendingPlate: sendToLendingPlate,
+  ZYPE:       sendToZYPE,
+  FINTIFI:    sendToFINTIFI,
+  FATAKPAY:   sendToFATAKPAY,
+  FATAKPAYPL: sendToFATAKPAYPL,
+  RAMFINCROP: sendToRAMFINCROP,
+  MYMONEYMANTRA: sendToMyMoneyMantra,
+  MPOKKET:    sendToMpokket,
+  INDIALENDS: sendToIndiaLends,
+  CRMPaisa:   sendToCrmPaisa,
+};
+
 const sendLeadsToLender = async (lender, leads) => {
-  switch (lender) {
-    case "SML":
-      return Promise.all(leads.map((lead) => sendToSML(lead)));
-    case "FREO":
-      return Promise.all(leads.map((lead) => sendToFreo(lead)));
-    case "ZYPE":
-      return Promise.all(leads.map((lead) => sendToZYPE(lead)));
-    case "LendingPlate":
-      return Promise.all(leads.map((lead) => sendToLendingPlate(lead)));
-    case "FINTIFI":
-      return Promise.all(leads.map((lead) => sendToFINTIFI(lead)));
-    case "FATAKPAY":
-      return Promise.all(leads.map((lead) => sendToFATAKPAY(lead)));
-    case "FATAKPAYPL":
-      return Promise.all(leads.map((lead) => sendToFATAKPAYPL(lead)));
-    case "OVLY":
-      return Promise.all(leads.map((lead) => sendToOVLY(lead)));
-    default:
-      return { lender, status: "Failed", message: "Lender not configured" };
+  const sendFn = LENDER_MAP[lender];
+  if (!sendFn) {
+    return { lender, status: 'failed', message: 'Lender not configured', totalLeads: leads.length };
+  }
+
+  const { LENDER_BATCH_SIZE, LENDER_CONCURRENCY, LENDER_BATCH_DELAY } = CONFIG;
+  const allResponses = [];
+  let successCount = 0;
+  let failCount = 0;
+
+  // Chunk leads into batches
+  for (let i = 0; i < leads.length; i += LENDER_BATCH_SIZE * LENDER_CONCURRENCY) {
+    // One round = CONCURRENCY batches running in parallel
+    const roundLeads = leads.slice(i, i + LENDER_BATCH_SIZE * LENDER_CONCURRENCY);
+    
+    // Split round into individual batches
+    const batches = [];
+    for (let j = 0; j < roundLeads.length; j += LENDER_BATCH_SIZE) {
+      batches.push(roundLeads.slice(j, j + LENDER_BATCH_SIZE));
+    }
+
+    const tasks = batches.map(batch => async () => {
+      return Promise.allSettled(batch.map(lead => sendFn(lead)));
+    });
+
+    const roundResults = await runWithConcurrency(tasks, LENDER_CONCURRENCY);
+
+    roundResults.forEach(batchResult => {
+      if (batchResult.error) {
+        failCount += LENDER_BATCH_SIZE;
+        return;
+      }
+      batchResult.forEach(r => {
+        if (r.status === 'fulfilled') successCount++;
+        else { failCount++; }
+        allResponses.push(r.status === 'fulfilled' ? r.value : { error: r.reason?.message });
+      });
+    });
+
+    // Throttle between rounds to avoid rate limiting lender APIs
+    if (i + LENDER_BATCH_SIZE * LENDER_CONCURRENCY < leads.length) {
+      await sleep(LENDER_BATCH_DELAY);
+    }
+  }
+
+  return {
+    lender,
+    status: 'success',
+    totalLeads: leads.length,
+    successCount,
+    failCount,
+    responses: allResponses
+  };
+};
+
+// ─── Background processor ─────────────────────────────────────────────────────
+
+const processInBackground = async (jobId, filePath, source, lenders) => {
+  const allSavedLeads = [];
+  const allFailedLeads = [];
+  let totalParsed = 0;
+
+  try {
+    // Stream-parse the Excel file in chunks — never holds full file in memory
+    await parseFileInChunks(filePath, CONFIG.DB_BATCH_SIZE, async (chunk) => {
+      totalParsed += chunk.length;
+      updateJob(jobId, { totalLeads: totalParsed });
+
+      // Map raw Excel rows to lead schema
+      const leadsData = chunk.map(lead => ({
+        source,
+        fullName:    `${lead.fullName   || lead['Full Name']   || ''}`.trim(),
+        firstName:   `${lead.firstName  || lead['First Name']  || ''}`.trim() || undefined,
+        lastName:    `${lead.lastName   || lead['Last Name']   || ''}`.trim() || undefined,
+        phone:       `${lead.phone      || lead['Phone']       || ''}`.trim(),
+        email:       `${lead.email      || lead['Email']       || ''}`.trim(),
+        dateOfBirth:  lead.dateOfBirth  || lead['Date of Birth'] || null,
+        gender:       lead.gender       || lead['Gender']        || null,
+        panNumber:   `${lead.panNumber  || lead['PAN Number']  || ''}`.trim().toUpperCase(),
+        jobType:      lead.jobType      || lead['Job Type']      || null,
+        salary:      `${lead.salary     || lead['Salary']      || ''}`.trim() || null,
+        address:     `${lead.address    || lead['Address']     || ''}`.trim() || null,
+        pincode:     `${lead.pincode    || lead['Pincode']     || ''}`.trim() || null,
+        consent:     true
+      }));
+
+      // Bulk insert this chunk into DynamoDB
+      const bulkResult = await ExcelLead.createBulk(leadsData);
+      allSavedLeads.push(...bulkResult.successful);
+      allFailedLeads.push(...bulkResult.failed);
+
+      updateJob(jobId, {
+        successfulLeads: allSavedLeads.length,
+        failedLeads: allFailedLeads.length
+      });
+
+      console.log(`[Job ${jobId}] Processed chunk: +${chunk.length} | Total saved: ${allSavedLeads.length} | Failed: ${allFailedLeads.length}`);
+
+      // Yield event loop — prevents blocking on large files
+      await sleep(0);
+    });
+
+    deleteFile(filePath);
+    console.log(`[Job ${jobId}] File deleted. Starting lender dispatch for ${allSavedLeads.length} leads.`);
+
+    // Send to all lenders in parallel (each lender handles its own concurrency internally)
+    const lenderResults = await Promise.allSettled(
+      lenders.map(lender => sendLeadsToLender(lender, allSavedLeads))
+    );
+
+    const lenderResponses = {};
+    lenders.forEach((lender, i) => {
+      const r = lenderResults[i];
+      lenderResponses[lender] = r.status === 'fulfilled'
+        ? r.value
+        : { lender, status: 'error', message: r.reason?.message };
+    });
+
+    updateJob(jobId, {
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      totalLeads: totalParsed,
+      successfulLeads: allSavedLeads.length,
+      failedLeads: allFailedLeads.length,
+      lenderResponses,
+      failedLeadsDetails: allFailedLeads.slice(0, 100)
+    });
+
+    console.log(`[Job ${jobId}] ✅ Completed. Saved: ${allSavedLeads.length}, Failed: ${allFailedLeads.length}`);
+
+  } catch (err) {
+    console.error(`[Job ${jobId}] ❌ Fatal error:`, err);
+    deleteFile(filePath); // Always clean up
+    updateJob(jobId, {
+      status: 'failed',
+      completedAt: new Date().toISOString(),
+      errors: [err.message]
+    });
   }
 };
 
 exports.processFile = async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ message: "No file uploaded." });
+      return res.status(400).json({ message: 'No file uploaded.' });
     }
 
-    const lenders = req.body.lenders;
-    if (!lenders || lenders.length === 0) {
-      return res.status(400).json({ message: "Select at least one lender." });
+    const lenders = Array.isArray(req.body.lenders)
+      ? req.body.lenders
+      : req.body.lenders ? [req.body.lenders] : [];
+
+    if (lenders.length === 0) {
+      return res.status(400).json({ message: 'Select at least one lender.' });
     }
 
-    const filePath = req.file.path;
-    const leads = readFile(filePath);
-    console.log(`📊 Total leads found: ${leads.length}`);
-    console.log(leads[0]);
-
-    // Prepare leads data for DynamoDB
-    const leadsData = leads.map((lead) => ({
-      source: req.body.source,
-      fullName: `${lead.fullName}`,
-      phone: `${lead.phone}`,
-      email: lead.email,
-      dateOfBirth: lead.dateOfBirth,
-      gender: lead.gender,
-      panNumber: lead.panNumber,
-      jobType: lead.jobType,
-      salary: `${lead.salary}`,
-      address: `${lead.address}`,
-      pincode: `${lead.pincode}`,
-      consent: true
-    }));
-
-    // Save leads to DynamoDB using bulk insert
-    const bulkResult = await ExcelLead.createBulk(leadsData);
-    
-    const savedLeads = bulkResult.successful;
-    const failedLeads = bulkResult.failed;
-
-    console.log(`✅ Successfully saved: ${savedLeads.length} leads`);
-    if (failedLeads.length > 0) {
-      console.log(`❌ Failed to save: ${failedLeads.length} leads`);
+    const source = req.body.source;
+    if (!source) {
+      return res.status(400).json({ message: 'Source is required.' });
     }
 
-    // Send leads to selected lenders individually
-    const allResponses = {};
-    for (const lender of lenders) {
-      console.log(`📤 Sending ${savedLeads.length} leads to ${lender}`);
-      try {
-        const lenderResponses = await sendLeadsToLender(lender, savedLeads);
-        allResponses[lender] = {
-          status: "success",
-          totalLeads: savedLeads.length,
-          responses: lenderResponses
-        };
-      } catch (error) {
-        console.error(`Error sending leads to ${lender}:`, error);
-        allResponses[lender] = {
-          status: "error",
-          message: error.message,
-          totalLeads: savedLeads.length
-        };
-      }
-    }
+    const jobId = uuidv4();
+    createJob(jobId, { source, lenders });
 
-    deleteFile(filePath);
+    // Respond immediately — client gets jobId to poll
+    res.status(202).json({
+      message: 'File received. Processing started in background.',
+      jobId,
+      pollUrl: `/api/excel/jobs/${jobId}`
+    });
 
-    res.status(200).json({
-      message: "Leads processed successfully",
-      totalLeads: leads.length,
-      successfulLeads: savedLeads.length,
-      failedLeads: failedLeads.length,
-      savedLeads: savedLeads,
-      failedLeadsDetails: failedLeads,
-      lenderResponses: allResponses
+    setImmediate(() => {
+      processInBackground(jobId, req.file.path, source, lenders);
     });
 
   } catch (error) {
-    console.error("Error processing leads:", error);
-    res.status(500).json({ message: "Internal server error", error: error.message });
+    console.error('Error initiating file processing:', error);
+    res.status(500).json({ message: 'Internal server error', error: error.message });
   }
+};
+
+exports.getJobStatus = (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ message: 'Job not found.' });
+  }
+  res.status(200).json(job);
 };
 
 ///////////////////////////////////////////////////////////////
