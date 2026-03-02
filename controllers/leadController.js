@@ -652,17 +652,17 @@ exports.createUATLead = async (req, res) => {
 
 // Excel lead passing function
 const CONFIG = {
-  DB_BATCH_SIZE: 500,
-  DB_CONCURRENCY: 3,
-  LENDER_BATCH_SIZE: 100,
-  LENDER_CONCURRENCY: 5,
-  LENDER_BATCH_DELAY: 200,
+  DB_BATCH_SIZE:       500,
+  DB_CONCURRENCY:        3,
+  LENDER_BATCH_SIZE:   100,
+  LENDER_CONCURRENCY:    5,
+  LENDER_BATCH_DELAY:  200,
 };
 
 const jobs = new Map();
 
 const createJob = (jobId, meta) => {
-  jobs.set(jobId, {
+  const job = {
     jobId,
     status: 'processing',
     startedAt: new Date().toISOString(),
@@ -671,10 +671,12 @@ const createJob = (jobId, meta) => {
     successfulLeads: 0,
     failedLeads: 0,
     lenderResponses: {},
+    failedLeadsDetails: [],
     errors: [],
-    ...meta
-  });
-  return jobs.get(jobId);
+    ...meta,
+  };
+  jobs.set(jobId, job);
+  return job;
 };
 
 const updateJob = (jobId, updates) => {
@@ -682,8 +684,10 @@ const updateJob = (jobId, updates) => {
   if (job) Object.assign(job, updates);
 };
 
+// ─── Concurrency pool ─────────────────────────────────────────────────────────
+
 async function runWithConcurrency(tasks, concurrency) {
-  const results = [];
+  const results = new Array(tasks.length);
   let index = 0;
 
   async function worker() {
@@ -697,8 +701,9 @@ async function runWithConcurrency(tasks, concurrency) {
     }
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, worker);
-  await Promise.all(workers);
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tasks.length) }, worker)
+  );
   return results;
 }
 
@@ -707,19 +712,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // ─── Lender dispatch ──────────────────────────────────────────────────────────
 
 const LENDER_MAP = {
-  SML:        sendToSML,
-  FREO:       sendToFreo,
-  OVLY:       sendToOVLY,
-  LendingPlate: sendToLendingPlate,
-  ZYPE:       sendToZYPE,
-  FINTIFI:    sendToFINTIFI,
-  FATAKPAY:   sendToFATAKPAY,
-  FATAKPAYPL: sendToFATAKPAYPL,
-  RAMFINCROP: sendToRAMFINCROP,
+  SML:           sendToSML,
+  FREO:          sendToFreo,
+  OVLY:          sendToOVLY,
+  LendingPlate:  sendToLendingPlate,
+  ZYPE:          sendToZYPE,
+  FINTIFI:       sendToFINTIFI,
+  FATAKPAY:      sendToFATAKPAY,
+  FATAKPAYPL:    sendToFATAKPAYPL,
+  RAMFINCROP:    sendToRAMFINCROP,
   MYMONEYMANTRA: sendToMyMoneyMantra,
-  MPOKKET:    sendToMpokket,
-  INDIALENDS: sendToIndiaLends,
-  CRMPaisa:   sendToCrmPaisa,
+  MPOKKET:       sendToMpokket,
+  INDIALENDS:    sendToIndiaLends,
+  CRMPaisa:      sendToCrmPaisa,
 };
 
 const sendLeadsToLender = async (lender, leads) => {
@@ -729,54 +734,64 @@ const sendLeadsToLender = async (lender, leads) => {
   }
 
   const { LENDER_BATCH_SIZE, LENDER_CONCURRENCY, LENDER_BATCH_DELAY } = CONFIG;
-  const allResponses = [];
   let successCount = 0;
   let failCount = 0;
 
-  // Chunk leads into batches
   for (let i = 0; i < leads.length; i += LENDER_BATCH_SIZE * LENDER_CONCURRENCY) {
-    // One round = CONCURRENCY batches running in parallel
     const roundLeads = leads.slice(i, i + LENDER_BATCH_SIZE * LENDER_CONCURRENCY);
-    
-    // Split round into individual batches
     const batches = [];
     for (let j = 0; j < roundLeads.length; j += LENDER_BATCH_SIZE) {
       batches.push(roundLeads.slice(j, j + LENDER_BATCH_SIZE));
     }
 
-    const tasks = batches.map(batch => async () => {
-      return Promise.allSettled(batch.map(lead => sendFn(lead)));
-    });
+    const tasks = batches.map(batch => async () =>
+      Promise.allSettled(batch.map(lead => sendFn({ ...lead, leadId: lead.excelLeadId })))
+    );
 
     const roundResults = await runWithConcurrency(tasks, LENDER_CONCURRENCY);
-
     roundResults.forEach(batchResult => {
-      if (batchResult.error) {
-        failCount += LENDER_BATCH_SIZE;
-        return;
-      }
-      batchResult.forEach(r => {
-        if (r.status === 'fulfilled') successCount++;
-        else { failCount++; }
-        allResponses.push(r.status === 'fulfilled' ? r.value : { error: r.reason?.message });
-      });
+      if (batchResult?.error) { failCount += LENDER_BATCH_SIZE; return; }
+      batchResult.forEach(r => r.status === 'fulfilled' ? successCount++ : failCount++);
     });
 
-    // Throttle between rounds to avoid rate limiting lender APIs
     if (i + LENDER_BATCH_SIZE * LENDER_CONCURRENCY < leads.length) {
       await sleep(LENDER_BATCH_DELAY);
     }
   }
 
-  return {
-    lender,
-    status: 'success',
-    totalLeads: leads.length,
-    successCount,
-    failCount,
-    responses: allResponses
-  };
+  return { lender, status: 'success', totalLeads: leads.length, successCount, failCount };
 };
+
+
+const pick = (row, ...keys) => {
+  for (const key of keys) {
+    // exact match first
+    if (row[key] !== undefined && row[key] !== null && row[key] !== '') return row[key];
+    // case-insensitive match
+    const found = Object.keys(row).find(k => k.toLowerCase().replace(/[\s_-]/g, '') === key.toLowerCase().replace(/[\s_-]/g, ''));
+    if (found && row[found] !== undefined && row[found] !== null && row[found] !== '') return row[found];
+  }
+  return null;
+};
+
+const mapRowToLead = (row, source) => ({
+  source,
+  fullName:    String(pick(row, 'fullName', 'full_name', 'Full Name', 'FullName', 'name', 'Name') || '').trim(),
+  firstName:   String(pick(row, 'firstName', 'first_name', 'First Name', 'FirstName') || '').trim(),
+  lastName:    String(pick(row, 'lastName', 'last_name', 'Last Name', 'LastName') || '').trim(),
+  phone:       String(pick(row, 'phone', 'Phone', 'mobile', 'Mobile', 'phone_number', 'Phone Number', 'mobileNumber') || '').trim(),
+  email:       String(pick(row, 'email', 'Email', 'email_id', 'Email ID', 'EmailId') || '').trim(),
+  dateOfBirth: pick(row, 'dateOfBirth', 'dob', 'DOB', 'date_of_birth', 'Date of Birth', 'DateOfBirth'),
+  gender:      String(pick(row, 'gender', 'Gender') || '').trim() || "",
+  panNumber:   String(pick(row, 'panNumber', 'pan', 'PAN', 'pan_number', 'PAN Number', 'PANNumber', 'panNo', 'PAN No') || '').trim().toUpperCase(),
+  jobType:     String(pick(row, 'jobType', 'job_type', 'Job Type', 'JobType', 'employment', 'Employment Type') || '').trim() || "",
+  salary:      String(pick(row, 'salary', 'Salary', 'income', 'Income', 'monthly_income', 'Monthly Income') || '').trim() || "",
+  address:     String(pick(row, 'address', 'Address', 'full_address', 'Full Address') || '').trim() || "",
+  pincode:     String(pick(row, 'pincode', 'Pincode', 'pin_code', 'Pin Code', 'zip', 'ZIP') || '').trim() || "",
+  creditScore: pick(row, 'creditScore', 'credit_score', 'Credit Score', 'CreditScore') || "",
+  cibilScore:  pick(row, 'cibilScore', 'cibil_score', 'Cibil Score', 'CIBIL', 'cibil') || "",
+  consent: true,
+});
 
 // ─── Background processor ─────────────────────────────────────────────────────
 
@@ -786,49 +801,34 @@ const processInBackground = async (jobId, filePath, source, lenders) => {
   let totalParsed = 0;
 
   try {
-    // Stream-parse the Excel file in chunks — never holds full file in memory
     await parseFileInChunks(filePath, CONFIG.DB_BATCH_SIZE, async (chunk) => {
       totalParsed += chunk.length;
       updateJob(jobId, { totalLeads: totalParsed });
 
-      // Map raw Excel rows to lead schema
-      const leadsData = chunk.map(lead => ({
-        source,
-        fullName:    `${lead.fullName   || lead['Full Name']   || ''}`.trim(),
-        firstName:   `${lead.firstName  || lead['First Name']  || ''}`.trim() || undefined,
-        lastName:    `${lead.lastName   || lead['Last Name']   || ''}`.trim() || undefined,
-        phone:       `${lead.phone      || lead['Phone']       || ''}`.trim(),
-        email:       `${lead.email      || lead['Email']       || ''}`.trim(),
-        dateOfBirth:  lead.dateOfBirth  || lead['Date of Birth'] || null,
-        gender:       lead.gender       || lead['Gender']        || null,
-        panNumber:   `${lead.panNumber  || lead['PAN Number']  || ''}`.trim().toUpperCase(),
-        jobType:      lead.jobType      || lead['Job Type']      || null,
-        salary:      `${lead.salary     || lead['Salary']      || ''}`.trim() || null,
-        address:     `${lead.address    || lead['Address']     || ''}`.trim() || null,
-        pincode:     `${lead.pincode    || lead['Pincode']     || ''}`.trim() || null,
-        consent:     true
-      }));
+      const leadsData = chunk.map(row => mapRowToLead(row, source));
 
-      // Bulk insert this chunk into DynamoDB
+      // Log first row of first chunk for debugging column mapping
+      if (totalParsed <= CONFIG.DB_BATCH_SIZE) {
+        console.log(`[Job ${jobId}] Sample mapped lead:`, JSON.stringify(leadsData[0], null, 2));
+      }
+
       const bulkResult = await ExcelLead.createBulk(leadsData);
       allSavedLeads.push(...bulkResult.successful);
       allFailedLeads.push(...bulkResult.failed);
 
       updateJob(jobId, {
         successfulLeads: allSavedLeads.length,
-        failedLeads: allFailedLeads.length
+        failedLeads: allFailedLeads.length,
       });
 
-      console.log(`[Job ${jobId}] Processed chunk: +${chunk.length} | Total saved: ${allSavedLeads.length} | Failed: ${allFailedLeads.length}`);
-
-      // Yield event loop — prevents blocking on large files
-      await sleep(0);
+      console.log(`[Job ${jobId}] Chunk done | Total: ${totalParsed} | Saved: ${allSavedLeads.length} | Failed: ${allFailedLeads.length}`);
+      await sleep(0); // yield event loop
     });
 
     deleteFile(filePath);
-    console.log(`[Job ${jobId}] File deleted. Starting lender dispatch for ${allSavedLeads.length} leads.`);
+    console.log(`[Job ${jobId}] File deleted. Dispatching ${allSavedLeads.length} leads to lenders.`);
 
-    // Send to all lenders in parallel (each lender handles its own concurrency internally)
+    // Send to all lenders in parallel
     const lenderResults = await Promise.allSettled(
       lenders.map(lender => sendLeadsToLender(lender, allSavedLeads))
     );
@@ -848,66 +848,58 @@ const processInBackground = async (jobId, filePath, source, lenders) => {
       successfulLeads: allSavedLeads.length,
       failedLeads: allFailedLeads.length,
       lenderResponses,
-      failedLeadsDetails: allFailedLeads.slice(0, 100)
+      failedLeadsDetails: allFailedLeads.slice(0, 100),
     });
 
-    console.log(`[Job ${jobId}] ✅ Completed. Saved: ${allSavedLeads.length}, Failed: ${allFailedLeads.length}`);
+    console.log(`[Job ${jobId}] ✅ Done. Saved: ${allSavedLeads.length}, Failed: ${allFailedLeads.length}`);
 
   } catch (err) {
-    console.error(`[Job ${jobId}] ❌ Fatal error:`, err);
-    deleteFile(filePath); // Always clean up
+    console.error(`[Job ${jobId}] ❌ Fatal:`, err);
+    deleteFile(filePath);
     updateJob(jobId, {
       status: 'failed',
       completedAt: new Date().toISOString(),
-      errors: [err.message]
+      errors: [err.message],
     });
   }
 };
 
 exports.processFile = async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded.' });
-    }
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded.' });
 
     const lenders = Array.isArray(req.body.lenders)
       ? req.body.lenders
-      : req.body.lenders ? [req.body.lenders] : [];
+      : req.body['lenders[]']
+        ? (Array.isArray(req.body['lenders[]']) ? req.body['lenders[]'] : [req.body['lenders[]']])
+        : req.body.lenders ? [req.body.lenders] : [];
 
-    if (lenders.length === 0) {
+    if (lenders.length === 0)
       return res.status(400).json({ message: 'Select at least one lender.' });
-    }
 
     const source = req.body.source;
-    if (!source) {
-      return res.status(400).json({ message: 'Source is required.' });
-    }
+    if (!source) return res.status(400).json({ message: 'Source is required.' });
 
     const jobId = uuidv4();
     createJob(jobId, { source, lenders });
 
-    // Respond immediately — client gets jobId to poll
     res.status(202).json({
-      message: 'File received. Processing started in background.',
+      message: 'File received. Processing started.',
       jobId,
-      pollUrl: `/api/excel/jobs/${jobId}`
+      pollUrl: `/api/v1/leads/jobs/${jobId}`,
     });
 
-    setImmediate(() => {
-      processInBackground(jobId, req.file.path, source, lenders);
-    });
+    setImmediate(() => processInBackground(jobId, req.file.path, source, lenders));
 
   } catch (error) {
-    console.error('Error initiating file processing:', error);
+    console.error('Upload error:', error);
     res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 };
 
 exports.getJobStatus = (req, res) => {
   const job = jobs.get(req.params.jobId);
-  if (!job) {
-    return res.status(404).json({ message: 'Job not found.' });
-  }
+  if (!job) return res.status(404).json({ message: 'Job not found.' });
   res.status(200).json(job);
 };
 

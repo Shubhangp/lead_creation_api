@@ -47,9 +47,6 @@ class ExcelLead {
     if (data.dateOfBirth && new Date(data.dateOfBirth) > new Date())
       errors.push('Date of birth cannot be in the future');
 
-    if (data.creditScore !== undefined && (data.creditScore < 300 || data.creditScore > 900))
-      errors.push('Credit score must be between 300 and 900');
-
     if (errors.length > 0) {
       const error = new Error('Validation failed');
       error.errors = errors;
