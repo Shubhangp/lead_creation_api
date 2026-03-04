@@ -32,13 +32,13 @@ const LendingPlateResponseLog = require('../models/leadingPlateResponseLog');
 const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 const FintifiResponseLog = require('../models/fintifiResponseLog');
 const FatakPayResponseLog = require('../models/fatakPayResponseLog');
+const FatakPayResponseLogPL = require('../models/fatakPayPLResponseLog');
 const RamFinCropLog = require('../models/ramFinCropLogModel');
 const IndiaLendsResponseLog = require('../models/indiaLendsResponseLog');
 const MpokketResponseLog = require('../models/mpokketResponseLog');
 const CrmPaisaResponseLog = require('../models/crmPaisaResponseLogModel');
 const MMMResponseLog = require('../models/mmmResponseLog');
 const LeadSuccess = require('../models/leadSuccessModel');
-const FatakPayResponseLogPL = require('../models/fatakPayPLResponseLog');
 
 // Create a lead
 exports.createLead = async (req, res) => {
@@ -401,115 +401,70 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
   console.log("LC getAllSuccessfulLendersForLead : 507 line", leadId, lead, successfulLenders);
   
   try {
-    // Check SML
     const smlResults = await SMLResponseLog.findByLeadId(leadId);
-    console.log('sml', smlResults);
-    const smlResult = smlResults.find(log => 
-      log.responseBody?.message === 'Lead created successfully'
-    );
+    const smlResult = smlResults.find(log => log.responseBody?.message === 'Lead created successfully');
     if (smlResult) successfulLenders.push('SML');
 
-    // Check FREO  
     const freoResults = await FreoResponseLog.findByLeadId(leadId);
-    console.log('freo', freoResults);
-    const freoResult = freoResults.find(log => 
-      log.responseBody?.success === true
-    );
+    const freoResult = freoResults.find(log => log.responseBody?.success === true);
     if (freoResult) successfulLenders.push('FREO');
 
-    // Check OVLY
     const ovlyResults = await OvlyResponseLog.findByLeadId(leadId);
-    console.log('ovly', ovlyResults);
-    const ovlyResult = ovlyResults.items?.find(log => 
-      log.responseStatus === 'success'
-    );
+    const ovlyResult = ovlyResults.items?.find(log => log.responseStatus === 'success');
     if (ovlyResult) successfulLenders.push('OVLY');
 
-    // Check LendingPlate
     const lpResults = await LendingPlateResponseLog.findByLeadId(leadId);
-    console.log('lp', lpResults);
-    const lpResult = lpResults.find(log => 
-      log.responseStatus === 'Success'
-    );
+    const lpResult = lpResults.find(log => log.responseStatus === 'Success');
     if (lpResult) successfulLenders.push('LendingPlate');
 
-    // Check ZYPE
     const zypeResults = await ZypeResponseLog.findByLeadId(leadId);
-    console.log('zype', zypeResults);
     const zypeResult = zypeResults.items?.find(log => 
       log.responseStatus === 'ACCEPT' || log.responseBody?.status === 'ACCEPT'
     );
     if (zypeResult) successfulLenders.push('ZYPE');
 
-    // Check FINTIFI
     const fintifiResults = await FintifiResponseLog.findByLeadId(leadId);
-    console.log('fintifi', fintifiResults);
-    const fintifiResult = fintifiResults.items.find(log => 
-      log.responseStatus === 200
-    );
+    const fintifiResult = fintifiResults.items.find(log => log.responseStatus === 200);
     if (fintifiResult) successfulLenders.push('FINTIFI');
 
-    // Check FATAKPAY
     const fatakResults = await FatakPayResponseLog.findByLeadId(leadId);
-    console.log('fatakpay', fatakResults);
-    const fatakResult = fatakResults.items.find(log => 
-      log.responseBody.message === 'You are eligible.'
-    );
+    const fatakResult = fatakResults.items.find(log => log.responseBody.message === 'You are eligible.');
     if (fatakResult) successfulLenders.push('FATAKPAY');
 
-    // Check FATAKPAYPL
     const fatakPLResults = await FatakPayResponseLogPL.findByLeadId(leadId);
-    console.log('fatakpl', fatakPLResults);
-    const fatakPLResult = fatakPLResults.items.find(log => 
-      log.responseBody.message === 'You are eligible.'
-    );
+    const fatakPLResult = fatakPLResults.items.find(log => log.responseBody.message === 'You are eligible.');
     if (fatakPLResult) successfulLenders.push('FATAKPAYPL');
 
-    // Check RAMFINCROP
     const ramResults = await RamFinCropLog.findByLeadId(leadId);
-    console.log('ram', ramResults);
-    const ramResult = ramResults.items.find(log => 
-      log.responseStatus === 'success'
-    );
+    const ramResult = ramResults.items.find(log => log.responseStatus === 'success');
     if (ramResult) successfulLenders.push('RAMFINCROP');
 
-    // Check MyMoneyMantra
     const mmmResults = await MMMResponseLog.findByLeadId(leadId);
-    console.log('mmm', mmmResults);
-    const mmmResult = mmmResults.find(log => 
-      log.responseStatus === 200 || log.responseStatus === 201
-    );
+    const mmmResult = mmmResults.find(log => log.responseStatus === 200 || log.responseStatus === 201);
     if (mmmResult) successfulLenders.push('MyMoneyMantra');
 
-    // Check CRMPaisa
     const CRMPaisaResults = await CrmPaisaResponseLog.findByLeadId(leadId);
-    console.log('crmpaisa', CRMPaisaResults);
     const CRMPaisaResult = CRMPaisaResults.items.find(log => 
       log.responseBody?.Message === 'Lead generated successfully.'
     );
     if (CRMPaisaResult) successfulLenders.push('CRMPaisa');
 
-    // Check IndiaLends
     const IndiaLendsResults = await IndiaLendsResponseLog.findByLeadId(leadId);
-    console.log('IL', IndiaLendsResults);
     const IndiaLendsResult = IndiaLendsResults.items.find(log => 
       log.responseBody?.info?.message === 'Verification code sent to your mobile phone'
     );
-    if (IndiaLendsResult) successfulLenders.push('IndiaLends');
+    if (IndiaLendsResult) successfulLenders.push('INDIALENDS');
 
-    // Check Mpokket
     const MpokketResults = await MpokketResponseLog.findByLeadId(leadId);
-    console.log('mpokket', MpokketResults);
     const MpokketResult = MpokketResults.items.find(log => 
       log.responseBody?.data?.message === 'Data Accepted Successfully'
     );
-    if (MpokketResult) successfulLenders.push('Mpokket');
+    if (MpokketResult) successfulLenders.push('MPOKKET');
 
     console.log("LC getAllSuccessfulLendersForLead : 573 line", successfulLenders);
 
-    // --- Create entry in leadSuccess ---
+    // ✅ FIXED: Use upsertByLeadId to prevent race conditions
     if (lead && successfulLenders.length > 0) {
-      // Prepare lender flags
       const lenderFlags = {};
       successfulLenders.forEach(lender => {
         lenderFlags[lender] = true;
@@ -517,20 +472,20 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
       console.log("LC getAllSuccessfulLendersForLead : 583 line", lenderFlags);
 
-      // Find or create lead success record
-      const { record, created } = await LeadSuccess.findOrCreate({
-        leadId,
-        source: lead.source,
-        phone: lead.phone,
-        email: lead.email,
-        panNumber: lead.panNumber,
-        fullName: lead.fullName,
-        ...lenderFlags
-      });
-
-      // If record already exists, update it with new successful lenders
-      if (!created) {
-        await LeadSuccess.updateByLeadId(leadId, lenderFlags);
+      try {
+        // ✅ NEW: Single atomic upsert operation
+        await LeadSuccess.upsertByLeadId(leadId, {
+          source: lead.source,
+          phone: lead.phone,
+          email: lead.email,
+          panNumber: lead.panNumber,
+          fullName: lead.fullName,
+          ...lenderFlags
+        });
+        
+        console.log(`[LeadSuccess] Successfully upserted record for leadId: ${leadId}`);
+      } catch (upsertError) {
+        console.error(`[LeadSuccess] Error upserting leadId ${leadId}:`, upsertError);
       }
     }
 
