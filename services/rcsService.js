@@ -274,30 +274,29 @@ class RCSService {
       const now = new Date();
 
       // Get pending messages
-      const pendingMessages = await RCSQueue.findByStatusAndScheduledTime(
+      const result = await RCSQueue.findByStatusAndScheduledTime(
         'PENDING',
         now,
         { limit: 500 }
       );
 
+      // Handle both array and paginated object response shapes
+      const pendingMessages = Array.isArray(result) ? result : (result?.items ?? []);
+
       console.log(`Found ${pendingMessages.length} pending RCS messages`);
 
-      // Process messages
       for (const message of pendingMessages) {
         try {
-          // Check if attempts limit reached
           if (message.attempts >= 1) {
             continue;
           }
 
-          // Update to PROCESSING status
           await RCSQueue.update(message.rcs_queue, {
             status: 'PROCESSING',
             processingStartedAt: new Date().toISOString(),
             attempts: (message.attempts || 0) + 1
           });
 
-          // Get lead data (you'll need to implement Lead model for DynamoDB)
           const Lead = require('../models/leadModel');
           const lead = await Lead.findById(message.leadId);
 
@@ -333,56 +332,39 @@ class RCSService {
               rcsPayload: payload,
               rcsResponse: result.data
             });
-
             console.log(`RCS sent successfully for lead ${message.leadId}`);
           } else {
-            const updateData = {
+            await RCSQueue.update(message.rcs_queue, {
+              status: 'FAILED',
+              failureReason: JSON.stringify(result.error),
               rcsPayload: payload,
               rcsResponse: result.error
-            };
-
-            if (message.attempts >= 1) {
-              updateData.status = 'FAILED';
-              updateData.failureReason = JSON.stringify(result.error);
-            } else {
-              updateData.status = 'PENDING';
-            }
-
-            await RCSQueue.update(message.rcs_queue, updateData);
-
+            });
             console.error(`RCS failed for lead ${message.leadId}:`, result.error);
           }
         } catch (error) {
           console.error(`Error processing RCS for message ${message.rcs_queue}:`, error);
-
-          const updateData = {};
-          if (message.attempts >= 1) {
-            updateData.status = 'FAILED';
-            updateData.failureReason = error.message;
-          } else {
-            updateData.status = 'PENDING';
-          }
-
-          await RCSQueue.update(message.rcs_queue, updateData);
+          await RCSQueue.update(message.rcs_queue, {
+            status: 'FAILED',
+            failureReason: error.message
+          });
         }
       }
 
       console.log(`Processed ${pendingMessages.length} RCS messages`);
 
       // Clean up stuck PROCESSING messages (older than 10 minutes)
-      // Note: This requires a scan operation in DynamoDB
       const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const allMessages = await RCSQueue.findAll({ limit: 1000 });
-      
-      for (const message of allMessages.items) {
+      const allItems = Array.isArray(allMessages) ? allMessages : (allMessages?.items ?? []);
+
+      for (const message of allItems) {
         if (
-          message.status === 'PROCESSING' && 
-          message.processingStartedAt && 
+          message.status === 'PROCESSING' &&
+          message.processingStartedAt &&
           message.processingStartedAt < tenMinutesAgo
         ) {
-          await RCSQueue.update(message.rcs_queue, {
-            status: 'PENDING'
-          });
+          await RCSQueue.update(message.rcs_queue, { status: 'PENDING' });
         }
       }
 
@@ -398,7 +380,7 @@ class RCSService {
     try {
       const Lead = require('../models/leadModel');
       const lead = await Lead.findById(leadId);
-      
+
       if (!lead) {
         throw new Error('Lead not found');
       }
