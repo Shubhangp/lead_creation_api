@@ -63,7 +63,7 @@ const LENDER_CONFIG = {
   },
   // ── RCS Queue ──────────────────────────────────────────────────────────────
   rcs_queue: {
-    modelPath: '../models/rcsQueueModel.js',
+    modelPath: '../models/rcsModels.js',
     statsType: 'queue',
     displayName: 'RCS Queue'
   }
