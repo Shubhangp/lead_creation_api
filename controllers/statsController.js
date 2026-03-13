@@ -1,6 +1,20 @@
 const path = require('path');
 
-// Lender configuration mapping - ADD NEW LENDERS HERE
+// ─── Lender Configuration ────────────────────────────────────────────────────
+//
+// ADD NEW LENDERS HERE.
+//
+// statsType:
+//   'demographic' — Lead model (age, salary, gender, consent breakdowns)
+//   'status'      — Response log models that use source-createdAt-index
+//   'message'     — FatakPay style models (message/offer/eligibility breakdowns)
+//   'queue'       — Queue models (RCS, etc.) that use status-based indexes
+//
+// Controller method signatures expected by each model:
+//   getQuickStats(null, startDate?, endDate?)   → { totalLogs, ... }
+//   getStats(startDate?, endDate?)              → full stats object
+//   getStatsByDate(startDate, endDate)          → array of daily objects
+
 const LENDER_CONFIG = {
   leads: {
     modelPath: '../models/leadModel.js',
@@ -13,7 +27,7 @@ const LENDER_CONFIG = {
     displayName: 'FatakPay'
   },
   fatakpaypl: {
-    modelPath: '../models/FatakPayResponseLogPL',
+    modelPath: '../models/fatakPayPLResponseLog',
     statsType: 'message',
     displayName: 'FatakPayPL'
   },
@@ -46,32 +60,41 @@ const LENDER_CONFIG = {
     modelPath: '../models/ZypeResponseLogModel.js',
     statsType: 'status',
     displayName: 'Zype'
+  },
+  // ── RCS Queue ──────────────────────────────────────────────────────────────
+  rcs_queue: {
+    modelPath: '../models/rcsQueueModel.js',
+    statsType: 'queue',
+    displayName: 'RCS Queue'
   }
 };
 
 class UnifiedStatsController {
-  // Dynamically load lender model
+
+  // ─── model loader ─────────────────────────────────────────────────────────
+
   static getLenderModel(lenderName) {
     const lenderKey = lenderName.toLowerCase();
     const lenderConfig = LENDER_CONFIG[lenderKey];
 
     if (!lenderConfig) {
-      throw new Error(`Unknown lender: ${lenderName}. Available lenders: ${Object.keys(LENDER_CONFIG).join(', ')}`);
+      throw new Error(
+        `Unknown lender: ${lenderName}. Available lenders: ${Object.keys(LENDER_CONFIG).join(', ')}`
+      );
     }
 
     try {
-      // Dynamically require the model
-      const Model = require(lenderConfig.modelPath);
-      return {
-        model: Model,
-        config: lenderConfig
-      };
+      const raw = require(lenderConfig.modelPath);
+      // Support both module.exports = Class and module.exports = { ClassName }
+      const Model = raw.default || (typeof raw === 'function' ? raw : Object.values(raw)[0]);
+      return { model: Model, config: lenderConfig };
     } catch (error) {
       throw new Error(`Failed to load model for ${lenderName}: ${error.message}`);
     }
   }
 
-  // Get available lenders
+  // ─── GET /lenders ─────────────────────────────────────────────────────────
+
   static async getAvailableLenders(req, res) {
     try {
       const lenders = Object.keys(LENDER_CONFIG).map(key => ({
@@ -80,10 +103,7 @@ class UnifiedStatsController {
         statsType: LENDER_CONFIG[key].statsType
       }));
 
-      return res.status(200).json({
-        success: true,
-        data: lenders
-      });
+      return res.status(200).json({ success: true, data: lenders });
     } catch (error) {
       console.error('Error fetching available lenders:', error);
       return res.status(500).json({
@@ -94,7 +114,15 @@ class UnifiedStatsController {
     }
   }
 
-  // Get comprehensive stats
+  // ─── GET /unified-stats ───────────────────────────────────────────────────
+  //
+  // All models must implement: getStats(startDate?, endDate?)
+  //
+  // FatakPay/FatakPayPL: returns { unavailable: true, reason: '...' } when the
+  //   source-createdAt-index is still CREATING; the frontend handles this gracefully.
+  //
+  // RCS Queue: returns aggregate cross-status stats for the date window.
+
   static async getStats(req, res) {
     try {
       const { lender, startDate, endDate } = req.query;
@@ -107,31 +135,24 @@ class UnifiedStatsController {
         });
       }
 
-      // Dynamically load the lender model
       const { model: Model, config } = UnifiedStatsController.getLenderModel(lender);
 
-      // Default to last 30 days if no dates provided
       let start = startDate;
       let end = endDate;
-
       if (!start || !end) {
         const now = new Date();
         end = now.toISOString();
-        const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30));
-        start = thirtyDaysAgo.toISOString();
+        start = new Date(new Date(now).setDate(now.getDate() - 30)).toISOString();
       }
 
+      // All models now accept (startDate, endDate) — no null leadId needed
       const stats = await Model.getStats(start, end);
 
-      // Add lender metadata
       stats.lender = lender;
       stats.displayName = config.displayName;
       stats.statsType = config.statsType;
 
-      return res.status(200).json({
-        success: true,
-        data: stats
-      });
+      return res.status(200).json({ success: true, data: stats });
     } catch (error) {
       console.error('Error fetching stats:', error);
       return res.status(500).json({
@@ -142,7 +163,10 @@ class UnifiedStatsController {
     }
   }
 
-  // Get stats grouped by date
+  // ─── GET /unified-stats/by-date ───────────────────────────────────────────
+  //
+  // All models must implement: getStatsByDate(startDate, endDate)
+
   static async getStatsByDate(req, res) {
     try {
       const { lender, startDate, endDate } = req.query;
@@ -162,15 +186,11 @@ class UnifiedStatsController {
         });
       }
 
-      // Dynamically load the lender model
       const { model: Model } = UnifiedStatsController.getLenderModel(lender);
 
       const stats = await Model.getStatsByDate(startDate, endDate);
 
-      return res.status(200).json({
-        success: true,
-        data: stats
-      });
+      return res.status(200).json({ success: true, data: stats });
     } catch (error) {
       console.error('Error fetching stats by date:', error);
       return res.status(500).json({
@@ -181,7 +201,11 @@ class UnifiedStatsController {
     }
   }
 
-  // Get quick summary stats
+  // ─── GET /unified-stats/quick ─────────────────────────────────────────────
+  //
+  // All models must implement: getQuickStats(null, startDate?, endDate?)
+  // The first argument is a legacy "source" filter; passing null means all sources.
+
   static async getQuickStats(req, res) {
     try {
       const { lender, startDate, endDate } = req.query;
@@ -194,25 +218,20 @@ class UnifiedStatsController {
         });
       }
 
-      // Dynamically load the lender model
       const { model: Model, config } = UnifiedStatsController.getLenderModel(lender);
 
-      // Call getQuickStats with optional date range
+      // Unified signature: getQuickStats(null, startDate?, endDate?)
+      // null = "all sources" (first param is source filter for some models)
       const quickStats = await Model.getQuickStats(null, startDate, endDate);
 
-      // Verify we got valid data back
       if (!quickStats || typeof quickStats !== 'object') {
         throw new Error('getQuickStats returned invalid data');
       }
 
-      // Add lender metadata
       quickStats.lender = lender;
       quickStats.displayName = config.displayName;
 
-      return res.status(200).json({
-        success: true,
-        data: quickStats
-      });
+      return res.status(200).json({ success: true, data: quickStats });
     } catch (error) {
       console.error('Error fetching quick stats:', error);
       return res.status(500).json({
@@ -224,7 +243,8 @@ class UnifiedStatsController {
     }
   }
 
-  // Get logs by date range
+  // ─── GET /unified-stats/logs ──────────────────────────────────────────────
+
   static async getLogsByDateRange(req, res) {
     try {
       const { lender, startDate, endDate, limit, lastEvaluatedKey } = req.query;
@@ -244,7 +264,6 @@ class UnifiedStatsController {
         });
       }
 
-      // Dynamically load the lender model
       const { model: Model } = UnifiedStatsController.getLenderModel(lender);
 
       const options = {
@@ -254,10 +273,7 @@ class UnifiedStatsController {
 
       const result = await Model.findByDateRange(startDate, endDate, options);
 
-      return res.status(200).json({
-        success: true,
-        data: result
-      });
+      return res.status(200).json({ success: true, data: result });
     } catch (error) {
       console.error('Error fetching logs by date range:', error);
       return res.status(500).json({
@@ -268,31 +284,26 @@ class UnifiedStatsController {
     }
   }
 
-  // Get all stats for all lenders (summary)
+  // ─── GET /unified-stats/all ───────────────────────────────────────────────
+
   static async getAllLendersStats(req, res) {
     try {
       const { startDate, endDate } = req.query;
 
-      // Default to last 30 days
       let start = startDate;
       let end = endDate;
-
       if (!start || !end) {
         const now = new Date();
         end = now.toISOString();
-        const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30));
-        start = thirtyDaysAgo.toISOString();
+        start = new Date(new Date(now).setDate(now.getDate() - 30)).toISOString();
       }
 
       const allStats = {};
 
-      // Fetch stats for each lender dynamically
       for (const [lenderName, lenderConfig] of Object.entries(LENDER_CONFIG)) {
         try {
-          // Dynamically load model
           const { model: Model } = UnifiedStatsController.getLenderModel(lenderName);
           const stats = await Model.getStats(start, end);
-
           allStats[lenderName] = {
             ...stats,
             displayName: lenderConfig.displayName,
@@ -307,10 +318,7 @@ class UnifiedStatsController {
         }
       }
 
-      return res.status(200).json({
-        success: true,
-        data: allStats
-      });
+      return res.status(200).json({ success: true, data: allStats });
     } catch (error) {
       console.error('Error fetching all lenders stats:', error);
       return res.status(500).json({
@@ -321,7 +329,8 @@ class UnifiedStatsController {
     }
   }
 
-  // Get comparison stats for multiple lenders
+  // ─── GET /unified-stats/comparison ───────────────────────────────────────
+
   static async getComparison(req, res) {
     try {
       const { lenders, startDate, endDate } = req.query;
@@ -334,15 +343,12 @@ class UnifiedStatsController {
         });
       }
 
-      // Default to last 30 days
       let start = startDate;
       let end = endDate;
-
       if (!start || !end) {
         const now = new Date();
         end = now.toISOString();
-        const thirtyDaysAgo = new Date(now.setDate(now.getDate() - 30));
-        start = thirtyDaysAgo.toISOString();
+        start = new Date(new Date(now).setDate(now.getDate() - 30)).toISOString();
       }
 
       const lenderList = lenders.split(',').map(l => l.trim().toLowerCase());
@@ -350,10 +356,8 @@ class UnifiedStatsController {
 
       for (const lenderName of lenderList) {
         try {
-          // Dynamically load model
           const { model: Model, config } = UnifiedStatsController.getLenderModel(lenderName);
           const stats = await Model.getStats(start, end);
-
           comparison[lenderName] = {
             displayName: config.displayName,
             totalLogs: stats.totalLogs,
@@ -367,10 +371,7 @@ class UnifiedStatsController {
         }
       }
 
-      return res.status(200).json({
-        success: true,
-        data: comparison
-      });
+      return res.status(200).json({ success: true, data: comparison });
     } catch (error) {
       console.error('Error fetching comparison:', error);
       return res.status(500).json({
