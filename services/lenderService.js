@@ -28,7 +28,7 @@ async function sendToSML(lead) {
   const leadIdValue = leadId;
 
   const externalApiUrl = `https://dedupe.switchmyloan.in/api/method/lead_management.custom_method.create_lead_entry`;
-  
+
   const payload = {
     mobile_number: String(phone),
     first_name: fullName.split(' ')[0],
@@ -91,7 +91,7 @@ async function sendToFreo(lead) {
   } = lead;
   const baseUrl = process.env.DEV_URL;
   const accessToken = await getAccessToken();
-  
+
   // Construct payload for Freo API
   const payload = {
     emailId: email,
@@ -136,7 +136,7 @@ async function sendToFreo(lead) {
       responseStatus: apiResponse.status,
       responseBody: apiResponse.data,
     });
-    
+
     return responseLog;
   } catch (error) {
     console.error('Error sending lead to Freo API:', error.message);
@@ -147,7 +147,7 @@ async function sendToFreo(lead) {
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
     });
-    
+
     return errorLog;
   }
 }
@@ -366,16 +366,26 @@ const checkMobileExists = async (phone) => {
   }
 };
 
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function sendToZYPE(lead) {
   console.log("ZYPE", lead);
   const {
     leadId, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary, source
   } = lead;
+
   if (jobType === "SELF_EMPLOYED") {
     return;
   }
+
+  // ⏱️ Wait 5 seconds before eligibility check
+  await delay(5000);
   const isEligible = await checkZypeEligibility(phone, panNumber);
+
   if (isEligible.message === 'REJECT') {
+
+    // ⏱️ Wait 5 seconds before logging rejection
+    await delay(5000);
     const responseLog = await ZypeResponseLog.create({
       leadId: leadId,
       source: source,
@@ -388,6 +398,7 @@ async function sendToZYPE(lead) {
       responseBody: { status: "REJECTED", isEligible },
     });
     return responseLog;
+
   } else if (isEligible.status === 'ACCEPT') {
     const zypePayload = {
       mobileNumber: phone,
@@ -401,7 +412,13 @@ async function sendToZYPE(lead) {
       partnerId: process.env.ZYPE_PARTNER_ID,
       bureauType: 3,
     };
+
+    // ⏱️ Wait 5 seconds before processing application
+    await delay(5000);
     const zypeResponse = await processZypeApplication(zypePayload);
+
+    // ⏱️ Wait 5 seconds before logging response
+    await delay(5000);
     const responseLog = await ZypeResponseLog.create({
       leadId: leadId,
       source: source,
@@ -970,7 +987,7 @@ async function sendToIndiaLends(lead) {
 
     // Step 2: Check for Duplicate Lead (Dedup Check)
     const mobileHash = hashMobileNumber(phone);
-    
+
     const dedupResponse = await axios.post(
       'https://apimgmtlive.indialends.com/LoanOffers/LaasDedupV1',
       {
@@ -1129,7 +1146,7 @@ async function sendToMpokket(lead) {
   const {
     leadId,
     fullName, firstName, lastName, phone, email, dateOfBirth,
-    gender, pincode, jobType, businessType, panNumber, salary, 
+    gender, pincode, jobType, businessType, panNumber, salary,
     address, consent, createdAt, source
   } = lead;
 
@@ -1159,7 +1176,7 @@ async function sendToMpokket(lead) {
     // Check if dedupe passed
     if (!dedupeResponse.data.success) {
       console.log("Mpokket Dedupe check failed - Lead already exists");
-      
+
       // Save dedupe failure log
       const dedupeFailLog = await MpokketResponseLog.create({
         leadId: leadIdValue,
@@ -1346,7 +1363,7 @@ async function sendToCrmPaisa(lead) {
   const validPincodes = pinCodeDataCRMPaisa.map((row) => parseInt(row.pincode, 10));
   if (!validPincodes.includes(parseInt(pincode))) {
     console.log(`Pincode ${pincode} not valid for CrmPaisa. Skipping.`);
-    
+
     const validationLog = await CrmPaisaResponseLog.create({
       leadId: leadId,
       source: source,
@@ -1364,7 +1381,7 @@ async function sendToCrmPaisa(lead) {
       responseStatus: 'not-valid',
       responseBody: { message: 'Invalid pincode', reason: 'Pincode not in approved list' },
     });
-    
+
     return validationLog;
   }
 
@@ -1372,7 +1389,7 @@ async function sendToCrmPaisa(lead) {
   const normalizedJobType = String(jobType).toLowerCase().trim();
   if (normalizedJobType !== 'salaried') {
     console.log(`Job type "${jobType}" is not salaried. Skipping.`);
-    
+
     const validationLog = await CrmPaisaResponseLog.create({
       leadId: leadId,
       source: source,
@@ -1390,7 +1407,7 @@ async function sendToCrmPaisa(lead) {
       responseStatus: 'not-valid',
       responseBody: { message: 'Invalid employment type', reason: 'Only salaried individuals are accepted' },
     });
-    
+
     return validationLog;
   }
 
@@ -1398,7 +1415,7 @@ async function sendToCrmPaisa(lead) {
   const monthlySalary = parseFloat(salary);
   if (isNaN(monthlySalary) || monthlySalary < 30000) {
     console.log(`Salary ${salary} does not meet minimum requirement of ₹30,000. Skipping.`);
-    
+
     const validationLog = await CrmPaisaResponseLog.create({
       leadId: leadId,
       source: source,
@@ -1416,7 +1433,7 @@ async function sendToCrmPaisa(lead) {
       responseStatus: 'not-valid',
       responseBody: { message: 'Insufficient salary', reason: 'Minimum monthly salary requirement is ₹30,000' },
     });
-    
+
     return validationLog;
   }
 
@@ -1425,14 +1442,14 @@ async function sendToCrmPaisa(lead) {
   const today = new Date();
   let age = today.getFullYear() - dob.getFullYear();
   const monthDiff = today.getMonth() - dob.getMonth();
-  
+
   if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
     age--;
   }
 
   if (age < 25 || age > 50) {
     console.log(`Age ${age} is outside the allowed range (25-50 years). Skipping.`);
-    
+
     const validationLog = await CrmPaisaResponseLog.create({
       leadId: leadId,
       source: source,
@@ -1450,7 +1467,7 @@ async function sendToCrmPaisa(lead) {
       responseStatus: 'not-valid',
       responseBody: { message: 'Invalid age', reason: 'Age must be between 25 and 50 years', calculatedAge: age },
     });
-    
+
     return validationLog;
   }
 
@@ -1475,12 +1492,12 @@ async function sendToCrmPaisa(lead) {
 
   try {
     const apiResponse = await axios.post(externalApiUrl, payload, {
-      headers: { 
-        'Auth': 'ZTI4MTU1MzE4NWQ2MGQyZTFhNWM0NGU3M2UzMmM3MDM=', 
+      headers: {
+        'Auth': 'ZTI4MTU1MzE4NWQ2MGQyZTFhNWM0NGU3M2UzMmM3MDM=',
         'Content-Type': 'application/json'
       },
     });
-    
+
     console.log("CrmPaisa response:", apiResponse.data);
 
     // Save API response using DynamoDB
@@ -1495,7 +1512,7 @@ async function sendToCrmPaisa(lead) {
     return responseLog;
   } catch (error) {
     console.error('Error sending lead to CrmPaisa API:', error);
-    
+
     const errorLog = await CrmPaisaResponseLog.create({
       leadId: leadIdValue,
       source: source,
@@ -1503,7 +1520,7 @@ async function sendToCrmPaisa(lead) {
       responseStatus: error.response?.status || 500,
       responseBody: error.response?.data || { message: 'Unknown error' },
     });
-    
+
     return errorLog;
   }
 }
