@@ -17,6 +17,7 @@ const IndiaLendsResponseLog = require('../models/indiaLendsResponseLog');
 const MpokketResponseLog = require('../models/mpokketResponseLog');
 const CrmPaisaResponseLog = require('../models/crmPaisaResponseLogModel');
 const MMMResponseLog = require('../models/mmmResponseLog');
+const CreditPulseResponseLog = require('../models/creditPulseResponseLog');
 
 async function sendToSML(lead) {
   const {
@@ -378,17 +379,12 @@ async function sendToZYPE(lead) {
     return;
   }
 
-  // ⏱️ Wait 5 seconds before eligibility check
-  await delay(5000);
   const isEligible = await checkZypeEligibility(phone, panNumber);
 
   if (isEligible.message === 'REJECT') {
-
-    // ⏱️ Wait 5 seconds before logging rejection
-    await delay(5000);
     const responseLog = await ZypeResponseLog.create({
-      leadId: leadId,
-      source: source,
+      leadId,
+      source,
       requestPayload: {
         mobileNumber: phone,
         panNumber,
@@ -413,15 +409,13 @@ async function sendToZYPE(lead) {
       bureauType: 3,
     };
 
-    // ⏱️ Wait 5 seconds before processing application
+    // ⏱️ Wait 5 seconds after ACCEPT before calling processZypeApplication
     await delay(5000);
-    const zypeResponse = await processZypeApplication(zypePayload);
 
-    // ⏱️ Wait 5 seconds before logging response
-    await delay(5000);
+    const zypeResponse = await processZypeApplication(zypePayload);
     const responseLog = await ZypeResponseLog.create({
-      leadId: leadId,
-      source: source,
+      leadId,
+      source,
       requestPayload: zypePayload,
       responseStatus: zypeResponse?.status || "Unknown",
       responseBody: zypeResponse,
@@ -1533,6 +1527,70 @@ function readExcelFileCRMPaisa() {
 
 const pinCodeDataCRMPaisa = readExcelFileCRMPaisa();
 
+
+async function sendToCreditPulse(lead) {
+  console.log("CreditPulse", lead);
+
+  const {
+    leadId, fullName, phone, email, dateOfBirth,
+    panNumber, jobType, businessType, salary, address,
+    city, pincode, source
+  } = lead;
+
+  const requestPayload = {
+    phoneNumber: phone,
+    panNumber,
+    data: {
+      email: email || "",
+      customer_name: fullName,
+      dob: formatToYYYYMMDD(dateOfBirth),
+      emp_type: jobType === 'SELF_EMPLOYED' ? 'self_employed' : 'organic',
+      salary: String(salary),
+      addresss: address || "",
+      city: city || "",
+      pincode: pincode || ""
+    }
+  };
+
+  try {
+    const response = await axios.request({
+      method: 'post',
+      maxBodyLength: Infinity,
+      url: process.env.CREDIT_PULSE_URL || 'https://agency.ctpl.live/lead/ingest/rate_cut',
+      headers: { 'Content-Type': 'application/json' },
+      data: JSON.stringify(requestPayload)
+    });
+
+    console.log("CreditPulse response:", JSON.stringify(response.data));
+
+    const responseLog = await CreditPulseResponseLog.create({
+      leadId,
+      source,
+      requestPayload,
+      responseStatus: response.data?.status || 'Unknown',
+      responseBody: response.data
+    });
+
+    return responseLog;
+
+  } catch (error) {
+    console.error("CreditPulse error:", error?.response?.data || error.message);
+
+    const responseLog = await CreditPulseResponseLog.create({
+      leadId,
+      source,
+      requestPayload,
+      responseStatus: 'Error',
+      responseBody: {
+        status: 'error',
+        message: error?.response?.data || error.message
+      }
+    });
+
+    return responseLog;
+  }
+}
+
 module.exports = {
   sendToSML,
   sendToFreo,
@@ -1546,5 +1604,6 @@ module.exports = {
   sendToMyMoneyMantra,
   sendToMpokket,
   sendToIndiaLends,
-  sendToCrmPaisa
+  sendToCrmPaisa,
+  sendToCreditPulse
 };
