@@ -1589,7 +1589,7 @@ async function sendToCreditPulse(lead) {
 
     return responseLog;
   }
-} 
+}
 
 module.exports = {
   sendToSML,
