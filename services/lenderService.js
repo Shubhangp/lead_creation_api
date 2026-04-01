@@ -80,6 +80,12 @@ async function sendToSML(lead) {
   }
 }
 
+function formatToMMDDYYYY(dateString) {
+  const date = new Date(dateString);
+  const [year, month, day] = date.toISOString().split('T')[0].split('-');
+  return `${month}-${day}-${year}`;
+}
+
 function formatToYYYYMMDD(dateString) {
   const date = new Date(dateString);
   return date.toISOString().split('T')[0];
@@ -1660,7 +1666,7 @@ async function sendToCreditSea(lead) {
     last_name: lastName,
     phoneNumber: parseInt(phone, 10),
     pan: panNumber,
-    dob: formatToMMDDYYYY(dateOfBirth),   // MM-DD-YYYY as per API docs
+    dob: formatToMMDDYYYY(dateOfBirth),
     gender: gender || 'male',
     pincode: String(pincode || ''),
     income: String(salary),
