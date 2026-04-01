@@ -1611,8 +1611,8 @@ async function sendToCreditSea(lead) {
 
   // ─── Split full name into first / last ─────────────────────────────────────
   const nameParts = (fullName || '').trim().split(' ');
-  const firstName = nameParts[0] || '';
-  const lastName = nameParts.slice(1).join(' ') || '';
+  const firstName = nameParts[0];
+  const lastName = nameParts.slice(1).join(' ') || nameParts[0];
 
   // ─── Step 1: Dedupe check ──────────────────────────────────────────────────
   let dedupeResponse;
@@ -1668,9 +1668,9 @@ async function sendToCreditSea(lead) {
     pan: panNumber,
     dob: formatToMMDDYYYY(dateOfBirth),
     gender: gender || 'male',
-    pincode: String(pincode || ''),
+    pinCode: String(pincode || ''),
     income: String(salary),
-    employementType: jobType === 'SELF_EMPLOYED' ? 'Self-Employed' : 'Salaried'
+    employmentType: jobType === 'SELF_EMPLOYED' ? 'Self-Employed' : 'Salaried'
   };
 
   try {
