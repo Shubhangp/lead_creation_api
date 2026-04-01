@@ -15,7 +15,9 @@ const {
   sendToRAMFINCROP,
   sendToMpokket,
   sendToIndiaLends,
-  sendToCrmPaisa
+  sendToCrmPaisa,
+  sendToCreditPulse,
+  sendToCreditSea
 } = require('../services/lenderService');
 
 /**
@@ -114,7 +116,9 @@ const getLenderSendFunction = (lender) => {
     'RAMFINCROP': sendToRAMFINCROP,
     'MPOKKET': sendToMpokket,
     'INDIALENDS': sendToIndiaLends,
-    'CRMPaisa': sendToCrmPaisa
+    'CRMPaisa': sendToCrmPaisa,
+    "CreditPluse": sendToCreditPulse,
+    "CreditSea": sendToCreditSea,
   };
 
   return lenderMap[lender];

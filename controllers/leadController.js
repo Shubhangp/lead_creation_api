@@ -21,7 +21,9 @@ const {
   sendToMyMoneyMantra,
   sendToMpokket,
   sendToIndiaLends,
-  sendToCrmPaisa
+  sendToCrmPaisa,
+  sendToCreditPulse,
+  sendToCreditSea
 } = require('../services/lenderService');
 
 // Import log models for tracking
@@ -38,6 +40,7 @@ const IndiaLendsResponseLog = require('../models/indiaLendsResponseLog');
 const MpokketResponseLog = require('../models/mpokketResponseLog');
 const CrmPaisaResponseLog = require('../models/crmPaisaResponseLogModel');
 const MMMResponseLog = require('../models/mmmResponseLog');
+const CreditPulseResponseLog = require('../models/creditPulseResponseLog');
 const LeadSuccess = require('../models/leadSuccessModel');
 
 // Create a lead
@@ -277,6 +280,8 @@ async function sendToLender(lead, lender) {
     "INDIALENDS": sendToIndiaLends,
     "MPOKKET": sendToMpokket,
     "CRMPaisa": sendToCrmPaisa,
+    "CreditPluse": sendToCreditPulse,
+    "CreditSea": sendToCreditSea,
   };
 
   // Call the appropriate handler for the lender
@@ -454,6 +459,10 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
       log.responseBody?.info?.message === 'Verification code sent to your mobile phone'
     );
     if (IndiaLendsResult) successfulLenders.push('INDIALENDS');
+
+    const cpResults = await CreditPulseResponseLog.findByLeadId(leadId);
+    const cpResult = cpResults.find(log => log.responseStatus === 'Success');
+    if (cpResult) successfulLenders.push('LendingPlate');
 
     const MpokketResults = await MpokketResponseLog.findByLeadId(leadId);
     const MpokketResult = MpokketResults.items.find(log => 
@@ -680,6 +689,8 @@ const LENDER_MAP = {
   MPOKKET:       sendToMpokket,
   INDIALENDS:    sendToIndiaLends,
   CRMPaisa:      sendToCrmPaisa,
+  CreditPluse:   sendToCreditPulse,
+  CreditSea:     sendToCreditSea,
 };
 
 const sendLeadsToLender = async (lender, leads) => {

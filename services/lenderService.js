@@ -18,6 +18,7 @@ const MpokketResponseLog = require('../models/mpokketResponseLog');
 const CrmPaisaResponseLog = require('../models/crmPaisaResponseLogModel');
 const MMMResponseLog = require('../models/mmmResponseLog');
 const CreditPulseResponseLog = require('../models/creditPulseResponseLog');
+const CreditSeaResponseLog = require('../models/creditSeaResponseLog');
 
 async function sendToSML(lead) {
   const {
@@ -1591,6 +1592,121 @@ async function sendToCreditPulse(lead) {
   }
 }
 
+const DEDUPE_URL = 'https://backend.creditsea.com/api/v1/leads/dedupe';
+const CREATE_URL = 'https://backend.creditsea.com/api/v1/leads/create-lead-dsa';
+
+async function sendToCreditSea(lead) {
+  console.log("CreditSea", lead);
+
+  const {
+    leadId, fullName, phone, email, dateOfBirth,
+    panNumber, jobType, salary, pincode, gender, source
+  } = lead;
+
+  // ─── Split full name into first / last ─────────────────────────────────────
+  const nameParts = (fullName || '').trim().split(' ');
+  const firstName = nameParts[0] || '';
+  const lastName = nameParts.slice(1).join(' ') || '';
+
+  // ─── Step 1: Dedupe check ──────────────────────────────────────────────────
+  let dedupeResponse;
+  try {
+    const { data } = await axios.post(
+      DEDUPE_URL,
+      { phoneNumber: phone },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-dedupe-api-key': 'eyJhbGciOiJIUzI1NiJ9.eyJrZXkiOiJhcGkifQ.k9X2LpQ7sT4Zm1A'
+        }
+      }
+    );
+    dedupeResponse = data;
+    console.log("CreditSea dedupe response:", JSON.stringify(dedupeResponse));
+  } catch (error) {
+    console.error("CreditSea dedupe error:", error?.response?.data || error.message);
+
+    // Log dedupe failure and stop
+    const responseLog = await CreditSeaResponseLog.create({
+      leadId,
+      source,
+      requestPayload: { phoneNumber: phone },
+      responseStatus: 'DEDUPE_ERROR',
+      responseBody: {
+        step: 'dedupe',
+        error: error?.response?.data || error.message
+      }
+    });
+    return responseLog;
+  }
+
+  // ─── Step 2: If lead already present, log and stop ─────────────────────────
+  if (dedupeResponse.isPresent === true) {
+    console.log("CreditSea: Lead already present, skipping.");
+
+    const responseLog = await CreditSeaResponseLog.create({
+      leadId,
+      source,
+      requestPayload: { phoneNumber: phone },
+      responseStatus: 'DUPLICATE',
+      responseBody: { step: 'dedupe', ...dedupeResponse }
+    });
+    return responseLog;
+  }
+
+  // ─── Step 3: Dedupe passed (isPresent: false) — create lead ───────────────
+  const createPayload = {
+    first_name: firstName,
+    last_name: lastName,
+    phoneNumber: parseInt(phone, 10),
+    pan: panNumber,
+    dob: formatToMMDDYYYY(dateOfBirth),   // MM-DD-YYYY as per API docs
+    gender: gender || 'male',
+    pincode: String(pincode || ''),
+    income: String(salary),
+    employementType: jobType === 'SELF_EMPLOYED' ? 'Self-Employed' : 'Salaried'
+  };
+
+  try {
+    const { data: createResponse } = await axios.post(
+      CREATE_URL,
+      createPayload,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'sourceid': '12850119'
+        }
+      }
+    );
+
+    console.log("CreditSea create response:", JSON.stringify(createResponse));
+
+    const responseLog = await CreditSeaResponseLog.create({
+      leadId,
+      source,
+      requestPayload: createPayload,
+      responseStatus: createResponse?.leadId ? 'LEAD_CREATED' : 'FAILED',
+      responseBody: { step: 'create', ...createResponse }
+    });
+    return responseLog;
+
+  } catch (error) {
+    console.error("CreditSea create error:", error?.response?.data || error.message);
+
+    const responseLog = await CreditSeaResponseLog.create({
+      leadId,
+      source,
+      requestPayload: createPayload,
+      responseStatus: 'FAILED',
+      responseBody: {
+        step: 'create',
+        error: error?.response?.data || error.message
+      }
+    });
+    return responseLog;
+  }
+}
+
 module.exports = {
   sendToSML,
   sendToFreo,
@@ -1605,5 +1721,6 @@ module.exports = {
   sendToMpokket,
   sendToIndiaLends,
   sendToCrmPaisa,
-  sendToCreditPulse
+  sendToCreditPulse,
+  sendToCreditSea
 };

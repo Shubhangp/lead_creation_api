@@ -14,7 +14,9 @@ const {
   sendToMyMoneyMantra,
   sendToMpokket,
   sendToIndiaLends,
-  sendToCrmPaisa
+  sendToCrmPaisa,
+  sendToCreditPulse,
+  sendToCreditSea
 } = require('../services/lenderService');
 
 class ContinuousLeadScheduler {
@@ -242,6 +244,8 @@ class ContinuousLeadScheduler {
       'INDIALENDS': sendToIndiaLends,
       'MPOKKET': sendToMpokket,
       'CRMPaisa': sendToCrmPaisa,
+      "CreditPluse": sendToCreditPulse,
+      "CreditSea": sendToCreditSea,
     };
 
     if (lenderHandlers[lender]) {
