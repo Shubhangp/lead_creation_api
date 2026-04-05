@@ -61,6 +61,11 @@ const LENDER_CONFIG = {
     statsType: 'status',
     displayName: 'Zype'
   },
+  creditsea: {
+    modelPath: '../models/creditSeaResponseLog.js',
+    statsType: 'status',
+    displayName: 'Credit Sea'
+  },
   // ── RCS Queue ──────────────────────────────────────────────────────────────
   rcs_queue: {
     modelPath: '../models/rcsModels.js',

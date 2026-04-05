@@ -97,6 +97,13 @@ const TABLE_CONFIG = {
     sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
     fallbackGSI: 'leadId-index'
   },
+  'credit_sea_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    fallbackGSI: 'leadId-index'
+  },
 
   // ── Leads tables ───────────────────────────────────────────────────────────
   'leads': {
