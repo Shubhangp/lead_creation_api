@@ -13,7 +13,7 @@ const TABLE_NAME = 'lead_success';
 const LENDERS = [
   'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI',
   'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-  'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET'
+  'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea'
 ];
 
 const ALL_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
@@ -22,27 +22,28 @@ class LeadSuccess {
 
   static async create(successData) {
     const item = {
-      successId:     uuidv4(),
-      leadId:        successData.leadId        || null,
-      source:        successData.source        || null,
-      phone:         successData.phone         || null,
-      email:         successData.email         || null,
-      panNumber:     successData.panNumber     || null,
-      fullName:      successData.fullName      || null,
-      OVLY:          successData.OVLY          || false,
-      FREO:          successData.FREO          || false,
-      LendingPlate:  successData.LendingPlate  || false,
-      ZYPE:          successData.ZYPE          || false,
-      FINTIFI:       successData.FINTIFI       || false,
-      FATAKPAY:      successData.FATAKPAY      || false,
-      FATAKPAYPL:    successData.FATAKPAYPL    || false,
-      RAMFINCROP:    successData.RAMFINCROP    || false,
+      successId: uuidv4(),
+      leadId: successData.leadId || null,
+      source: successData.source || null,
+      phone: successData.phone || null,
+      email: successData.email || null,
+      panNumber: successData.panNumber || null,
+      fullName: successData.fullName || null,
+      OVLY: successData.OVLY || false,
+      FREO: successData.FREO || false,
+      LendingPlate: successData.LendingPlate || false,
+      ZYPE: successData.ZYPE || false,
+      FINTIFI: successData.FINTIFI || false,
+      FATAKPAY: successData.FATAKPAY || false,
+      FATAKPAYPL: successData.FATAKPAYPL || false,
+      RAMFINCROP: successData.RAMFINCROP || false,
       MyMoneyMantra: successData.MyMoneyMantra || false,
-      INDIALENDS:    successData.INDIALENDS    || false,
-      CRMPaisa:      successData.CRMPaisa      || false,
-      SML:           successData.SML           || false,
-      MPOKKET:       successData.MPOKKET       || false,
-      createdAt:     new Date().toISOString()
+      INDIALENDS: successData.INDIALENDS || false,
+      CRMPaisa: successData.CRMPaisa || false,
+      SML: successData.SML || false,
+      MPOKKET: successData.MPOKKET || false,
+      CreditSea: successData.CreditSea || false,
+      createdAt: new Date().toISOString()
     };
 
     await docClient.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
@@ -149,20 +150,20 @@ class LeadSuccess {
     } = opts;
 
     let allItems = [];
-    let lastKey  = null;
+    let lastKey = null;
 
     do {
       const params = {
-        TableName:    TABLE_NAME,
-        IndexName:    'source-createdAt-index',
+        TableName: TABLE_NAME,
+        IndexName: 'source-createdAt-index',
 
         // ✅ Use BETWEEN to push date filtering into DynamoDB — no more in-memory filtering
-        KeyConditionExpression:    '#source = :source AND createdAt BETWEEN :start AND :end',
-        ExpressionAttributeNames:  { '#source': 'source' },
+        KeyConditionExpression: '#source = :source AND createdAt BETWEEN :start AND :end',
+        ExpressionAttributeNames: { '#source': 'source' },
         ExpressionAttributeValues: {
           ':source': source,
-          ':start':  startDate,
-          ':end':    endDate
+          ':start': startDate,
+          ':end': endDate
         },
 
         ScanIndexForward: sortAscending,
@@ -172,13 +173,13 @@ class LeadSuccess {
       // ✅ Projection: only request the fields you actually need (saves RCU bandwidth)
       if (projectionFields && projectionFields.length > 0) {
         const fieldNames = {};
-        const fieldRefs  = projectionFields.map((f, i) => {
+        const fieldRefs = projectionFields.map((f, i) => {
           const key = `#proj${i}`;
           fieldNames[key] = f;
           return key;
         });
-        params.ProjectionExpression       = fieldRefs.join(', ');
-        params.ExpressionAttributeNames   = {
+        params.ProjectionExpression = fieldRefs.join(', ');
+        params.ExpressionAttributeNames = {
           ...params.ExpressionAttributeNames,
           ...fieldNames
         };
@@ -188,7 +189,7 @@ class LeadSuccess {
 
       const result = await docClient.send(new QueryCommand(params));
       allItems = allItems.concat(result.Items || []);
-      lastKey  = result.LastEvaluatedKey;
+      lastKey = result.LastEvaluatedKey;
     } while (lastKey);
 
     return allItems;
@@ -203,27 +204,27 @@ class LeadSuccess {
 
   static async _countBySource(source, startDate, endDate) {
     let totalCount = 0;
-    let lastKey    = null;
+    let lastKey = null;
 
     do {
       const params = {
-        TableName:    TABLE_NAME,
-        IndexName:    'source-createdAt-index',
-        KeyConditionExpression:    '#source = :source AND createdAt BETWEEN :start AND :end',
-        ExpressionAttributeNames:  { '#source': 'source' },
+        TableName: TABLE_NAME,
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source AND createdAt BETWEEN :start AND :end',
+        ExpressionAttributeNames: { '#source': 'source' },
         ExpressionAttributeValues: {
           ':source': source,
-          ':start':  startDate,
-          ':end':    endDate
+          ':start': startDate,
+          ':end': endDate
         },
-        Select: 'COUNT' 
+        Select: 'COUNT'
       };
 
       if (lastKey) params.ExclusiveStartKey = lastKey;
 
       const result = await docClient.send(new QueryCommand(params));
       totalCount += result.Count || 0;
-      lastKey     = result.LastEvaluatedKey;
+      lastKey = result.LastEvaluatedKey;
     } while (lastKey);
 
     return totalCount;
@@ -240,17 +241,17 @@ class LeadSuccess {
 
     // Default to wide range if no dates given (avoids full partition scan)
     const effectiveStart = startDate || '1970-01-01T00:00:00.000Z';
-    const effectiveEnd   = endDate   || new Date().toISOString();
+    const effectiveEnd = endDate || new Date().toISOString();
 
     const params = {
-      TableName:    TABLE_NAME,
-      IndexName:    'source-createdAt-index',
-      KeyConditionExpression:    '#source = :source AND createdAt BETWEEN :start AND :end',
-      ExpressionAttributeNames:  { '#source': 'source' },
+      TableName: TABLE_NAME,
+      IndexName: 'source-createdAt-index',
+      KeyConditionExpression: '#source = :source AND createdAt BETWEEN :start AND :end',
+      ExpressionAttributeNames: { '#source': 'source' },
       ExpressionAttributeValues: {
         ':source': source,
-        ':start':  effectiveStart,
-        ':end':    effectiveEnd
+        ':start': effectiveStart,
+        ':end': effectiveEnd
       },
       ScanIndexForward: sortAscending,
       Limit: limit
@@ -260,7 +261,7 @@ class LeadSuccess {
 
     const result = await docClient.send(new QueryCommand(params));
     return {
-      items:            result.Items || [],
+      items: result.Items || [],
       lastEvaluatedKey: result.LastEvaluatedKey
     };
   }
@@ -270,13 +271,13 @@ class LeadSuccess {
 
     if (!startDate || !endDate) {
       const now = new Date();
-      endDate   = now.toISOString();
+      endDate = now.toISOString();
       startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     }
 
     console.log(`[${TABLE_NAME}] getStats: source=${source}, ${startDate} → ${endDate}`);
 
-    const sources  = source ? [source] : ALL_SOURCES;
+    const sources = source ? [source] : ALL_SOURCES;
 
     // ✅ All sources fetched in parallel
     const allItems = await this._fetchAllSources(sources, startDate, endDate);
@@ -290,13 +291,13 @@ class LeadSuccess {
 
   static _calculateStats(items, source, startDate, endDate) {
     const stats = {
-      totalLeads:     items.length,
+      totalLeads: items.length,
       source,
-      dateRange:      { start: startDate, end: endDate },
+      dateRange: { start: startDate, end: endDate },
       sourceBreakdown: {},
-      lenderStats:    {},
-      totalAccepted:  0,
-      totalRejected:  0
+      lenderStats: {},
+      totalAccepted: 0,
+      totalRejected: 0
     };
 
     LENDERS.forEach(lender => {
@@ -344,33 +345,33 @@ class LeadSuccess {
 
     if (!startDate || !endDate) {
       const now = new Date();
-      endDate   = now.toISOString();
+      endDate = now.toISOString();
       startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     }
 
-    const sources  = source ? [source] : ALL_SOURCES;
+    const sources = source ? [source] : ALL_SOURCES;
     const allItems = await this._fetchAllSources(sources, startDate, endDate);
 
     const leadList = allItems.map(item => {
       const acceptedCount = LENDERS.reduce((n, l) => n + (item[l] === true ? 1 : 0), 0);
       return {
-        id:       `${item.phone}_${item.fullName}`.replace(/\s+/g, '_'),
-        name:     item.fullName  || 'N/A',
-        mobile:   item.phone     || 'N/A',
-        pan:      item.panNumber || 'N/A',
+        id: `${item.phone}_${item.fullName}`.replace(/\s+/g, '_'),
+        name: item.fullName || 'N/A',
+        mobile: item.phone || 'N/A',
+        pan: item.panNumber || 'N/A',
         accepted: acceptedCount,
         dateSent: item.createdAt,
-        source:   item.source    || 'unknown'
+        source: item.source || 'unknown'
       };
     });
 
     leadList.sort((a, b) => b.accepted - a.accepted);
 
     return {
-      leads:           leadList,
-      total:           leadList.length,
-      dateRange:       { start: startDate, end: endDate },
-      source:          source || 'all',
+      leads: leadList,
+      total: leadList.length,
+      dateRange: { start: startDate, end: endDate },
+      source: source || 'all',
       processingTimeMs: Date.now() - startTime
     };
   }
@@ -380,7 +381,7 @@ class LeadSuccess {
 
     if (!startDate || !endDate) {
       const now = new Date();
-      endDate   = now.toISOString();
+      endDate = now.toISOString();
       startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     }
 
@@ -398,10 +399,10 @@ class LeadSuccess {
       const leads = items.map(item => {
         const acceptedCount = LENDERS.reduce((n, l) => n + (item[l] === true ? 1 : 0), 0);
         return {
-          id:       `${item.phone}_${item.fullName}`.replace(/\s+/g, '_'),
-          name:     item.fullName  || 'N/A',
-          mobile:   item.phone     || 'N/A',
-          pan:      item.panNumber || 'N/A',
+          id: `${item.phone}_${item.fullName}`.replace(/\s+/g, '_'),
+          name: item.fullName || 'N/A',
+          mobile: item.phone || 'N/A',
+          pan: item.panNumber || 'N/A',
           accepted: acceptedCount,
           dateSent: item.createdAt
         };
@@ -413,7 +414,7 @@ class LeadSuccess {
     });
 
     return {
-      dateRange:        { start: startDate, end: endDate },
+      dateRange: { start: startDate, end: endDate },
       sourceStats,
       processingTimeMs: Date.now() - startTime
     };
@@ -424,7 +425,7 @@ class LeadSuccess {
 
     if (!startDate || !endDate) {
       const now = new Date();
-      endDate   = now.toISOString();
+      endDate = now.toISOString();
       startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     }
 
@@ -444,13 +445,89 @@ class LeadSuccess {
     });
 
     return {
-      totalLeads:      totalCount,
-      source:          source || null,
+      totalLeads: totalCount,
+      source: source || null,
       sourceBreakdown,
-      dateRange:       { start: startDate, end: endDate },
-      scannedInMs:     Date.now() - startTime,
-      method:          'gsi-sort-key-count'
+      dateRange: { start: startDate, end: endDate },
+      scannedInMs: Date.now() - startTime,
+      method: 'gsi-sort-key-count'
     };
+  }
+
+  static async upsertByLeadId(leadId, updates) {
+    // Try to find existing record first
+    const existing = await this.findByLeadId(leadId);
+
+    if (existing) {
+      // Record exists — build a SET expression from updates
+      const updateExpression = [];
+      const expressionAttributeNames = {};
+      const expressionAttributeValues = {};
+
+      Object.keys(updates).forEach((key, index) => {
+        updateExpression.push(`#field${index} = :value${index}`);
+        expressionAttributeNames[`#field${index}`] = key;
+        expressionAttributeValues[`:value${index}`] = updates[key];
+      });
+
+      const result = await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { successId: existing.successId },
+        UpdateExpression: `SET ${updateExpression.join(', ')}`,
+        ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues,
+        ReturnValues: 'ALL_NEW',
+      }));
+
+      console.log(`[LeadSuccess.upsertByLeadId] Updated existing record successId=${existing.successId} for leadId=${leadId}`);
+      return result.Attributes;
+    }
+
+    // No record yet — create one (includes leadId in the item)
+    const newItem = {
+      successId: uuidv4(),
+      leadId,
+      source: updates.source || null,
+      phone: updates.phone || null,
+      email: updates.email || null,
+      panNumber: updates.panNumber || null,
+      fullName: updates.fullName || null,
+      OVLY: updates.OVLY || false,
+      FREO: updates.FREO || false,
+      LendingPlate: updates.LendingPlate || false,
+      ZYPE: updates.ZYPE || false,
+      FINTIFI: updates.FINTIFI || false,
+      FATAKPAY: updates.FATAKPAY || false,
+      FATAKPAYPL: updates.FATAKPAYPL || false,
+      RAMFINCROP: updates.RAMFINCROP || false,
+      MyMoneyMantra: updates.MyMoneyMantra || false,
+      INDIALENDS: updates.INDIALENDS || false,
+      CRMPaisa: updates.CRMPaisa || false,
+      SML: updates.SML || false,
+      MPOKKET: updates.MPOKKET || false,
+      CreditSea: updates.CreditSea || false,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      await docClient.send(new PutCommand({
+        TableName: TABLE_NAME,
+        Item: newItem,
+        ConditionExpression: 'attribute_not_exists(successId)',
+      }));
+      console.log(`[LeadSuccess.upsertByLeadId] Created new record successId=${newItem.successId} for leadId=${leadId}`);
+      return newItem;
+    } catch (err) {
+      if (err.name === 'ConditionalCheckFailedException') {
+        // Lost the race — another process created it first. Re-fetch and update.
+        console.warn(`[LeadSuccess.upsertByLeadId] Race condition detected for leadId=${leadId}, falling back to update`);
+        const raceWinner = await this.findByLeadId(leadId);
+        if (raceWinner) {
+          return this.updateByLeadId(leadId, updates);
+        }
+      }
+      throw err;
+    }
   }
 }
 
