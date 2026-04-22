@@ -129,33 +129,33 @@ const getLenderSendFunction = (lender) => {
  */
 const processLeadsInBackground = async (batchId, lender, filters, batchSize, delayMs, progressCallback) => {
   const sendFunction = getLenderSendFunction(lender);
-  
+
   try {
     // Query ALL leads with proper pagination
     let allLeads = [];
-    
+
     console.log(`[Batch ${batchId}] Starting lead collection...`);
-    
+
     if (filters.sources && filters.sources.length > 0) {
       // Query each source with pagination
       for (const source of filters.sources) {
         console.log(`[Batch ${batchId}] Querying source: ${source}`);
         let lastEvaluatedKey = null;
         let sourceCount = 0;
-        
+
         do {
           const queryOptions = {
             limit: 1000,
             startDate: filters.startDate,
             endDate: filters.endDate
           };
-          
+
           if (lastEvaluatedKey) {
             queryOptions.lastEvaluatedKey = lastEvaluatedKey;
           }
-          
+
           const result = await Lead.findBySource(source, queryOptions);
-          
+
           // Handle both array and object response formats
           let leads = [];
           if (Array.isArray(result)) {
@@ -165,39 +165,45 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
             leads = result.items || [];
             lastEvaluatedKey = result.lastEvaluatedKey || null;
           }
-          
+
           sourceCount += leads.length;
           allLeads = allLeads.concat(leads);
-          
+
           console.log(`[Batch ${batchId}] Source ${source}: fetched ${leads.length} leads (total so far: ${allLeads.length})`);
-          
+
           // Small delay to avoid rate limiting
           await new Promise(resolve => setTimeout(resolve, 100));
-          
+
         } while (lastEvaluatedKey);
-        
+
         console.log(`[Batch ${batchId}] Source ${source} complete: ${sourceCount} leads`);
       }
     } else {
-      // Scan ALL leads with pagination
-      console.log(`[Batch ${batchId}] Scanning all leads...`);
-      let lastEvaluatedKey = null;
-      
-      do {
-        const result = await Lead.findAll({ 
-          limit: 1000,
-          lastEvaluatedKey 
-        });
-        
-        allLeads = allLeads.concat(result.items);
-        lastEvaluatedKey = result.lastEvaluatedKey;
-        
-        console.log(`[Batch ${batchId}] Fetched ${result.items.length} leads (total so far: ${allLeads.length})`);
-        
-        // Small delay to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-      } while (lastEvaluatedKey);
+      // No sources filter — query all known sources
+      const sources = process.env.LEAD_SOURCES?.split(',').map(s => s.trim()) || [];
+
+      if (sources.length > 0) {
+        for (const source of sources) {
+          let lastEvaluatedKey = null;
+          do {
+            const result = await Lead.findBySource(source, {
+              limit: 1000,
+              startDate: filters.startDate,
+              endDate: filters.endDate,
+              lastEvaluatedKey
+            });
+            allLeads = allLeads.concat(result.items || []);
+            lastEvaluatedKey = result.lastEvaluatedKey || null;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } while (lastEvaluatedKey);
+        }
+      } else if (filters.startDate && filters.endDate) {
+        // Fallback: use date range query
+        const result = await Lead.findByDateRange(filters.startDate, filters.endDate, { limit: null });
+        allLeads = result.items || [];
+      } else {
+        throw new Error('Either sources or a date range (startDate + endDate) must be provided when LEAD_SOURCES env is not set.');
+      }
     }
 
     console.log(`[Batch ${batchId}] Total leads fetched: ${allLeads.length}`);
@@ -236,13 +242,13 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
 
     for (let i = 0; i < filteredLeads.length; i += batchSize) {
       const batchLeads = filteredLeads.slice(i, i + batchSize);
-      
+
       // Process batch in parallel
       const results = await Promise.allSettled(
         batchLeads.map(async (lead) => {
           try {
             await sendFunction(lead);
-            
+
             // Update lead with push status (with retry logic)
             let retries = 3;
             while (retries > 0) {
@@ -271,7 +277,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
               leadId: lead.leadId,
               status: 'success'
             });
-            
+
             successCount++;
             processedCount++;
 
@@ -401,7 +407,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
 
   } catch (error) {
     console.error(`[Batch ${batchId}] ❌ Fatal error:`, error);
-    
+
     await LeadDistributionStats.updateBatchStats(batchId, {
       status: 'FAILED',
       completedAt: new Date().toISOString()
@@ -458,10 +464,10 @@ const startBackgroundDistribution = async (req, res) => {
 
     // Start processing in background (don't await)
     processLeadsInBackground(
-      batch.batchId, 
-      lender, 
-      filters, 
-      batchSize, 
+      batch.batchId,
+      lender,
+      filters,
+      batchSize,
       delayMs,
       null // No progress callback
     ).catch(error => {
@@ -571,7 +577,7 @@ const streamLeadsToLender = async (req, res) => {
 
   } catch (error) {
     console.error('Error in streaming distribution:', error);
-    
+
     if (!res.headersSent) {
       res.status(500).json({
         success: false,
@@ -679,12 +685,12 @@ const getLeadsPreview = async (req, res) => {
     // Query leads with pagination to get accurate count
     let totalCount = 0;
     let sampleLeads = [];
-    
+
     if (filters.sources && filters.sources.length > 0) {
       for (const source of filters.sources) {
         let lastEvaluatedKey = null;
         let sourceCount = 0;
-        
+
         do {
           const result = await Lead.findBySource(source, {
             limit: 1000,
@@ -692,40 +698,52 @@ const getLeadsPreview = async (req, res) => {
             endDate: filters.endDate,
             lastEvaluatedKey
           });
-          
+
           const leads = Array.isArray(result) ? result : result.items || [];
           const filtered = leads.filter(lead => filterLead(lead, filters));
-          
+
           sourceCount += filtered.length;
-          
+
           // Collect sample leads (first 10)
           if (sampleLeads.length < 10) {
             sampleLeads = sampleLeads.concat(filtered.slice(0, 10 - sampleLeads.length));
           }
-          
+
           lastEvaluatedKey = result.lastEvaluatedKey;
         } while (lastEvaluatedKey);
-        
+
         totalCount += sourceCount;
       }
     } else {
-      let lastEvaluatedKey = null;
-      
-      do {
-        const result = await Lead.findAll({ 
-          limit: 1000,
-          lastEvaluatedKey 
-        });
-        
-        const filtered = result.items.filter(lead => filterLead(lead, filters));
-        totalCount += filtered.length;
-        
-        if (sampleLeads.length < 10) {
-          sampleLeads = sampleLeads.concat(filtered.slice(0, 10 - sampleLeads.length));
+      const sources = process.env.LEAD_SOURCES?.split(',').map(s => s.trim()) || [];
+
+      if (sources.length > 0) {
+        for (const source of sources) {
+          let lastEvaluatedKey = null;
+          do {
+            const result = await Lead.findBySource(source, {
+              limit: 1000,
+              startDate: filters.startDate,
+              endDate: filters.endDate,
+              lastEvaluatedKey
+            });
+            const leads = result.items || [];
+            const filtered = leads.filter(lead => filterLead(lead, filters));
+            totalCount += filtered.length;
+            if (sampleLeads.length < 10) {
+              sampleLeads = sampleLeads.concat(filtered.slice(0, 10 - sampleLeads.length));
+            }
+            lastEvaluatedKey = result.lastEvaluatedKey || null;
+          } while (lastEvaluatedKey);
         }
-        
-        lastEvaluatedKey = result.lastEvaluatedKey;
-      } while (lastEvaluatedKey);
+      } else if (filters.startDate && filters.endDate) {
+        const result = await Lead.findByDateRange(filters.startDate, filters.endDate, { limit: null });
+        const filtered = (result.items || []).filter(lead => filterLead(lead, filters));
+        totalCount = filtered.length;
+        sampleLeads = filtered.slice(0, 10);
+      } else {
+        throw new Error('Either sources or a date range must be provided.');
+      }
     }
 
     res.status(200).json({
