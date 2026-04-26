@@ -55,7 +55,7 @@ app.use('/api/v1/uploadStatus', lenderStatusUploadRoutes);
 app.use('/api/v1/lendportal', leadPortalRoutes);
 app.use('/api/v1/bulk-upload', leadbulkUploadRoutes);
 
-rcsScheduler.init();
+// rcsScheduler.init();
 // // Start continuous scheduler when server starts
 // continuousScheduler.start();
 
