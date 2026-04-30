@@ -1060,6 +1060,82 @@ exports.countLeadsBySource = async (req, res) => {
   }
 };
 
+// Update lead by id
+const SERVER_MANAGED_FIELDS = new Set([
+  'leadId',
+  'visited',
+  'createdAt',
+  'datePartition'
+]);
+
+function sanitizeLeadUpdates(body = {}) {
+  return Object.entries(body).reduce((updates, [key, value]) => {
+    if (!SERVER_MANAGED_FIELDS.has(key) && value !== undefined) {
+      updates[key] = value;
+    }
+    return updates;
+  }, {});
+}
+
+exports.updateLeadById = async (req, res) => {
+  try {
+    const { leadId } = req.params;
+
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Lead id is required'
+      });
+    }
+
+    const updates = sanitizeLeadUpdates(req.body);
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid fields provided for update'
+      });
+    }
+
+    const lead = await Lead.updateById(leadId, updates);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Lead updated successfully',
+      data: lead
+    });
+  } catch (error) {
+    if (error.message === 'Lead not found') {
+      return res.status(404).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    if (error.code === 'DUPLICATE_PHONE' || error.code === 'DUPLICATE_PAN') {
+      return res.status(409).json({
+        success: false,
+        message: error.message,
+        code: error.code
+      });
+    }
+
+    if (error.errors) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        errors: error.errors
+      });
+    }
+
+    console.error('[LeadController] Failed to update lead:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update lead'
+    });
+  }
+};
+
 ///////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////
 

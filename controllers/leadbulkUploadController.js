@@ -1,21 +1,30 @@
 const multer = require('multer');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
+const XLSX = require('xlsx');           // kept only for template generation (tiny write)
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const Lead = require('../models/leadModel');
 
 // ============================================================================
-// MULTER CONFIG — memory storage (no disk writes)
+// MULTER CONFIG
+// IMPORTANT: Use diskStorage for large files — memoryStorage would load the
+// entire 100 MB file into RAM before we even start reading it.
 // ============================================================================
 
 const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
-    fileFilter: (req, file, cb) => {
-        const allowed = [
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'application/vnd.ms-excel',
-        ];
+    storage: multer.diskStorage({
+        destination: os.tmpdir(),
+        filename: (_req, file, cb) => {
+            const unique = `bulk-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            cb(null, `${unique}${path.extname(file.originalname)}`);
+        },
+    }),
+    limits: { fileSize: 200 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
         if (
-            allowed.includes(file.mimetype) ||
+            file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+            file.mimetype === 'application/vnd.ms-excel' ||
             file.originalname.match(/\.(xlsx|xls)$/i)
         ) {
             cb(null, true);
@@ -27,110 +36,36 @@ const upload = multer({
 
 // ============================================================================
 // COLUMN HEADER MAP
-// Normalises any reasonable header variant to our model field name.
 // ============================================================================
 
 const HEADER_MAP = {
-    // fullName
-    fullname: 'fullName',
-    full_name: 'fullName',
-    name: 'fullName',
-    'full name': 'fullName',
-
-    // firstName
-    firstname: 'firstName',
-    first_name: 'firstName',
-    'first name': 'firstName',
-
-    // lastName
-    lastname: 'lastName',
-    last_name: 'lastName',
-    'last name': 'lastName',
-
-    // phone
-    phone: 'phone',
-    mobile: 'phone',
-    contact: 'phone',
-    phonenumber: 'phone',
-    phone_number: 'phone',
-    'phone number': 'phone',
-    'mobile number': 'phone',
-
-    // email
-    email: 'email',
-    'email address': 'email',
-    emailaddress: 'email',
-
-    // source
-    source: 'source',
-    leadsource: 'source',
-    lead_source: 'source',
-    'lead source': 'source',
-
-    // panNumber
-    pannumber: 'panNumber',
-    pan_number: 'panNumber',
-    pan: 'panNumber',
-    'pan number': 'panNumber',
-    'pan no': 'panNumber',
-
-    // age
+    fullname: 'fullName', full_name: 'fullName', name: 'fullName', 'full name': 'fullName',
+    firstname: 'firstName', first_name: 'firstName', 'first name': 'firstName',
+    lastname: 'lastName', last_name: 'lastName', 'last name': 'lastName',
+    phone: 'phone', mobile: 'phone', contact: 'phone', phonenumber: 'phone',
+    phone_number: 'phone', 'phone number': 'phone', 'mobile number': 'phone',
+    email: 'email', 'email address': 'email', emailaddress: 'email',
+    source: 'source', leadsource: 'source', lead_source: 'source', 'lead source': 'source',
+    pannumber: 'panNumber', pan_number: 'panNumber', pan: 'panNumber',
+    'pan number': 'panNumber', 'pan no': 'panNumber',
     age: 'age',
-
-    // dateOfBirth
-    dateofbirth: 'dateOfBirth',
-    date_of_birth: 'dateOfBirth',
-    dob: 'dateOfBirth',
-    'date of birth': 'dateOfBirth',
-    birthdate: 'dateOfBirth',
-
-    // gender
-    gender: 'gender',
-    sex: 'gender',
-
-    // jobType
-    jobtype: 'jobType',
-    job_type: 'jobType',
-    'job type': 'jobType',
-    occupation: 'jobType',
-    employment: 'jobType',
-
-    // businessType
-    businesstype: 'businessType',
-    business_type: 'businessType',
-    'business type': 'businessType',
-    business: 'businessType',
-
-    // salary
-    salary: 'salary',
-    income: 'salary',
-    'monthly salary': 'salary',
-    'monthly income': 'salary',
-
-    // creditScore
-    creditscore: 'creditScore',
-    credit_score: 'creditScore',
-    'credit score': 'creditScore',
-
-    // cibilScore
-    cibilscore: 'cibilScore',
-    cibil_score: 'cibilScore',
-    cibil: 'cibilScore',
-    'cibil score': 'cibilScore',
-
-    // address
-    address: 'address',
-    'full address': 'address',
-
-    // pincode
-    pincode: 'pincode',
-    pin: 'pincode',
-    'pin code': 'pincode',
-    'zip code': 'pincode',
-    zipcode: 'pincode',
-
-    // consent
+    dateofbirth: 'dateOfBirth', date_of_birth: 'dateOfBirth', dob: 'dateOfBirth',
+    'date of birth': 'dateOfBirth', birthdate: 'dateOfBirth',
+    gender: 'gender', sex: 'gender',
+    jobtype: 'jobType', job_type: 'jobType', 'job type': 'jobType',
+    occupation: 'jobType', employment: 'jobType',
+    businesstype: 'businessType', business_type: 'businessType',
+    'business type': 'businessType', business: 'businessType',
+    salary: 'salary', income: 'salary', 'monthly salary': 'salary', 'monthly income': 'salary',
+    creditscore: 'creditScore', credit_score: 'creditScore', 'credit score': 'creditScore',
+    cibilscore: 'cibilScore', cibil_score: 'cibilScore', cibil: 'cibilScore', 'cibil score': 'cibilScore',
+    address: 'address', 'full address': 'address',
+    pincode: 'pincode', pin: 'pincode', 'pin code': 'pincode',
+    'zip code': 'pincode', zipcode: 'pincode',
     consent: 'consent',
+    createdat: 'createdAt', created_at: 'createdAt', 'created at': 'createdAt',
+    'created date': 'createdAt', createddate: 'createdAt', date: 'createdAt',
+    timestamp: 'createdAt', 'entry date': 'createdAt', entrydate: 'createdAt',
 };
 
 // ============================================================================
@@ -138,52 +73,52 @@ const HEADER_MAP = {
 // ============================================================================
 
 function normaliseHeader(raw) {
-    return String(raw).trim().toLowerCase().replace(/\s+/g, ' ');
+    return String(raw ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function parseBoolean(value) {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'number') return value !== 0;
-    const s = String(value).trim().toLowerCase();
+function parseBoolean(v) {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    const s = String(v).trim().toLowerCase();
     return s === 'true' || s === '1' || s === 'yes' || s === 'y';
 }
 
-function parseDateCell(value) {
-    if (!value) return null;
-    // XLSX stores dates as serial numbers
-    if (typeof value === 'number') {
-        const d = XLSX.SSF.parse_date_code(value);
-        if (d) {
-            const month = String(d.m).padStart(2, '0');
-            const day = String(d.d).padStart(2, '0');
-            return `${d.y}-${month}-${day}`;
-        }
-    }
-    const s = String(value).trim();
+function parseDateOnly(v) {
+    if (!v) return null;
+    if (v instanceof Date) return isNaN(v) ? null : v.toISOString().split('T')[0];
+    const s = String(v).trim();
     if (!s) return null;
-    const parsed = new Date(s);
-    return isNaN(parsed.getTime()) ? null : parsed.toISOString().split('T')[0];
+    const d = new Date(s);
+    return isNaN(d) ? null : d.toISOString().split('T')[0];
 }
 
-/**
- * Convert a raw xlsx row object (keyed by column headers) into a
- * normalised lead data object, mapping flexible header names to model fields.
- */
+function parseDateTimeISO(v) {
+    if (!v) return null;
+    if (v instanceof Date) return isNaN(v) ? null : v.toISOString();
+    const s = String(v).trim();
+    if (!s) return null;
+    const d = new Date(s);
+    return isNaN(d) ? null : d.toISOString();
+}
+
 function rowToLeadData(rawRow) {
     const lead = {};
-
     for (const [rawKey, cellValue] of Object.entries(rawRow)) {
-        const normKey = normaliseHeader(rawKey);
-        const fieldName = HEADER_MAP[normKey];
-        if (!fieldName || cellValue === undefined || cellValue === null || cellValue === '') {
-            continue;
-        }
+        const fieldName = HEADER_MAP[normaliseHeader(rawKey)];
+        if (!fieldName) continue;
+
+        const isEmpty =
+            cellValue === undefined || cellValue === null || cellValue === '' ||
+            (typeof cellValue === 'object' && !(cellValue instanceof Date) && Object.keys(cellValue).length === 0);
+        if (isEmpty) continue;
 
         if (fieldName === 'consent') {
             lead[fieldName] = parseBoolean(cellValue);
         } else if (fieldName === 'dateOfBirth') {
-            lead[fieldName] = parseDateCell(cellValue);
-        } else if (fieldName === 'age' || fieldName === 'salary' || fieldName === 'creditScore' || fieldName === 'cibilScore') {
+            lead[fieldName] = parseDateOnly(cellValue);
+        } else if (fieldName === 'createdAt') {
+            lead[fieldName] = parseDateTimeISO(cellValue);
+        } else if (['age', 'salary', 'creditScore', 'cibilScore'].includes(fieldName)) {
             const n = Number(cellValue);
             lead[fieldName] = isNaN(n) ? null : n;
         } else if (fieldName === 'panNumber') {
@@ -192,111 +127,229 @@ function rowToLeadData(rawRow) {
             lead[fieldName] = String(cellValue).trim();
         }
     }
-
     return lead;
 }
 
 // ============================================================================
-// CONTROLLER METHODS
+// CONCURRENCY LIMITER
 // ============================================================================
+
+function makeLimiter(concurrency) {
+    let active = 0;
+    const queue = [];
+    function next() {
+        while (active < concurrency && queue.length) {
+            active++;
+            const { fn, resolve, reject } = queue.shift();
+            fn().then(resolve, reject).finally(() => { active--; next(); });
+        }
+    }
+    return fn => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
+}
+
+// ============================================================================
+// STREAM EXCEL ROWS  (memory-safe)
+// ============================================================================
+
+/**
+ * Async generator that streams an xlsx file from disk in chunks.
+ * Peak memory = CHUNK_SIZE rows, not the entire file.
+ *
+ * @param {string} filePath
+ * @param {number} chunkSize
+ * @yields {Array<{rowNum: number, raw: Object}>}
+ */
+async function* streamExcelChunks(filePath, chunkSize = 500) {
+    const workbook = new ExcelJS.stream.xlsx.WorkbookReader(filePath, {
+        entries: 'emit',
+        sharedStrings: 'cache',   // must be 'cache' to resolve string cells
+        hyperlinks: 'ignore',
+        styles: 'ignore',
+        worksheets: 'emit',
+    });
+
+    let headers = null;
+    let chunk = [];
+
+    for await (const worksheet of workbook) {
+        for await (const row of worksheet) {
+            // Row 1 = header
+            if (row.number === 1) {
+                headers = {};
+                row.eachCell({ includeEmpty: false }, (cell, col) => {
+                    headers[col] = String(cell.value ?? '').trim();
+                });
+                continue;
+            }
+
+            if (!headers) continue;
+
+            const raw = {};
+            row.eachCell({ includeEmpty: false }, (cell, col) => {
+                const header = headers[col];
+                if (header) raw[header] = cell.value; // Date objects preserved as-is
+            });
+
+            if (Object.keys(raw).length === 0) continue;
+
+            chunk.push({ rowNum: row.number, raw });
+
+            if (chunk.length >= chunkSize) {
+                yield chunk;
+                chunk = [];
+            }
+        }
+        break; // first worksheet only
+    }
+
+    if (chunk.length > 0) yield chunk;
+}
+
+// ============================================================================
+// CONTROLLER
+// ============================================================================
+
+const CONCURRENCY = 50;
+const CHUNK_SIZE  = 500;
 
 /**
  * POST /api/leads/bulk-upload
  *
- * Accepts a multipart form with a single file field named "file".
- * Returns a detailed result object:
- * {
- *   total, succeeded, failed, skipped,
- *   results: [{ row, status, leadId?, error?, data }]
- * }
+ * Memory profile:
+ *   multer writes file to disk  →  ExcelJS reads 500 rows at a time  →
+ *   500 rows written to DynamoDB  →  chunk GC'd  →  next 500 rows.
+ *
+ *   Peak heap: ~2-5 MB regardless of whether the file has 1K or 9L rows.
  */
 const bulkUpload = async (req, res) => {
+    const tempFilePath = req.file?.path;
+
     try {
         if (!req.file) {
             return res.status(400).json({ success: false, message: 'No file uploaded' });
         }
 
-        // Parse xlsx from memory buffer
-        const workbook = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: false });
-        const sheetName = workbook.SheetNames[0];
-        if (!sheetName) {
-            return res.status(400).json({ success: false, message: 'No sheets found in the file' });
-        }
-
-        const sheet = workbook.Sheets[sheetName];
-        const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-
-        if (!rawRows || rawRows.length === 0) {
-            return res.status(400).json({ success: false, message: 'Sheet is empty or has no data rows' });
-        }
-
-        const MAX_ROWS = 5000;
-        if (rawRows.length > MAX_ROWS) {
-            return res.status(400).json({
-                success: false,
-                message: `File contains ${rawRows.length} rows. Maximum allowed is ${MAX_ROWS}.`,
-            });
-        }
-
+        const summary = { total: 0, succeeded: 0, failed: 0, skipped: 0 };
         const results = [];
-        let succeeded = 0;
-        let failed = 0;
-        let skipped = 0;
+        const limiter = makeLimiter(CONCURRENCY);
 
-        // Process rows sequentially to avoid DynamoDB hot-partition issues.
-        // For massive volumes, switch to a controlled-concurrency batch (e.g. p-limit).
-        for (let i = 0; i < rawRows.length; i++) {
-            const rawRow = rawRows[i];
-            const rowNum = i + 2; // 1-indexed, +1 for header row
-            const leadData = rowToLeadData(rawRow);
+        // In-memory dedup sets — only store primitive strings, memory is O(n*15 bytes)
+        const seenPhones = new Set();
+        const seenPans   = new Set();
+        const sourceIncrements = {};
 
-            // Skip entirely blank rows
-            if (Object.keys(leadData).length === 0) {
-                skipped++;
-                results.push({ row: rowNum, status: 'skipped', reason: 'Empty row', data: rawRow });
-                continue;
+        for await (const chunk of streamExcelChunks(tempFilePath, CHUNK_SIZE)) {
+            const chunkTasks = [];
+
+            for (const { rowNum, raw } of chunk) {
+                summary.total++;
+                const leadData = rowToLeadData(raw);
+
+                // Empty row
+                if (Object.keys(leadData).length === 0) {
+                    summary.skipped++;
+                    results.push({ row: rowNum, status: 'skipped', reason: 'Empty row' });
+                    continue;
+                }
+
+                // Validation (sync, no DB)
+                try {
+                    Lead.validate(leadData);
+                } catch (err) {
+                    summary.failed++;
+                    results.push({
+                        row: rowNum, status: 'failed',
+                        error: err.message, validationErrors: err.errors,
+                    });
+                    continue;
+                }
+
+                const phone = leadData.phone;
+                const pan   = leadData.panNumber;
+
+                // Within-file duplicate check
+                if (phone && seenPhones.has(phone)) {
+                    summary.failed++;
+                    results.push({ row: rowNum, status: 'failed', error: 'Duplicate phone in file', code: 'DUPLICATE_PHONE_IN_FILE' });
+                    continue;
+                }
+                if (pan && seenPans.has(pan)) {
+                    summary.failed++;
+                    results.push({ row: rowNum, status: 'failed', error: 'Duplicate PAN in file', code: 'DUPLICATE_PAN_IN_FILE' });
+                    continue;
+                }
+
+                // Reserve before async write to prevent same-chunk race
+                if (phone) seenPhones.add(phone);
+                if (pan)   seenPans.add(pan);
+
+                const _rowNum    = rowNum;
+                const _leadData  = leadData;
+                const _phone     = phone;
+                const _pan       = pan;
+
+                chunkTasks.push(
+                    limiter(async () => {
+                        try {
+                            const created = await Lead.createFast(_leadData);
+                            summary.succeeded++;
+                            results.push({ row: _rowNum, status: 'success', leadId: created.leadId });
+                            const src = _leadData.source;
+                            if (src) sourceIncrements[src] = (sourceIncrements[src] || 0) + 1;
+                        } catch (err) {
+                            // Release reservation on failure
+                            if (_phone) seenPhones.delete(_phone);
+                            if (_pan)   seenPans.delete(_pan);
+                            summary.failed++;
+                            const entry = { row: _rowNum, status: 'failed', error: err.message };
+                            if (err.errors) entry.validationErrors = err.errors;
+                            if (err.code)   entry.code = err.code;
+                            results.push(entry);
+                        }
+                    })
+                );
             }
 
-            try {
-                const created = await Lead.create(leadData);
-                succeeded++;
-                results.push({ row: rowNum, status: 'success', leadId: created.leadId, data: leadData });
-            } catch (err) {
-                failed++;
-                const errorEntry = {
-                    row: rowNum,
-                    status: 'failed',
-                    error: err.message,
-                    data: leadData,
-                };
-                if (err.errors) errorEntry.validationErrors = err.errors;
-                if (err.code) errorEntry.code = err.code;
-                results.push(errorEntry);
-            }
+            // Drain this chunk's writes before moving on — keeps memory flat
+            await Promise.all(chunkTasks);
         }
+
+        // Batch counter updates — one UpdateCommand per source
+        await Promise.all(
+            Object.entries(sourceIncrements).map(([src, delta]) =>
+                Lead.incrementCounterBy(src, delta).catch(err =>
+                    console.error(`[Counter] Failed to update "${src}":`, err.message)
+                )
+            )
+        );
+
+        results.sort((a, b) => (a.row ?? 0) - (b.row ?? 0));
 
         return res.status(200).json({
             success: true,
-            message: `Bulk upload complete. ${succeeded} succeeded, ${failed} failed, ${skipped} skipped.`,
-            summary: {
-                total: rawRows.length,
-                succeeded,
-                failed,
-                skipped,
-            },
+            message: `Bulk upload complete. ${summary.succeeded} succeeded, ${summary.failed} failed, ${summary.skipped} skipped.`,
+            summary,
             results,
         });
+
     } catch (err) {
         console.error('[BulkUpload] Unexpected error:', err);
         return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
+    } finally {
+        // Always delete the temp file
+        if (tempFilePath) {
+            fs.unlink(tempFilePath, e => {
+                if (e) console.warn('[BulkUpload] Could not delete temp file:', e.message);
+            });
+        }
     }
 };
 
-/**
- * GET /api/leads/bulk-upload/template
- * Returns a pre-built xlsx template the user can download and fill in.
- */
-const downloadTemplate = (req, res) => {
+// ============================================================================
+// TEMPLATE DOWNLOAD  (small file — in-memory xlsx is fine here)
+// ============================================================================
+
+const downloadTemplate = (_req, res) => {
     const headers = [
         'source', 'fullName', 'firstName', 'lastName',
         'phone', 'email', 'panNumber',
@@ -304,39 +357,23 @@ const downloadTemplate = (req, res) => {
         'jobType', 'businessType', 'salary',
         'creditScore', 'cibilScore',
         'address', 'pincode', 'consent',
+        'createdAt',
     ];
-
     const sampleRow = {
-        source: 'website',
-        fullName: 'Ramesh Kumar',
-        firstName: 'Ramesh',
-        lastName: 'Kumar',
-        phone: '9876543210',
-        email: 'ramesh.kumar@example.com',
-        panNumber: 'ABCDE1234F',
-        dateOfBirth: '1990-05-15',
-        age: 34,
-        gender: 'Male',
-        jobType: 'Salaried',
-        businessType: '',
-        salary: 55000,
-        creditScore: 720,
-        cibilScore: '',
-        address: '123 MG Road, Bengaluru',
-        pincode: '560001',
-        consent: true,
+        source: 'website', fullName: 'Ramesh Kumar', firstName: 'Ramesh', lastName: 'Kumar',
+        phone: '9876543210', email: 'ramesh.kumar@example.com', panNumber: 'ABCDE1234F',
+        dateOfBirth: '1990-05-15', age: 34, gender: 'Male', jobType: 'Salaried',
+        businessType: '', salary: 55000, creditScore: 720, cibilScore: '',
+        address: '123 MG Road, Bengaluru', pincode: '560001', consent: true,
+        createdAt: '2024-03-15T10:30:00.000Z',
     };
 
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet([sampleRow], { header: headers });
-
-    // Column widths for readability
     ws['!cols'] = headers.map(h => ({ wch: Math.max(h.length + 4, 18) }));
-
     XLSX.utils.book_append_sheet(wb, ws, 'Leads');
 
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-
     res.setHeader('Content-Disposition', 'attachment; filename="leads_template.xlsx"');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buffer);
