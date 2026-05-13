@@ -16,7 +16,7 @@ const LENDERS = [
   'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea'
 ];
 
-const ALL_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
+const ALL_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
 
 class LeadSuccess {
 

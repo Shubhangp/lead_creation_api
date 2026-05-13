@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'zype_response_logs';
 const SOURCES = process.env.ZYPE_SOURCES?.split(',').map(s => s.trim())
-  || ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
+  || ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
 
 class ZypeResponseLog {
   static async _queryAll(params) {

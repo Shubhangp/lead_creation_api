@@ -288,7 +288,7 @@ async function findMatchingLogs(fileMap, config) {
 
 async function findMatchingLogsLP(fileMap, config) {
   const matches = [];
-  const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
+  const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
 
   console.log(`[findMatchingLP] Scanning ${sources.length} sources...`);
 

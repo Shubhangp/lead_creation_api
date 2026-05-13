@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'ramfincrop_logs';
 const SOURCES = process.env.RAMFINCROP_SOURCES?.split(',').map(s => s.trim())
-  || ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
+  || ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
 
 class RamFinCropLog {
 

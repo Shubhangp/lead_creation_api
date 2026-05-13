@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'crmPaisa_response_logs';
 const SOURCES = process.env.CRMPAISA_SOURCES?.split(',').map(s => s.trim())
-  || ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'];
+  || ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
 
 class CrmPaisaResponseLog {
 

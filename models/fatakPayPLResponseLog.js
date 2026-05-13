@@ -20,7 +20,7 @@ const PERMANENT_BLOCKS = [
 
 // Known sources — used for parallel queries once source-createdAt-index is ACTIVE.
 // Override via env: FATAKPAY_SOURCES=CashKuber,FREO,BatterySmart,Ratecut,VFC
-const SOURCES = ( 'CashKuber,FREO,BatterySmart,Ratecut,VFC')
+const SOURCES = ( 'CashKuber,FREO,BatterySmart,Ratecut,VFC','Apr')
   .split(',').map(s => s.trim()).filter(Boolean);
 
 class FatakPayResponseLogPL {
