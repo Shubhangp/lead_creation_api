@@ -10,98 +10,98 @@ const TABLE_CONFIG = {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'mpokket_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'indialends_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'mmm_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'sml_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'freo_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'crmPaisa_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'fintifi_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'zype_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'ramfincrop_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'lending_plate_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'fatakpay_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'fatakpay_pl__response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
   'credit_sea_response_logs': {
     type: 'response_log',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     fallbackGSI: 'leadId-index'
   },
 
@@ -110,14 +110,14 @@ const TABLE_CONFIG = {
     type: 'leads',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     alternativeGSIs: ['phone-index', 'panNumber-index', 'leadId-index']
   },
   'excel_leads': {
     type: 'leads',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     alternativeGSIs: ['phone-index', 'panNumber-index', 'leadId-index']
   },
 
@@ -126,7 +126,7 @@ const TABLE_CONFIG = {
     type: 'lead_success',
     primaryGSI: 'source-createdAt-index',
     sortKey: 'createdAt',
-    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC'],
+    sources: ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'],
     alternativeGSIs: ['leadId-index', 'phone-index', 'panNumber-index']
   },
 
