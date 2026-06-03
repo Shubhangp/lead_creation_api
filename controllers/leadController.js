@@ -79,11 +79,23 @@ exports.createLead = async (req, res) => {
   }
 
   // Date of birth validation
-  const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) && !isNaN(Date.parse(dateOfBirth));
-  if (dateOfBirth && (!isValidDate || new Date(dateOfBirth) > new Date())) {
-    return res.status(400).json({ 
-      message: 'Invalid date of birth or date cannot be in the future.' 
-    });
+  if (dateOfBirth) {
+    const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) && !isNaN(Date.parse(dateOfBirth));
+    if (!isValidDate || new Date(dateOfBirth) > new Date()) {
+      return res.status(400).json({
+        message: 'Invalid date of birth or date cannot be in the future.'
+      });
+    }
+    const dob = new Date(dateOfBirth);
+    const today = new Date();
+    let derivedAge = today.getFullYear() - dob.getFullYear();
+    const m = today.getMonth() - dob.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) derivedAge--;
+    if (derivedAge < 18 || derivedAge > 58) {
+      return res.status(400).json({
+        message: 'Date of birth must correspond to an age between 18 and 58.'
+      });
+    }
   }
 
   // Set defaults

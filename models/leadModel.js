@@ -49,8 +49,8 @@ class Lead {
     if (age <= 35) return '26-35';
     if (age <= 45) return '36-45';
     if (age <= 55) return '46-55';
-    if (age <= 65) return '56-65';
-    return 'Above 65';
+    if (age <= 58) return '56-58';
+    return 'Above 58';
   }
 
   // ============================================================================
@@ -81,12 +81,19 @@ class Lead {
     if (data.panNumber && !panRegex.test(data.panNumber))
       errors.push('Invalid PAN number format (e.g., ABCDE1234F)');
 
-    if (data.age !== undefined && data.age !== null && (data.age < 18 || data.age > 120))
-      errors.push('Age must be between 18 and 120');
+    if (data.age !== undefined && data.age !== null && (data.age < 18 || data.age > 58))
+      errors.push('Age must be between 18 and 58');
 
     if (data.dateOfBirth) {
       const dob = new Date(data.dateOfBirth);
-      if (dob > new Date()) errors.push('Date of birth cannot be in the future');
+      if (dob > new Date()) {
+        errors.push('Date of birth cannot be in the future');
+      } else {
+        const age = this.calculateAge(dob);
+        if (age < 18 || age > 58) {
+          errors.push('Age derived from date of birth must be between 18 and 58');
+        }
+      }
     }
 
     if (data.creditScore !== undefined && data.creditScore !== null &&
