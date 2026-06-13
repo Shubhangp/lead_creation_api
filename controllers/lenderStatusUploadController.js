@@ -4,135 +4,103 @@ const csv = require('csv-parse/sync');
 const XLSX = require('xlsx');
 
 const Lead = require('../models/leadModel');
-const LeadSuccess = require('../models/leadSuccessModel');
+const { docClient } = require('../dynamodb');
+const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
 
-// ─── Lender Configs ──────────────────────────────────────────────────────────
-//
-// idType:
-//   'responselog' → legacy: match via lender response log table (Ovly, LendingPlate)
-//   'phone'       → look up lead in leads table by phone number
-//   'leadId'      → look up lead in leads table by our UUID (leadId)
-//   'none'        → cannot auto-match (no phone/leadId in MIS file)
-//
-// sheetName: which Excel sheet to use (null = first sheet / CSV)
-//
-// successStatuses: array of status strings that mean the lender accepted the lead
-// extractId(row): returns the phone or leadId string from a parsed row
-// extractStatus(row): returns status string from a row
-// extractDetails(row): returns extra detail fields to store alongside status
-// ─────────────────────────────────────────────────────────────────────────────
+const RESPONSELOG_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
 
 const LENDER_CONFIGS = {
 
-  // ── Legacy response-log lenders ───────────────────────────────────────────
-
   ovly: {
     displayName: 'Ovly (SmartCoin)',
-    tableName: 'ovly_response_logs',
-    model: require('../models/ovlyResponseLog'),
+    lenderKey: 'OVLY',
     allowedExtensions: ['.csv', '.xlsx', '.xls'],
     sheetName: null,
     idType: 'responselog',
-    columnMapping: {
-      leadId: ['lead_id', 'leadId', 'LeadId', 'LEAD_ID'],
-      rejectionReason: ['rejection_reason', 'rejectionReason', 'RejectionReason', 'REJECTION_REASON'],
-      unlockAmount: ['unlock_amount', 'unlockAmount', 'UnlockAmount'],
-      appliedDate: ['applied_date', 'appliedDate', 'AppliedDate'],
-      kycCompletedDate: ['kyc_completed_date', 'kycCompletedDate', 'KycCompletedDate'],
-      approvedDate: ['approved_date', 'approvedDate', 'ApprovedDate'],
-      emandateDoneAt: ['emandate_done_at', 'emandateDoneAt', 'EmandateDoneAt'],
-      agreementSignedDate: ['agreement_signed_date', 'agreementSignedDate', 'AgreementSignedDate'],
-      loanAmount: ['loan_amount', 'loanAmount', 'LoanAmount'],
-      loanDisbursedDate: ['loan_disbursed_date', 'loanDisbursedDate', 'LoanDisbursedDate'],
+    tableName: 'ovly_response_logs',
+    // Only query logs where OVLY accepted the lead
+    successFilterExpr: {
+      FilterExpression: '#rs = :rs',
+      ExpressionAttributeNames: { '#rs': 'responseStatus' },
+      ExpressionAttributeValues: { ':rs': 'success' },
     },
-    successStatuses: ['Unlocked', 'disbursed'],
-    extractLeadId: (responseBody) => {
-      if (!responseBody) return null;
-      let parsed = responseBody;
-      if (typeof responseBody === 'string') {
-        try { parsed = JSON.parse(responseBody); } catch { return null; }
-      }
-      if (parsed.leadId && typeof parsed.leadId === 'object' && parsed.leadId.S) return parsed.leadId.S;
-      if (typeof parsed.leadId === 'string') return parsed.leadId;
-      return null;
+    // OVLY echoes their own lead_id in responseBody — extract it to match against MIS
+    extractLenderIdFromLog: (log) => {
+      const body = tryParseJSON(log.responseBody);
+      return body?.lead_id || body?.leadId?.S || body?.leadId || null;
     },
-    filterUpdateData: (rowData) => {
-      const filtered = { lead_id: rowData.leadId, rejection_reason: rowData.rejectionReason };
-      if (rowData.rejectionReason === 'Unlocked') {
-        if (rowData.unlockAmount)        filtered.unlock_amount = rowData.unlockAmount;
-        if (rowData.appliedDate)         filtered.applied_date = rowData.appliedDate;
-        if (rowData.kycCompletedDate)    filtered.kyc_completed_date = rowData.kycCompletedDate;
-        if (rowData.approvedDate)        filtered.approved_date = rowData.approvedDate;
-        if (rowData.emandateDoneAt)      filtered.emandate_done_at = rowData.emandateDoneAt;
-        if (rowData.agreementSignedDate) filtered.agreement_signed_date = rowData.agreementSignedDate;
-        if (rowData.loanAmount)          filtered.loan_amount = rowData.loanAmount;
-        if (rowData.loanDisbursedDate)   filtered.loan_disbursed_date = rowData.loanDisbursedDate;
-      }
-      return filtered;
-    },
-    updateMethod: 'updateStatusWithData',
+    extractId:      (row) => pick(row, 'lead_id', 'leadId', 'LeadId', 'LEAD_ID'),
+    extractStatus:  (row) => pick(row, 'rejection_reason', 'status', 'Status') || 'Unknown',
+    successStatuses: ['Unlocked', 'disbursed', 'Disbursed'],
+    extractDetails: (row) => ({
+      unlockAmount:        pick(row, 'unlock_amount'),
+      appliedDate:         pick(row, 'applied_date'),
+      kycCompletedDate:    pick(row, 'kyc_completed_date'),
+      approvedDate:        pick(row, 'approved_date'),
+      emandateDoneAt:      pick(row, 'emandate_done_at'),
+      agreementSignedDate: pick(row, 'agreement_signed_date'),
+      loanAmount:          pick(row, 'loan_amount'),
+      loanDisbursedDate:   pick(row, 'loan_disbursed_date'),
+    }),
   },
 
   lendingplate: {
     displayName: 'Lending Plate',
-    tableName: 'lending_plate_response_logs',
-    model: require('../models/leadingPlateResponseLog'),
+    lenderKey: 'LendingPlate',
     allowedExtensions: ['.csv', '.xlsx', '.xls'],
     sheetName: null,
     idType: 'responselog',
-    columnMapping: {
-      referenceId: ['Reference ID', 'reference_id', 'referenceId', 'ref_id', 'RefId'],
-      lpLeadId: ['LP Lead ID', 'lp_lead_id', 'lpLeadId', 'LPLeadID'],
-      lpLeadDate: ['LP Lead Date', 'lp_lead_date', 'lpLeadDate', 'LPLeadDate'],
-      lpStatus: ['LP Status', 'lp_status', 'lpStatus', 'LPStatus'],
-      lpIncomeType: ['LP Income type', 'lp_income_type', 'lpIncomeType', 'LPIncomeType'],
-      lpRejectReason: ['LP Reject Reason', 'lp_reject_reason', 'lpRejectReason', 'LPRejectReason'],
-      api1HitDate: ['API 1 Hit Date', 'api1_hit_date', 'api1HitDate', 'API1HitDate'],
-      api1Response: ['API 1 Response', 'api1_response', 'api1Response', 'API1Response'],
-      api1Reason: ['API 1 Reason', 'api1_reason', 'api1Reason', 'API1Reason'],
-      api2HitDate: ['API 2 Hit Date', 'api2_hit_date', 'api2HitDate', 'API2HitDate'],
-      api2Response: ['API 2 Response', 'api2_response', 'api2Response', 'API2Response'],
-      api2Reason: ['API 2 Reason', 'api2_reason', 'api2Reason', 'API2Reason'],
-      sanctionedAmount: ['Sanctioned Amount', 'sanctioned_amount', 'sanctionedAmount', 'SanctionedAmount'],
-      sanctionedDate: ['Sanctioned Date', 'sanctioned_date', 'sanctionedDate', 'SanctionedDate'],
-      disbursedAmount: ['Disbursed Amount', 'disbursed_amount', 'disbursedAmount', 'DisbursedAmount'],
-      disbursedDate: ['Disbursed Date', 'disbursed_date', 'disbursedDate', 'DisbursedDate'],
-      afMediaSource: ['AF Media Source', 'af_media_source', 'afMediaSource', 'AFMediaSource'],
-      afPartner: ['AF Partner', 'af_partner', 'afPartner', 'AFPartner'],
+    tableName: 'lending_plate_response_logs',
+    // Only query logs where LP accepted/disbursed
+    successFilterExpr: {
+      FilterExpression: '#rs = :rs',
+      ExpressionAttributeNames: { '#rs': 'responseStatus' },
+      ExpressionAttributeValues: { ':rs': 'Success' },
     },
+    // LP stores our ref_id (= our leadId) in the requestPayload we sent
+    extractLenderIdFromLog: (log) => {
+      const payload = tryParseJSON(log.requestPayload);
+      return payload?.ref_id?.S || payload?.ref_id || payload?.reference_id || null;
+    },
+    extractId:      (row) => pick(row, 'Reference ID', 'reference_id', 'referenceId', 'ref_id'),
+    extractStatus:  (row) => pick(row, 'LP Status', 'lp_status', 'lpStatus') || 'Unknown',
     successStatuses: ['DISBURSED', 'SANCTION', 'SANCTION-ACCEPTED'],
-    extractReferenceId: (requestPayload) => {
-      if (!requestPayload) return null;
-      let parsed = requestPayload;
-      if (typeof requestPayload === 'string') {
-        try { parsed = JSON.parse(requestPayload); } catch { return null; }
-      }
-      if (parsed.ref_id && typeof parsed.ref_id === 'object' && parsed.ref_id.S) return parsed.ref_id.S;
-      if (typeof parsed.ref_id === 'string') return parsed.ref_id;
-      if (parsed.reference_id) {
-        if (typeof parsed.reference_id === 'object' && parsed.reference_id.S) return parsed.reference_id.S;
-        if (typeof parsed.reference_id === 'string') return parsed.reference_id;
-      }
-      if (parsed.referenceId) {
-        if (typeof parsed.referenceId === 'object' && parsed.referenceId.S) return parsed.referenceId.S;
-        if (typeof parsed.referenceId === 'string') return parsed.referenceId;
-      }
-      return null;
-    },
-    filterUpdateData: (rowData) => {
-      const filtered = {};
-      ['lpLeadId','lpLeadDate','lpStatus','lpIncomeType','lpRejectReason',
-       'api1HitDate','api1Response','api1Reason','api2HitDate','api2Response',
-       'api2Reason','sanctionedAmount','sanctionedDate','disbursedAmount',
-       'disbursedDate','afMediaSource','afPartner'].forEach(f => {
-        if (rowData[f]) filtered[f] = rowData[f];
-      });
-      return filtered;
-    },
-    updateMethod: 'updateFromCSV',
+    extractDetails: (row) => ({
+      lpLeadId:         pick(row, 'LP Lead ID', 'lp_lead_id'),
+      lpLeadDate:       pick(row, 'LP Lead Date', 'lp_lead_date'),
+      lpIncomeType:     pick(row, 'LP Income type', 'lp_income_type'),
+      lpRejectReason:   pick(row, 'LP Reject Reason', 'lp_reject_reason'),
+      sanctionedAmount: pick(row, 'Sanctioned Amount', 'sanctioned_amount'),
+      sanctionedDate:   pick(row, 'Sanctioned Date', 'sanctioned_date'),
+      disbursedAmount:  pick(row, 'Disbursed Amount', 'disbursed_amount'),
+      disbursedDate:    pick(row, 'Disbursed Date', 'disbursed_date'),
+    }),
   },
 
   // ── New MIS-only lenders (match via leads table) ──────────────────────────
+
+  zype: {
+    displayName: 'Zype',
+    lenderKey: 'ZYPE',
+    allowedExtensions: ['.csv', '.xlsx', '.xls'],
+    sheetName: null,
+    idType: 'phone',
+    successStatuses: ['approved', 'Approved', 'ACCEPT', 'disbursed', 'Disbursed'],
+    extractId: (row) => normalizePhone(String(pick(row, 'mobile_number', 'phone', 'Mobile') || '')),
+    extractStatus: (row) => pick(row, 'approval_status', 'l2_status', 'l1_status') || 'Unknown',
+    extractDetails: (row) => ({
+      l1Status:        pick(row, 'l1_status'),
+      l2Status:        pick(row, 'l2_status'),
+      creditLimit:     pick(row, 'credit_limit'),
+      principalAmount: pick(row, 'principal_amount'),
+      disbursedOn:     pick(row, 'disbursedon_date'),
+      rejectionReason: pick(row, 'rejection_reason'),
+      dropOffStep:     pick(row, 'drop_off_step'),
+      customerName:    pick(row, 'customer_name'),
+      employmentType:  pick(row, 'employment_type'),
+      apiPushDate:     pick(row, 'api_push_date'),
+    }),
+  },
 
   cashvia: {
     displayName: 'Cashvia',
@@ -251,16 +219,25 @@ const LENDER_CONFIGS = {
     displayName: 'FatakPay DCL',
     lenderKey: 'FATAKPAY',
     allowedExtensions: ['.xlsx', '.xls'],
-    sheetName: 'Raw_Data',         // use Raw_Data sheet (ignore Daywise_Summary, Funnel)
-    idType: 'none',
-    // ⚠️ FatakPay DCL MIS has no phone column — only their internal lead_id / lapp_id.
-    // To enable auto-matching: store Fatakpay's lapp_id in pushedTo.FATAKPAY.lappId during API push.
-    successStatuses: ['Disbursement', 'Disbursed'],
-    extractId:      (row) => null,
+    sheetName: 'Raw_Data',
+    idType: 'responselog',
+    tableName: 'fatakpay_response_logs',
+    // Only query logs where FatakPay accepted the lead
+    successFilterExpr: {
+      FilterExpression: 'contains(#rb, :msg)',
+      ExpressionAttributeNames: { '#rb': 'responseBody' },
+      ExpressionAttributeValues: { ':msg': 'You are eligible.' },
+    },
+    // FatakPay returns lapp_id in their response body
+    extractLenderIdFromLog: (log) => {
+      const body = tryParseJSON(log.responseBody);
+      return body?.lapp_id || body?.data?.lapp_id || null;
+    },
+    extractId:      (row) => pick(row, 'lapp_id'),
     extractStatus:  (row) => pick(row, 'stage_name', 'Stage Name') || 'Unknown',
+    successStatuses: ['Disbursement', 'Disbursed'],
     extractDetails: (row) => ({
       lappId:    pick(row, 'lapp_id'),
-      leadId:    pick(row, 'lead_id'),
       remarks:   pick(row, 'remarks'),
       payable:   pick(row, 'payable'),
       leadMonth: pick(row, 'lead_month'),
@@ -271,22 +248,32 @@ const LENDER_CONFIGS = {
     displayName: 'FatakPay PL',
     lenderKey: 'FATAKPAYPL',
     allowedExtensions: ['.xlsx', '.xls'],
-    sheetName: 'Affiliate Data',   // use Affiliate Data sheet (ignore Pivot Summary)
-    idType: 'none',
-    // ⚠️ Same as FatakPay DCL — no phone in MIS file.
-    successStatuses: ['Disbursement', 'Disbursed'],
-    extractId:      (row) => null,
+    sheetName: 'Affiliate Data',
+    idType: 'responselog',
+    tableName: 'fatakpay_pl__response_logs',
+    // Only query logs where FatakPay PL accepted the lead
+    successFilterExpr: {
+      FilterExpression: 'contains(#rb, :msg)',
+      ExpressionAttributeNames: { '#rb': 'responseBody' },
+      ExpressionAttributeValues: { ':msg': 'You are eligible.' },
+    },
+    // FatakPay PL also returns lapp_id in their response body
+    extractLenderIdFromLog: (log) => {
+      const body = tryParseJSON(log.responseBody);
+      return body?.lapp_id || body?.data?.lapp_id || null;
+    },
+    extractId:      (row) => pick(row, 'lapp_id'),
     extractStatus:  (row) => pick(row, 'latest_emi_stage_name') || 'Unknown',
+    successStatuses: ['Disbursement', 'Disbursed'],
     extractDetails: (row) => ({
-      lappId:       pick(row, 'lapp_id'),
-      leadId:       pick(row, 'lead_id'),
-      fullName:     pick(row, 'full_name'),
+      lappId:        pick(row, 'lapp_id'),
+      fullName:      pick(row, 'full_name'),
       disbursedDate: pick(row, 'disb_dt'),
-      loanProposed: pick(row, 'loan_amount_proposed'),
-      loanProvided: pick(row, 'loan_amount_provided'),
-      rejectReason: pick(row, 'final_reject_reason'),
-      city:         pick(row, 'Final_City'),
-      state:        pick(row, 'Final_State'),
+      loanProposed:  pick(row, 'loan_amount_proposed'),
+      loanProvided:  pick(row, 'loan_amount_provided'),
+      rejectReason:  pick(row, 'final_reject_reason'),
+      city:          pick(row, 'Final_City'),
+      state:         pick(row, 'Final_State'),
     }),
   },
 
@@ -355,13 +342,6 @@ function pick(row, ...keys) {
   return null;
 }
 
-function extractColumnValue(row, possibleNames) {
-  for (const name of possibleNames) {
-    const value = row[name] || row[name.toLowerCase()] || row[name.toUpperCase()];
-    if (value !== undefined && value !== null && value !== '') return String(value).trim();
-  }
-  return null;
-}
 
 function normalizePhone(phone) {
   if (!phone) return null;
@@ -391,81 +371,73 @@ function parseFile(filePath, originalFilename, config) {
   return rows;
 }
 
-// ─── Legacy response-log sync (Ovly / LendingPlate) ──────────────────────────
+// ─── Utilities ────────────────────────────────────────────────────────────────
 
-async function findMatchingLogsOvly(fileMap, config) {
-  const matches = [];
-  let lastKey = null;
-  do {
-    const { items, lastEvaluatedKey } = await config.model.findAll({ limit: 500, lastEvaluatedKey: lastKey });
-    items.forEach(item => {
-      const bodyLeadId = config.extractLeadId(item.responseBody);
-      if (bodyLeadId && fileMap.has(bodyLeadId)) {
-        const updateData = config.filterUpdateData(fileMap.get(bodyLeadId));
-        matches.push({ logId: item.logId, matchedLeadId: bodyLeadId, updateData });
-      }
-    });
-    lastKey = lastEvaluatedKey;
-  } while (lastKey);
-  return matches;
+function tryParseJSON(val) {
+  if (!val) return null;
+  if (typeof val === 'object') return val;
+  try { return JSON.parse(val); } catch { return null; }
 }
 
-async function findMatchingLogsLP(fileMap, config) {
-  const matches = [];
-  const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
-  for (const source of sources) {
+// ─── Build lenderLeadId → ourLeadId map from successful response logs only ────
+//
+// Queries each source via source-createdAt-index GSI.
+// FilterExpression pushes success filtering to DynamoDB server-side:
+//   - RCUs stay the same (DynamoDB charges before filter) but returned payload
+//     is much smaller → less data transfer + faster in-memory processing.
+//
+async function buildResponseLogMap(config) {
+  const map = new Map(); // lenderInternalId → ourLeadId
+
+  for (const source of RESPONSELOG_SOURCES) {
     let lastKey = null;
     do {
       const params = {
-        TableName: config.model.TABLE_NAME || 'lending_plate_response_logs',
+        TableName: config.tableName,
         IndexName: 'source-createdAt-index',
-        KeyConditionExpression: '#source = :source',
-        ExpressionAttributeNames: { '#source': 'source' },
-        ExpressionAttributeValues: { ':source': source },
-        Limit: 500,
+        KeyConditionExpression: '#src = :src',
+        ExpressionAttributeNames: {
+          '#src': 'source',
+          ...config.successFilterExpr.ExpressionAttributeNames,
+        },
+        ExpressionAttributeValues: {
+          ':src': source,
+          ...config.successFilterExpr.ExpressionAttributeValues,
+        },
+        FilterExpression: config.successFilterExpr.FilterExpression,
+        // Only fetch the fields we actually need → saves bandwidth
+        ProjectionExpression: 'leadId, responseBody, requestPayload',
       };
       if (lastKey) params.ExclusiveStartKey = lastKey;
-      const result = await config.model.docClient.send(
-        new (require('@aws-sdk/lib-dynamodb').QueryCommand)(params)
-      );
-      (result.Items || []).forEach(item => {
-        const refId = config.extractReferenceId(item.requestPayload);
-        if (refId && fileMap.has(refId)) {
-          const updateData = config.filterUpdateData(fileMap.get(refId));
-          matches.push({ logId: item.logId, matchedRefId: refId, source, updateData });
+
+      const res = await docClient.send(new QueryCommand(params));
+
+      for (const log of (res.Items || [])) {
+        if (!log.leadId) continue;
+        const lenderLeadId = config.extractLenderIdFromLog(log);
+        if (lenderLeadId) {
+          map.set(String(lenderLeadId), log.leadId);
         }
-      });
-      lastKey = result.LastEvaluatedKey;
+      }
+
+      lastKey = res.LastEvaluatedKey;
     } while (lastKey);
   }
-  return matches;
+
+  return map;
 }
 
-async function batchUpdateResponseLogs(matches, config) {
-  const BATCH = 25;
-  const errors = [];
-  const method = config.updateMethod || 'updateCurrentStatus';
-  for (let i = 0; i < matches.length; i += BATCH) {
-    const chunk = matches.slice(i, i + BATCH);
-    const results = await Promise.allSettled(
-      chunk.map(({ logId, updateData }) => config.model[method](logId, updateData))
-    );
-    results.forEach((r, idx) => {
-      if (r.status === 'rejected') errors.push({ logId: chunk[idx].logId, reason: r.reason?.message });
-    });
-  }
-  return errors;
-}
-
-// ─── New MIS → leads table sync ───────────────────────────────────────────────
+// ─── MIS → leads table sync ───────────────────────────────────────────────────
 
 async function syncMISToLeads(rows, config) {
-  const result = { total: rows.length, matched: 0, updated: 0, successful: 0, unmatched: 0, skipped: 0, errors: [] };
+  const result = { totalInFile: rows.length, matched: 0, updated: 0, successful: 0, unmatched: 0, errors: [] };
 
-  if (config.idType === 'none') {
-    result.skipped = rows.length;
-    result.note = `Auto-matching not available for ${config.displayName}. MIS file has no phone or leadId column. Store the lender's internal ID during the API push to enable future matching.`;
-    return result;
+  // Build lenderLeadId → ourLeadId map upfront (one-time query, success-only)
+  let responseLogMap = null;
+  if (config.idType === 'responselog') {
+    console.log(`[${config.lenderKey}] Building response log map from successful entries...`);
+    responseLogMap = await buildResponseLogMap(config);
+    console.log(`[${config.lenderKey}] Response log map built: ${responseLogMap.size} entries`);
   }
 
   for (const row of rows) {
@@ -473,9 +445,16 @@ async function syncMISToLeads(rows, config) {
       const identifier = config.extractId(row);
       if (!identifier) { result.unmatched++; continue; }
 
-      const lead = config.idType === 'phone'
-        ? await Lead.findByPhone(identifier)
-        : await Lead.findById(identifier);
+      let lead;
+      if (config.idType === 'responselog') {
+        const ourLeadId = responseLogMap.get(String(identifier));
+        if (!ourLeadId) { result.unmatched++; continue; }
+        lead = await Lead.findById(ourLeadId);
+      } else if (config.idType === 'phone') {
+        lead = await Lead.findByPhone(identifier);
+      } else {
+        lead = await Lead.findById(identifier);
+      }
 
       if (!lead) { result.unmatched++; continue; }
       result.matched++;
@@ -503,23 +482,6 @@ async function syncMISToLeads(rows, config) {
       }
 
       await Lead.updateByIdNoValidation(lead.leadId, updates);
-
-      // Mirror success into lead_success table
-      if (isSuccess) {
-        try {
-          await LeadSuccess.upsertByLeadId(lead.leadId, {
-            source:    lead.source,
-            phone:     lead.phone,
-            email:     lead.email,
-            panNumber: lead.panNumber,
-            fullName:  lead.fullName,
-            [config.lenderKey]: true,
-          });
-        } catch (lsErr) {
-          console.error(`[${config.lenderKey}] LeadSuccess upsert error for ${lead.leadId}:`, lsErr.message);
-        }
-      }
-
       result.updated++;
     } catch (err) {
       console.error(`[${config.lenderKey}] Row processing error:`, err.message);
@@ -584,58 +546,9 @@ exports.uploadAndSync = async (req, res) => {
 
     if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); filePath = null; }
 
-    let syncResult;
-
-    if (config.idType === 'responselog') {
-      // Legacy: update the lender's own response log table
-      const mapping = config.columnMapping;
-      const parsed = rows.map(row => {
-        const extracted = {};
-        for (const [fieldKey, possibleNames] of Object.entries(mapping)) {
-          const value = extractColumnValue(row, possibleNames);
-          if (value) extracted[fieldKey] = value;
-        }
-        return extracted;
-      });
-
-      if (lender.toLowerCase() === 'ovly') {
-        const fileMap = new Map();
-        parsed.filter(r => r.leadId && r.rejectionReason).forEach(r => fileMap.set(r.leadId, r));
-        const matches = await findMatchingLogsOvly(fileMap, config);
-        const errors  = await batchUpdateResponseLogs(matches, config);
-        const unlockedCount = parsed.filter(r => r.rejectionReason === 'Unlocked').length;
-        syncResult = {
-          lender: config.displayName,
-          totalInFile: fileMap.size,
-          matched: matches.length,
-          updated: matches.length - errors.length,
-          unmatched: fileMap.size - matches.length,
-          unlockedCount,
-          errors,
-        };
-      } else {
-        const fileMap = new Map();
-        parsed.filter(r => r.referenceId).forEach(r => fileMap.set(r.referenceId, r));
-        const matches = await findMatchingLogsLP(fileMap, config);
-        const errors  = await batchUpdateResponseLogs(matches, config);
-        const disbursedCount  = parsed.filter(r => r.lpStatus === 'DISBURSED').length;
-        const sanctionedCount = parsed.filter(r => ['SANCTION', 'SANCTION-ACCEPTED'].includes(r.lpStatus)).length;
-        syncResult = {
-          lender: config.displayName,
-          totalInFile: fileMap.size,
-          matched: matches.length,
-          updated: matches.length - errors.length,
-          unmatched: fileMap.size - matches.length,
-          disbursedCount,
-          sanctionedCount,
-          errors,
-        };
-      }
-    } else {
-      // New: update leads table directly by phone or leadId
-      syncResult = await syncMISToLeads(rows, config);
-      syncResult.lender = config.displayName;
-    }
+    const syncResult = await syncMISToLeads(rows, config);
+    syncResult.lender = config.displayName;
+    syncResult.tableName = 'leads';
 
     res.json({ success: true, ...syncResult });
 
@@ -646,22 +559,5 @@ exports.uploadAndSync = async (req, res) => {
   }
 };
 
-exports.getStats = async (req, res) => {
-  try {
-    const { lender } = req.params;
-    const config = LENDER_CONFIGS[lender.toLowerCase()];
-    if (!config) return res.status(400).json({ success: false, error: `Unknown lender: ${lender}` });
-    if (!config.model) {
-      return res.status(400).json({
-        success: false,
-        error: `Stats not available for ${config.displayName} (MIS-only lender — no response log table)`,
-      });
-    }
-    const stats = await config.model.getStats();
-    res.json({ success: true, lender: config.displayName, stats });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
 
 exports.LENDER_CONFIGS = LENDER_CONFIGS;

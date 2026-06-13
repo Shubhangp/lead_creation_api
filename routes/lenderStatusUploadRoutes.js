@@ -23,6 +23,5 @@ const upload = multer({
 
 router.get('/lenders', lenderSyncController.getLenders);
 router.post('/upload', upload.single('file'), lenderSyncController.uploadAndSync);
-router.get('/stats/:lender', lenderSyncController.getStats);
 
 module.exports = router;
