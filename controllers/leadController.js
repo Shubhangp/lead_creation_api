@@ -218,8 +218,16 @@ async function processLenders(lead, lenders, type) {
     // Update lead with immediate successful lenders
     if (Lead && lead.leadId) {
       try {
-        await Lead.updateByIdNoValidation(lead.leadId, { 
-          immediateSuccessfulLenders: successfulLenders 
+        // Read existing successfulLenders to merge (avoid overwriting MIS-synced ones)
+        const existingLead = await Lead.findById(lead.leadId);
+        const existingSuccessful = Array.isArray(existingLead?.successfulLenders)
+          ? existingLead.successfulLenders
+          : [];
+        const mergedSuccessful = [...new Set([...existingSuccessful, ...successfulLenders])];
+
+        await Lead.updateByIdNoValidation(lead.leadId, {
+          immediateSuccessfulLenders: successfulLenders,
+          successfulLenders: mergedSuccessful
         });
       } catch (error) {
         console.error(`Error updating lead with successful lenders:`, error.message);
@@ -382,10 +390,15 @@ function isLenderSuccess(result, lenderName) {
     'LendingPlate': (result) => result.responseStatus === 'Success',
     'ZYPE': (result) => result.responseStatus === 'ACCEPT' || result.responseBody?.status === 'ACCEPT',
     'FINTIFI': (result) => result.responseStatus === 200,
-    'FATAKPAY': (result) => result.responseBody.message === 'You are eligible.',
+    'FATAKPAY': (result) => result.responseBody?.message === 'You are eligible.',
+    'FATAKPAYPL': (result) => result.responseBody?.message === 'You are eligible.',
     'RAMFINCROP': (result) => result.responseStatus === 'success',
-    "MPOKKET": (result) => result.responseStatus === 200,
+    'MPOKKET': (result) => result.responseStatus === 200,
     'CRMPaisa': (result) => result.responseStatus === 1,
+    'INDIALENDS': (result) => result.responseBody?.info?.message === 'Verification code sent to your mobile phone',
+    'MyMoneyMantra': (result) => result.responseStatus === 200 || result.responseStatus === 201,
+    'CreditSea': (result) => result.responseStatus === 'LEAD_CREATED',
+    'CreditPluse': (result) => result.responseStatus === 'Success',
   };
  
   const checkSuccess = successCriteria[lenderName];
@@ -474,7 +487,7 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
 
     const cpResults = await CreditPulseResponseLog.findByLeadId(leadId);
     const cpResult = cpResults.find(log => log.responseStatus === 'Success');
-    if (cpResult) successfulLenders.push('LendingPlate');
+    if (cpResult) successfulLenders.push('CreditPluse');
 
     const MpokketResults = await MpokketResponseLog.findByLeadId(leadId);
     const MpokketResult = MpokketResults.items.find(log => 
@@ -503,7 +516,15 @@ async function getAllSuccessfulLendersForLead(leadId, lead) {
           fullName: lead.fullName,
           ...lenderFlags
         });
-        
+
+        // ✅ Sync successfulLenders list on the leads table (merge with any MIS-synced ones)
+        const existingLead = await Lead.findById(leadId);
+        const existingSuccessful = Array.isArray(existingLead?.successfulLenders)
+          ? existingLead.successfulLenders
+          : [];
+        const mergedSuccessful = [...new Set([...existingSuccessful, ...successfulLenders])];
+        await Lead.updateByIdNoValidation(leadId, { successfulLenders: mergedSuccessful });
+
         console.log(`[LeadSuccess] Successfully upserted record for leadId: ${leadId}`);
       } catch (upsertError) {
         console.error(`[LeadSuccess] Error upserting leadId ${leadId}:`, upsertError);

@@ -13,7 +13,10 @@ const TABLE_NAME = 'lead_success';
 const LENDERS = [
   'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI',
   'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-  'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea'
+  'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea',
+  // MIS lenders (status updated via file upload, not immediate API response)
+  'CASHVIA', 'DIGICREDIT', 'TAP4CREDIT', 'SPEEDOLOAN',
+  'PAISABOXX', 'HEROFINCORP', 'PREFR'
 ];
 
 const ALL_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
@@ -43,6 +46,13 @@ class LeadSuccess {
       SML: successData.SML || false,
       MPOKKET: successData.MPOKKET || false,
       CreditSea: successData.CreditSea || false,
+      CASHVIA: successData.CASHVIA || false,
+      DIGICREDIT: successData.DIGICREDIT || false,
+      TAP4CREDIT: successData.TAP4CREDIT || false,
+      SPEEDOLOAN: successData.SPEEDOLOAN || false,
+      PAISABOXX: successData.PAISABOXX || false,
+      HEROFINCORP: successData.HEROFINCORP || false,
+      PREFR: successData.PREFR || false,
       createdAt: new Date().toISOString()
     };
 
@@ -506,6 +516,13 @@ class LeadSuccess {
       SML: updates.SML || false,
       MPOKKET: updates.MPOKKET || false,
       CreditSea: updates.CreditSea || false,
+      CASHVIA: updates.CASHVIA || false,
+      DIGICREDIT: updates.DIGICREDIT || false,
+      TAP4CREDIT: updates.TAP4CREDIT || false,
+      SPEEDOLOAN: updates.SPEEDOLOAN || false,
+      PAISABOXX: updates.PAISABOXX || false,
+      HEROFINCORP: updates.HEROFINCORP || false,
+      PREFR: updates.PREFR || false,
       createdAt: new Date().toISOString(),
     };
 
