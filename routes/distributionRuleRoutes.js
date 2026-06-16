@@ -11,6 +11,13 @@ router.route('/')
   .get(distributionRuleController.getAllDistributionRules)
   .post(distributionRuleController.createDistributionRule);
 
+// Landing-page (web) config — additive to the S2S distribution system.
+// Declared before '/:source' so it never gets shadowed by the generic route.
+router.route('/web-config/:source')
+  .get(distributionRuleController.getWebConfigBySource)
+  .put(distributionRuleController.upsertWebConfigBySource)
+  .patch(distributionRuleController.upsertWebConfigBySource);
+
 router.route('/:source')
   .get(distributionRuleController.getDistributionRuleBySource)
   .patch(distributionRuleController.updateDistributionRule)

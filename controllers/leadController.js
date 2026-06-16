@@ -924,6 +924,36 @@ exports.getLead = async (req, res) => {
 };
 
 // Get lead by phone
+// Mobile-only capture for landing formMode = 'mobileOnly'.
+// Saves phone + source + campaign_identifier (utm_medium). If the phone already
+// exists, only campaign_identifier is updated. No PAN/email/OTP required.
+exports.mobileCapture = async (req, res) => {
+  try {
+    const { phone, source, campaign_identifier } = req.body;
+
+    if (!phone || !/^[6-9][0-9]{9}$/.test(String(phone))) {
+      return res.status(400).json({ message: 'A valid 10-digit phone is required.' });
+    }
+
+    const result = await Lead.upsertMobileCapture({
+      phone: String(phone),
+      source: source || null,
+      campaign_identifier: campaign_identifier || source || null,
+    });
+
+    return res.status(result.created ? 201 : 200).json({
+      status: 'success',
+      created: result.created,
+      data: { lead: result.lead },
+    });
+  } catch (error) {
+    if (error.errors) {
+      return res.status(400).json({ message: 'Validation failed', errors: error.errors });
+    }
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
 exports.getLeadByPhone = async (req, res) => {
   try {
     const lead = await Lead.findByPhone(req.params.phone);

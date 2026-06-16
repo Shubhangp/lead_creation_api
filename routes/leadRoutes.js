@@ -1,5 +1,5 @@
 const express = require('express');
-const { createLead, getAllLeads, processFile, getJobStatus, getLead, createUATLead, getLeadByPhone, updateLeadById } = require('../controllers/leadController');
+const { createLead, getAllLeads, processFile, getJobStatus, getLead, createUATLead, getLeadByPhone, updateLeadById, mobileCapture } = require('../controllers/leadController');
 const apiKeyAuth = require('../middlewares/apiKeyAuth');
 const apiKeyUATAuth = require('../middlewares/apiKeyUATAuth');
 const upload = require('../middlewares/uploadMiddleware');
@@ -12,6 +12,8 @@ router.route('/UAT').post(apiKeyUATAuth, createUATLead);
 router.post('/upload', upload.single('file'), processFile);
 
 router.get('/jobs/:jobId', getJobStatus);
+
+router.post('/mobile-capture', mobileCapture);
 
 router.get('/lead/:phone', getLeadByPhone);
 

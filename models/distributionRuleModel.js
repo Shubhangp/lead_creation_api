@@ -17,6 +17,10 @@ class DistributionRule {
       source: ruleData.source,
       active: ruleData.active !== undefined ? ruleData.active : true,
       rules: ruleData.rules,
+      // webConfig is additive and independent of the S2S `rules` / `rcsConfig`.
+      // It powers the public landing experience (/form + /success). Only stored
+      // when provided so existing S2S-only rows are unaffected.
+      ...(ruleData.webConfig !== undefined ? { webConfig: ruleData.webConfig } : {}),
       rcsConfig: ruleData.rcsConfig || {
         enabled: true,
         lenderPriority: [],

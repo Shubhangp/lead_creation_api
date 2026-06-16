@@ -248,10 +248,69 @@ class Lead {
       address: leadData.address || null,
       pincode: leadData.pincode || null,
       consent: leadData.consent,
+      // utm_medium that triggered the most recent visit (landing campaign).
+      campaign_identifier: leadData.campaign_identifier || null,
       visited: false,
       createdAt,
       datePartition: this.getDatePartition(createdAt),
     };
+  }
+
+  /**
+   * Mobile-only capture (landing formMode = 'mobileOnly').
+   *
+   * Stores ONLY phone, source and campaign_identifier (utm_medium). Bypasses
+   * the full lead validation (no PAN/email yet).
+   *
+   * - If the phone already exists: update campaign_identifier ONLY and return
+   *   { created: false }.
+   * - Otherwise: insert a minimal lead row and return { created: true }.
+   */
+  static async upsertMobileCapture({ phone, source, campaign_identifier }) {
+    if (!phone) {
+      const error = new Error('Phone is required');
+      error.errors = ['Phone is required'];
+      throw error;
+    }
+
+    const existing = await this.findByPhone(phone);
+
+    if (existing) {
+      const updated = await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { leadId: existing.leadId },
+        UpdateExpression: 'SET campaign_identifier = :ci, updatedAt = :now',
+        ExpressionAttributeValues: {
+          ':ci': campaign_identifier || existing.campaign_identifier || null,
+          ':now': new Date().toISOString(),
+        },
+        ReturnValues: 'ALL_NEW',
+      }));
+      return { created: false, lead: updated.Attributes };
+    }
+
+    const now = new Date().toISOString();
+    const item = {
+      leadId: uuidv4(),
+      source: source || null,
+      phone,
+      campaign_identifier: campaign_identifier || null,
+      // Minimal placeholder fields so downstream readers don't choke on missing keys.
+      fullName: null,
+      email: null,
+      panNumber: null,
+      consent: true,
+      visited: false,
+      mobileOnly: true,
+      createdAt: now,
+      updatedAt: now,
+      datePartition: this.getDatePartition(now),
+    };
+
+    await docClient.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+    await this._incrementCounter(source);
+
+    return { created: true, lead: item };
   }
 
   static async findById(leadId) {
