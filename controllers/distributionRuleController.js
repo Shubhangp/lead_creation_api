@@ -1,5 +1,5 @@
 const DistributionRule = require('../models/distributionRuleModel');
-const { buildDefaultWebConfig } = require('../config/webConfigDefaults');
+const { buildDefaultWebConfig, normalizeWebConfig } = require('../config/webConfigDefaults');
 const { resolveSource } = require('../config/sourceAliases');
 
 // Get all distribution rules
@@ -88,7 +88,7 @@ exports.createDistributionRule = async (req, res) => {
     // Add webConfig (landing-page config) if provided — additive, independent
     // of the S2S `rules` / `rcsConfig`.
     if (webConfig) {
-      ruleData.webConfig = webConfig;
+      ruleData.webConfig = normalizeWebConfig(webConfig);
     }
 
     // Create new rule
@@ -119,7 +119,7 @@ exports.updateDistributionRule = async (req, res) => {
     if (rules) updateData.rules = rules;
     if (active !== undefined) updateData.active = active;
     if (rcsConfig) updateData.rcsConfig = rcsConfig;
-    if (webConfig) updateData.webConfig = webConfig;
+    if (webConfig) updateData.webConfig = normalizeWebConfig(webConfig);
     
     updateData.lastUpdatedBy = req.user ? req.user.email : 'system';
     
@@ -215,6 +215,12 @@ exports.getWebConfigBySource = async (req, res) => {
       webConfig = buildDefaultWebConfig();
     }
 
+    // Expand on read: rows may have been stored with a compact `lenderCodes`
+    // shape (dashboard) instead of full `lenders`. normalizeWebConfig always
+    // returns full lender objects so the frontend can render without a catalog,
+    // and is idempotent for rows that already hold full `lenders`.
+    webConfig = normalizeWebConfig(webConfig);
+
     res.status(200).json({
       status: 'success',
       data: {
@@ -243,14 +249,15 @@ exports.getWebConfigBySource = async (req, res) => {
 exports.upsertWebConfigBySource = async (req, res) => {
   try {
     const { source } = req.params;
-    const { webConfig } = req.body;
 
-    if (!webConfig || typeof webConfig !== 'object') {
+    if (!req.body.webConfig || typeof req.body.webConfig !== 'object') {
       return res.status(400).json({
         status: 'fail',
         message: 'webConfig object is required',
       });
     }
+
+    const webConfig = normalizeWebConfig(req.body.webConfig);
 
     const existing = await DistributionRule.findBySource(source);
 
