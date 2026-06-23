@@ -1,4 +1,14 @@
 const LENDER_CATALOG = {
+  OVLY: {
+      name: "Olyv Finance", logo: "/Olyv_Logo.webp",
+      maxAmount: 200000, minInterest: 18,
+      processingTime: "3-5 Days", approval: "VERY GOOD",
+      website: `https://app.olyv.co.in/login?utm_source=Ratecut&utm_campaign=Ratecut_link1&utm_medium=${src_nick}`,
+      apr: 12.5, tag: "Top Pick", type: "NBFC · AAA rated",
+      rateRange: "12% – 18% p.a.", processingFee: "1% of loan amount",
+      prepayment: "Nil", disbursal: "Same day",
+      docs: ["PAN", "Aadhaar", "Bank statement", "Salary slip"],
+    },
   FATAKPAY: {
     code: 'FATAKPAY',
     name: 'Fatak Pay', logo: '/fatak_pay.webp',
