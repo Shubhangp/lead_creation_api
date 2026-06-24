@@ -10,7 +10,7 @@ const LendingPlateResponseLog = require('../models/leadingPlateResponseLog');
 const FintifiResponseLog = require('../models/fintifiResponseLog');
 const ZypeResponseLog = require('../models/ZypeResponseLogModel');
 const FatakPayResponseLog = require('../models/fatakPayResponseLog');
-const FatakPayResponseLogPL = require('../models/fatakPayPLResponseLog')
+const FatakPayResponseLogPL = require('../models/fatakPayPLResponseLog');
 const RamFinCropLog = require('../models/ramFinCropLogModel');
 // const vrindaLog = require('../models/VrindaFintechResponseLog');
 const IndiaLendsResponseLog = require('../models/indiaLendsResponseLog');
@@ -19,6 +19,8 @@ const CrmPaisaResponseLog = require('../models/crmPaisaResponseLogModel');
 const MMMResponseLog = require('../models/mmmResponseLog');
 const CreditPulseResponseLog = require('../models/creditPulseResponseLog');
 const CreditSeaResponseLog = require('../models/creditSeaResponseLog');
+const CreditHaatResponseLog = require('../models/creditHaatResponseLog');
+const CreditLinksResponseLog = require('../models/creditLinksResponseLog');
 
 async function sendToSML(lead) {
   const {
@@ -1713,6 +1715,222 @@ async function sendToCreditSea(lead) {
   }
 }
 
+const mapProfession = (profession) => {
+  if (!profession) return 'Salaried';
+  const p = String(profession).toLowerCase();
+  if (p.includes('salar')) return 'Salaried';
+  if (p.includes('self')) return 'Self-employed';
+  if (p.includes('business')) return 'Business Owner';
+  return 'Others';
+};
+ 
+// Main entry: push a lead to CreditHaat
+async function sendToCreditHaat(lead) {
+  console.log('CH', lead);
+  const {
+    leadId, fullName, firstName, lastName, phone, panNumber, dateOfBirth,
+    pincode, salary, source, email, gender, addressLine1, addressLine2
+  } = lead;
+ 
+  let fName = firstName;
+  let lName = lastName;
+  if ((!fName || !lName) && fullName) {
+    const parts = fullName.trim().split(/\s+/);
+    fName = fName || parts[0] || '';
+    lName = lName || (parts.length > 1 ? parts.slice(1).join(' ') : '');
+  }
+ 
+  const payload = {
+    agentid:               619898394,
+    agent:                 "RateCut",
+    customerid:            String(leadId),
+    firstname:             fName,
+    lastname:              lName,
+    mobilenumber:          phone,
+    dob:                   formatToYYYYMMDD(dateOfBirth),
+    gender:                gender || 'Rather not say',
+    email:                 email,
+    profession:            mapProfession(lead.profession),
+    income:                String(salary),
+    payment_type:          '1',
+    pincode:               pincode,
+    pan:                   panNumber,
+    addressline1:          addressLine1 || '',
+    addressline2:          addressLine2 || '',
+    consent_timestamp:     new Date().toISOString().slice(0, 19).replace('T', ' '),
+    consent_flag:          'Y',
+    explicit_consent_flag: 'Y'
+  };
+ 
+  const result = await registerCustomer(payload);
+ 
+  if (!result) {
+    return CreditHaatResponseLog.create({
+      leadId,
+      source,
+      requestPayload: payload,
+      responseStatus: 'Fail',
+      responseBody: { code: 500, message: 'Request failed' }
+    });
+  }
+ 
+  const isSuccess = result.code === 200 || result.code === '200';
+ 
+  return CreditHaatResponseLog.create({
+    leadId,
+    source,
+    requestPayload: payload,
+    responseStatus: isSuccess ? 'Success' : 'Fail',
+    responseBody: result,
+    customerId: result?.data?.customer_id || null
+  });
+}
+ 
+// CreditHaat User Register API (V1 - with consent)
+ 
+const registerCustomer = async (payload) => {
+  const url = 'https://loan.credithaat.com/user/register/api/v1'
+  const headers = {
+    'Content-Type': 'application/json',
+    'token': "Y3JlZGl0aGFhdHRlc3RzZXJ2ZXI="
+  };
+  try {
+    const response = await axios.post(url, payload, { headers });
+    console.log('CreditHaat response:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('Error in CreditHaat register API:', error.response?.data || error.message);
+    return error.response?.data || false;
+  }
+};
+ 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CreditLinks Partner API (v2.13)
+// Docs: Create Lead (#2) + Get Offers (#4)
+// ─────────────────────────────────────────────────────────────────────────────
+const CREDITLINKS_BASE_URL ='https://l.creditlinks.in:8000';
+const CREDITLINKS_API_KEY = process.env.CREDITLINKS_API_KEY || '';
+
+// Map internal jobType → CreditLinks employmentStatus (1 = Salaried, 2 = Self employed)
+function mapEmploymentStatusToCreditLinks(jobType) {
+  const j = String(jobType || '').toUpperCase();
+  return (j.includes('SELF') || j.includes('BUSINESS')) ? 2 : 1;
+}
+
+// Consent timestamp in CreditLinks format: YYYY-MM-DD HH:MM:SS
+function creditLinksConsentTimestamp() {
+  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
+
+async function sendToCreditLinks(lead) {
+  console.log('CreditLinks', lead);
+
+  const {
+    leadId, fullName, firstName, lastName, phone, email, dateOfBirth,
+    pincode, jobType, panNumber, salary, source, employerName, officePincode
+  } = lead;
+
+  // ─── Split name ─────────────────────────────────────────────────────────────
+  let fName = firstName;
+  let lName = lastName;
+  if ((!fName || !lName) && fullName) {
+    const parts = fullName.trim().split(/\s+/);
+    fName = fName || parts[0] || '';
+    lName = lName || (parts.length > 1 ? parts.slice(1).join(' ') : parts[0] || '');
+  }
+
+  const employmentStatus = mapEmploymentStatusToCreditLinks(jobType);
+
+  // ─── Build Create Lead payload (#2) ──────────────────────────────────────────
+  const payload = {
+    mobileNumber: String(phone || '').replace(/\D/g, '').slice(-10),
+    firstName: fName,
+    lastName: lName,
+    pan: panNumber,
+    dob: formatToYYYYMMDD(dateOfBirth),
+    email,
+    pincode: String(pincode || ''),
+    monthlyIncome: parseInt(salary, 10) || 0,
+    consumerConsentDate: creditLinksConsentTimestamp(),
+    consumerConsentIp: lead.consentIp || lead.ip || '0.0.0.0',
+    employmentStatus,
+    waitForAllOffers: 0
+  };
+
+  if (employmentStatus === 1) {
+    // Salaried → employerName + officePincode are mandatory
+    payload.employerName = employerName || 'NA';
+    payload.officePincode = String(officePincode || pincode || '');
+  } else {
+    // Self employed → use "No business proof" (8) to keep the lead lightweight
+    payload.businessRegistrationType = 8;
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: CREDITLINKS_API_KEY
+  };
+
+  let createResponse;
+  let httpStatus;
+  try {
+    const res = await axios.post(
+      `${CREDITLINKS_BASE_URL}/api/v2/partner/create-lead`,
+      payload,
+      { headers, validateStatus: () => true }
+    );
+    createResponse = res.data;
+    httpStatus = res.status;
+    console.log('CreditLinks create-lead response:', httpStatus, JSON.stringify(createResponse));
+  } catch (error) {
+    console.error('CreditLinks create-lead error:', error?.response?.data || error.message);
+    return CreditLinksResponseLog.create({
+      leadId,
+      source,
+      requestPayload: payload,
+      responseStatus: 'FAILED',
+      responseBody: { step: 'create-lead', error: error?.response?.data || error.message }
+    });
+  }
+
+  // ─── Map response → responseStatus ────────────────────────────────────────────
+  const clLeadId = createResponse?.leadId || null;
+  let responseStatus;
+  if (httpStatus === 201) responseStatus = 'LEAD_CREATED';
+  else if (httpStatus === 200 && clLeadId) responseStatus = 'ALREADY_EXISTS';
+  else if (httpStatus === 422) responseStatus = 'NOT_ELIGIBLE';
+  else if (clLeadId) responseStatus = 'LEAD_CREATED';
+  else responseStatus = 'FAILED';
+
+  // ─── Get Offers (#4) to enrich offersCount ───────────────────────────────────
+  let offersCount = null;
+  let offersBody = null;
+  if (clLeadId && (responseStatus === 'LEAD_CREATED' || responseStatus === 'ALREADY_EXISTS')) {
+    try {
+      const offersRes = await axios.get(
+        `${CREDITLINKS_BASE_URL}/api/partner/get-offers/${clLeadId}`,
+        { headers, validateStatus: () => true }
+      );
+      offersBody = offersRes.data;
+      if (Array.isArray(offersBody?.offers)) offersCount = offersBody.offers.length;
+      console.log('CreditLinks get-offers response:', offersRes.status, `offers=${offersCount}`);
+    } catch (error) {
+      console.error('CreditLinks get-offers error:', error?.response?.data || error.message);
+    }
+  }
+
+  return CreditLinksResponseLog.create({
+    leadId,
+    source,
+    creditLinksLeadId: clLeadId,
+    offersCount,
+    requestPayload: payload,
+    responseStatus,
+    responseBody: { step: 'create-lead', httpStatus, ...createResponse, offers: offersBody?.offers }
+  });
+}
+
 module.exports = {
   sendToSML,
   sendToFreo,
@@ -1728,5 +1946,7 @@ module.exports = {
   sendToIndiaLends,
   sendToCrmPaisa,
   sendToCreditPulse,
-  sendToCreditSea
+  sendToCreditSea,
+  sendToCreditHaat,
+  sendToCreditLinks,
 };

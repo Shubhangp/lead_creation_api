@@ -1,5 +1,6 @@
 'use strict';
 
+const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 const XLSX = require('xlsx');
@@ -28,6 +29,8 @@ const {
     sendToCrmPaisa,
     sendToCreditPulse,
     sendToCreditSea,
+    sendToCreditLinks,
+    sendToCreditHaat,
 } = require('../services/lenderService');
 
 // ============================================================================
@@ -217,6 +220,8 @@ const LENDER_MAP = {
     CRMPaisa: sendToCrmPaisa,
     CreditPluse: sendToCreditPulse,
     CreditSea: sendToCreditSea,
+    CreditLinks: sendToCreditLinks,
+    CreditHaat: sendToCreditHaat,
 };
 
 // ============================================================================
@@ -498,6 +503,41 @@ exports.resumeIncompletePushJobs = async () => {
 /**
  * POST /api/v1/process-leads/upload
  */
+/**
+ * Shared processing routine. Reads an xlsx file from disk, streams it row by
+ * row and bulk-inserts into the process_leads table. Used by both the classic
+ * single-shot upload and the chunked upload flow.
+ */
+async function processExcelFile(tempFilePath, source) {
+    const uploadBatch = `${source}-${Date.now()}`;
+    const summary = { total: 0, succeeded: 0, failed: 0, skipped: 0 };
+
+    for await (const chunk of streamExcelChunks(tempFilePath, 500)) {
+        const leadsData = [];
+        for (const { raw } of chunk) {
+            summary.total++;
+            const leadData = rowToLeadData(raw);
+            if (Object.keys(leadData).length === 0) { summary.skipped++; continue; }
+            leadData.source = leadData.source || source;
+            leadData.uploadBatch = uploadBatch;
+            leadsData.push(leadData);
+        }
+        if (leadsData.length > 0) {
+            const { successful, failed } = await ProcessLead.createBulk(leadsData);
+            summary.succeeded += successful.length;
+            summary.failed += failed.length;
+        }
+    }
+
+    if (summary.succeeded > 0) {
+        await ProcessLead.incrementCounterBy(source, summary.succeeded).catch((e) =>
+            console.error('[ProcessLead] Counter error:', e.message)
+        );
+    }
+
+    return { summary, uploadBatch };
+}
+
 exports.uploadProcessLeads = [
     upload.single('file'),
     async (req, res) => {
@@ -510,31 +550,7 @@ exports.uploadProcessLeads = [
             }
 
             const source = req.body.source;
-            const uploadBatch = `${source}-${Date.now()}`;
-            const summary = { total: 0, succeeded: 0, failed: 0, skipped: 0 };
-
-            for await (const chunk of streamExcelChunks(tempFilePath, 500)) {
-                const leadsData = [];
-                for (const { raw } of chunk) {
-                    summary.total++;
-                    const leadData = rowToLeadData(raw);
-                    if (Object.keys(leadData).length === 0) { summary.skipped++; continue; }
-                    leadData.source = leadData.source || source;
-                    leadData.uploadBatch = uploadBatch;
-                    leadsData.push(leadData);
-                }
-                if (leadsData.length > 0) {
-                    const { successful, failed } = await ProcessLead.createBulk(leadsData);
-                    summary.succeeded += successful.length;
-                    summary.failed += failed.length;
-                }
-            }
-
-            if (summary.succeeded > 0) {
-                await ProcessLead.incrementCounterBy(source, summary.succeeded).catch((e) =>
-                    console.error('[ProcessLead] Counter error:', e.message)
-                );
-            }
+            const { summary, uploadBatch } = await processExcelFile(tempFilePath, source);
 
             return res.status(200).json({
                 success: true,
@@ -549,6 +565,106 @@ exports.uploadProcessLeads = [
         }
     },
 ];
+
+// ============================================================================
+// CHUNKED UPLOAD
+// ----------------------------------------------------------------------------
+// Platforms in front of this API (e.g. Vercel / some proxies) reject a single
+// request body larger than a few MB with HTTP 413. To upload large xlsx files
+// the frontend slices the file into small chunks and sends them one by one;
+// the backend appends each chunk to a temp file and processes it once the last
+// chunk has arrived. Each individual request stays well under the size limit.
+// ============================================================================
+
+// Per-upload temp directory. We append chunks sequentially to a single file.
+const CHUNK_UPLOAD_DIR = path.join(os.tmpdir(), 'process-lead-chunks');
+
+function chunkFilePath(uploadId) {
+    // Strip anything that isn't a safe id char to avoid path traversal.
+    const safeId = String(uploadId).replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!safeId) return null;
+    return path.join(CHUNK_UPLOAD_DIR, `${safeId}.part`);
+}
+
+/**
+ * POST /api/v1/process-leads/upload/chunk
+ *
+ * Headers:
+ *   x-upload-id     unique id for this upload session (generated by client)
+ *   x-chunk-index   0-based index of this chunk
+ *   x-total-chunks  total number of chunks
+ * Body: raw binary slice of the file (application/octet-stream)
+ *
+ * Appends the chunk to the upload's temp file. Chunks MUST be sent in order.
+ */
+exports.uploadProcessLeadsChunk = [
+    express.raw({ type: '*/*', limit: '20mb' }),
+    async (req, res) => {
+        try {
+            const uploadId = req.headers['x-upload-id'];
+            const chunkIndex = parseInt(req.headers['x-chunk-index'], 10);
+            const totalChunks = parseInt(req.headers['x-total-chunks'], 10);
+
+            if (!uploadId || Number.isNaN(chunkIndex) || Number.isNaN(totalChunks)) {
+                return res.status(400).json({ success: false, message: 'Missing x-upload-id / x-chunk-index / x-total-chunks headers' });
+            }
+            if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+                return res.status(400).json({ success: false, message: 'Empty chunk body' });
+            }
+
+            const filePath = chunkFilePath(uploadId);
+            if (!filePath) return res.status(400).json({ success: false, message: 'Invalid x-upload-id' });
+
+            await fs.promises.mkdir(CHUNK_UPLOAD_DIR, { recursive: true });
+
+            // First chunk truncates/creates the file; later chunks append.
+            const flag = chunkIndex === 0 ? 'w' : 'a';
+            await fs.promises.writeFile(filePath, req.body, { flag });
+
+            return res.status(200).json({
+                success: true,
+                message: `Chunk ${chunkIndex + 1}/${totalChunks} received`,
+                received: req.body.length,
+            });
+        } catch (err) {
+            console.error('[ProcessLead] Chunk upload error:', err);
+            return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
+        }
+    },
+];
+
+/**
+ * POST /api/v1/process-leads/upload/complete
+ *
+ * Body (JSON): { uploadId, source }
+ *
+ * Processes the fully-assembled temp file the same way the classic upload does,
+ * then deletes it.
+ */
+exports.completeProcessLeadsUpload = async (req, res) => {
+    const { uploadId, source } = req.body || {};
+    const filePath = uploadId ? chunkFilePath(uploadId) : null;
+    try {
+        if (!uploadId || !filePath) return res.status(400).json({ success: false, message: 'uploadId is required' });
+        if (!source) return res.status(400).json({ success: false, message: 'source is required' });
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ success: false, message: 'No uploaded chunks found for this uploadId' });
+        }
+
+        const { summary, uploadBatch } = await processExcelFile(filePath, source);
+
+        return res.status(200).json({
+            success: true,
+            message: `Upload complete. ${summary.succeeded} saved, ${summary.failed} failed, ${summary.skipped} skipped.`,
+            summary, uploadBatch, source,
+        });
+    } catch (err) {
+        console.error('[ProcessLead] Complete upload error:', err);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
+    } finally {
+        if (filePath) fs.unlink(filePath, () => { });
+    }
+};
 
 /**
  * POST /api/v1/process-leads/push

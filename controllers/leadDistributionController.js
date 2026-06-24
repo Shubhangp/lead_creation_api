@@ -17,7 +17,9 @@ const {
   sendToIndiaLends,
   sendToCrmPaisa,
   sendToCreditPulse,
-  sendToCreditSea
+  sendToCreditSea,
+  sendToCreditLinks,
+  sendToCreditHaat
 } = require('../services/lenderService');
 
 /**
@@ -119,6 +121,8 @@ const getLenderSendFunction = (lender) => {
     'CRMPaisa': sendToCrmPaisa,
     "CreditPluse": sendToCreditPulse,
     "CreditSea": sendToCreditSea,
+    "CreditLinks": sendToCreditLinks,
+    "CreditHaat": sendToCreditHaat,
   };
 
   return lenderMap[lender];

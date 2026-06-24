@@ -23,7 +23,9 @@ const {
   sendToIndiaLends,
   sendToCrmPaisa,
   sendToCreditPulse,
-  sendToCreditSea
+  sendToCreditSea,
+  sendToCreditLinks,
+  sendToCreditHaat
 } = require('../services/lenderService');
 
 // Import log models for tracking
@@ -302,6 +304,8 @@ async function sendToLender(lead, lender) {
     "CRMPaisa": sendToCrmPaisa,
     "CreditPluse": sendToCreditPulse,
     "CreditSea": sendToCreditSea,
+    "CreditLinks": sendToCreditLinks,
+    "CreditHaat": sendToCreditHaat,
   };
 
   // Call the appropriate handler for the lender
@@ -724,6 +728,8 @@ const LENDER_MAP = {
   CRMPaisa:      sendToCrmPaisa,
   CreditPluse:   sendToCreditPulse,
   CreditSea:     sendToCreditSea,
+  CreditLinks:   sendToCreditLinks,
+  CreditHaat:    sendToCreditHaat,
 };
 
 const sendLeadsToLender = async (lender, leads) => {

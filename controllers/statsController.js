@@ -66,6 +66,16 @@ const LENDER_CONFIG = {
     statsType: 'status',
     displayName: 'Credit Sea'
   },
+  creditlinks: {
+    modelPath: '../models/creditLinksResponseLog.js',
+    statsType: 'status',
+    displayName: 'CreditLinks'
+  },
+  credithaat: {
+    modelPath: '../models/creditHaatResponseLog.js',
+    statsType: 'status',
+    displayName: 'CreditHaat'
+  },
   // ── RCS Queue ──────────────────────────────────────────────────────────────
   rcs_queue: {
     modelPath: '../models/rcsModels.js',

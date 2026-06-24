@@ -1,6 +1,8 @@
 const express = require('express');
 const {
   uploadProcessLeads,
+  uploadProcessLeadsChunk,
+  completeProcessLeadsUpload,
   pushProcessLeads,
   getPushJobStatus,
   getAvailableLenders,
@@ -13,6 +15,11 @@ const router = express.Router();
 // Upload xlsx → save to process_leads table
 // uploadProcessLeads already contains the multer middleware array
 router.post('/upload', uploadProcessLeads);
+
+// Chunked upload (for large files that exceed the platform's request size limit)
+// Client sends raw binary slices to /upload/chunk, then calls /upload/complete.
+router.post('/upload/chunk', uploadProcessLeadsChunk);
+router.post('/upload/complete', completeProcessLeadsUpload);
 
 // Trigger push: process_leads → leads table → lenders
 router.post('/push', pushProcessLeads);
