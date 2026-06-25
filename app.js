@@ -19,6 +19,7 @@ const lenderStatusUploadRoutes = require('./routes/lenderStatusUploadRoutes');
 const leadPortalRoutes = require('./routes/leadPortalRoutes');
 const leadbulkUploadRoutes = require('./routes/leadbulkUploadRoutes');
 const processLeadsRoutes = require('./routes/processLeadRoutes');
+const configRoutes = require('./routes/configRoutes');
 
 const app = express();
 if (process.env.NODE_ENV === 'development') {
@@ -56,6 +57,7 @@ app.use('/api/v1/uploadStatus', lenderStatusUploadRoutes);
 app.use('/api/v1/lendportal', leadPortalRoutes);
 app.use('/api/v1/bulk-upload', leadbulkUploadRoutes);
 app.use('/api/v1/process-leads', processLeadsRoutes);
+app.use('/api/v1/config', configRoutes);
 
 // rcsScheduler.init();
 // // Start continuous scheduler when server starts

@@ -189,7 +189,7 @@ class OvlyResponseLog {
 
     try {
       // Get all known sources from environment or default to OVLY
-      const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+      const sources = require('../config/registry').RESPONSELOG_SOURCES;
 
       console.log(`[OVLY] Counting ${sources.length} sources:`, sources);
 
@@ -351,7 +351,7 @@ class OvlyResponseLog {
     const startTime = Date.now();
 
     try {
-      const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+      const sources = require('../config/registry').RESPONSELOG_SOURCES;
 
       console.log(`[OVLY] Fetching stats for ${sources.length} sources:`, sources);
 
@@ -573,7 +573,7 @@ class OvlyResponseLog {
 
       // ✅ If no source, get source-wise breakdown by date
       if (!source) {
-        const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+        const sources = require('../config/registry').RESPONSELOG_SOURCES;
         console.log(`[${TABLE_NAME}] Fetching source-wise stats by date for:`, sources);
 
         // Collect items from all sources

@@ -53,7 +53,7 @@ class CreditHaatResponseLog {
 
         try {
             if (!source) {
-                const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+                const sources = require('../config/registry').RESPONSELOG_SOURCES;
                 console.log(`[${TABLE_NAME}] Counting all sources:`, sources);
 
                 const countPromises = sources.map(async (src) => {
@@ -178,7 +178,7 @@ class CreditHaatResponseLog {
 
         try {
             if (!source) {
-                const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+                const sources = require('../config/registry').RESPONSELOG_SOURCES;
                 console.log(`[${TABLE_NAME}] Fetching stats for all sources:`, sources);
 
                 let allItems = [];
@@ -346,7 +346,7 @@ class CreditHaatResponseLog {
             console.log(`[${TABLE_NAME}] getStatsByDate: source=${source}, start=${startDate}, end=${actualEndDate}`);
 
             if (!source) {
-                const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+                const sources = require('../config/registry').RESPONSELOG_SOURCES;
                 console.log(`[${TABLE_NAME}] Fetching stats by date for all sources:`, sources);
 
                 let allItems = [];

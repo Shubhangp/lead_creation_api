@@ -10,16 +10,9 @@ const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'lead_success';
 
-const LENDERS = [
-  'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI',
-  'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-  'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea',
-  // MIS lenders (status updated via file upload, not immediate API response)
-  'CASHVIA', 'DIGICREDIT', 'TAP4CREDIT', 'SPEEDOLOAN',
-  'PAISABOXX', 'HEROFINCORP', 'PREFR'
-];
+const LENDERS = require('../config/registry').LENDER_LISTS.leadSuccess;
 
-const ALL_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+const ALL_SOURCES = require('../config/registry').RESPONSELOG_SOURCES;
 
 class LeadSuccess {
 

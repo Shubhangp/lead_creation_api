@@ -52,7 +52,7 @@ class CreditPulseResponseLog {
 
         try {
             if (!source) {
-                const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+                const sources = require('../config/registry').RESPONSELOG_SOURCES;
 
                 const results = await Promise.all(
                     sources.map(async (src) => ({
@@ -171,7 +171,7 @@ class CreditPulseResponseLog {
 
         try {
             if (!source) {
-                const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+                const sources = require('../config/registry').RESPONSELOG_SOURCES;
                 let allItems = [];
 
                 for (const src of sources) {
@@ -304,7 +304,7 @@ class CreditPulseResponseLog {
             }
 
             if (!source) {
-                const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+                const sources = require('../config/registry').RESPONSELOG_SOURCES;
                 let allItems = [];
 
                 for (const src of sources) {

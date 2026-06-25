@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const TABLE_NAME = 'fintifi_response_logs';
 const SOURCES = process.env.FINTIFI_SOURCES?.split(',').map(s => s.trim())
-  || ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+  || require('../config/registry').RESPONSELOG_SOURCES;
 
 class FintifiResponseLog {
 

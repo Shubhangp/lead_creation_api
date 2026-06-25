@@ -7,7 +7,7 @@ const Lead = require('../models/leadModel');
 const { docClient } = require('../dynamodb');
 const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
 
-const RESPONSELOG_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+const RESPONSELOG_SOURCES = require('../config/registry').RESPONSELOG_SOURCES;
 
 const LENDER_CONFIGS = {
 

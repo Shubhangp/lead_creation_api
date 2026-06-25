@@ -53,7 +53,7 @@ class LendingPlateResponseLog {
     try {
       // ✅ If no source, get all known sources
       if (!source) {
-        const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+        const sources = require('../config/registry').RESPONSELOG_SOURCES;
         console.log(`[${TABLE_NAME}] Counting all sources:`, sources);
 
         const countPromises = sources.map(async (src) => {
@@ -180,7 +180,7 @@ class LendingPlateResponseLog {
     try {
       // ✅ If no source, get stats for all sources
       if (!source) {
-        const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+        const sources = require('../config/registry').RESPONSELOG_SOURCES;
         console.log(`[${TABLE_NAME}] Fetching stats for all sources:`, sources);
 
         let allItems = [];
@@ -391,7 +391,7 @@ class LendingPlateResponseLog {
 
       // ✅ If no source, get stats for all sources
       if (!source) {
-        const sources = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+        const sources = require('../config/registry').RESPONSELOG_SOURCES;
         console.log(`[${TABLE_NAME}] Fetching stats by date for all sources:`, sources);
 
         let allItems = [];

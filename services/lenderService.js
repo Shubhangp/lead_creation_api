@@ -1810,7 +1810,7 @@ const registerCustomer = async (payload) => {
 // Docs: Create Lead (#2) + Get Offers (#4)
 // ─────────────────────────────────────────────────────────────────────────────
 const CREDITLINKS_BASE_URL ='https://l.creditlinks.in:8000';
-const CREDITLINKS_API_KEY = process.env.CREDITLINKS_API_KEY || '';
+const CREDITLINKS_API_KEY = 'xxxxxxxx-xxxx-xxxx-xxxxxxxxxxxx';
 
 // Map internal jobType → CreditLinks employmentStatus (1 = Salaried, 2 = Self employed)
 function mapEmploymentStatusToCreditLinks(jobType) {

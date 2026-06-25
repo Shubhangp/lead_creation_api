@@ -11,7 +11,7 @@ const { v4: uuidv4 } = require('uuid');
 const TABLE_NAME = 'credit_links_response_logs';
 const SOURCES = process.env.LEAD_SOURCES?.split(',').map(s => s.trim())
   || (process.env.LEAD_SOURCES?.split(',').map(s => s.trim()))
-  || ['BatterySmart', 'VFC', 'FREO', 'CashKuber', 'Ratecut'];
+  || require('../config/registry').LEAD_SOURCES_DEFAULT;
 
 // CreditLinks responseStatus values written by sendToCreditLinks():
 //   LEAD_CREATED   — 201, new lead created
