@@ -52,7 +52,7 @@ const LENDER_LISTS = {
   leadSuccess: [
     'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI',
     'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-    'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea',
+    'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea', 'CreditHaat', 'CreditLinks',
     // MIS lenders (status updated via file upload, not immediate API response)
     'CASHVIA', 'DIGICREDIT', 'TAP4CREDIT', 'SPEEDOLOAN',
     'PAISABOXX', 'HEROFINCORP', 'PREFR',
@@ -67,17 +67,17 @@ const LENDER_LISTS = {
   distribution: [
     'SML', 'FREO', 'ZYPE', 'LendingPlate', 'FINTIFI',
     'FATAKPAY', 'FATAKPAYPL', 'OVLY', 'RAMFINCROP', 'MPOKKET',
-    'INDIALENDS', 'CRMPaisa', 'MyMoneyMantra', 'CreditSea',
+    'INDIALENDS', 'CRMPaisa', 'MyMoneyMantra', 'CreditSea', 'CreditHaat', 'CreditLinks',
   ],
   // frontend: loanform › DistributionRulesManagement
   distributionRules: [
     'SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI',
-    'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'MPOKKET', 'CRMPaisa',
+    'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'MPOKKET', 'CRMPaisa', 'CreditHaat', 'CreditLinks',
   ],
   // frontend: xlsx_upload › Home.js (status dashboard columns)
   home: [
     'ZYPE', 'LendingPlate', 'FATAKPAY', 'FATAKPAYPL', 'OVLY',
-    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea',
+    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks',
   ],
 };
 
