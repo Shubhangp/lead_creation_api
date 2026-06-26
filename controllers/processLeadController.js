@@ -12,6 +12,7 @@ const { v4: uuidv4 } = require('uuid');
 const ProcessLead = require('../models/processLeadModel');
 const PushJob = require('../models/pushJobModel');
 const Lead = require('../models/leadModel');
+const { getRateLimit } = require('../config/lenderRateLimits');
 
 const {
     sendToSML,
@@ -245,36 +246,83 @@ async function runWithConcurrency(tasks, concurrency) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ============================================================================
+// PER-LENDER RATE LIMITER (token bucket)
+// ----------------------------------------------------------------------------
+// Each lender gets one bucket whose capacity == its leads-per-minute limit.
+// Tokens refill continuously; sending a lead costs 1 token. When the bucket is
+// empty, take() waits until enough tokens have refilled. This caps the send
+// rate at exactly N leads/minute and smooths bursts, so lenders stop returning
+// "rate limit exceeded" / HTTP 429.
+// ============================================================================
+
+class TokenBucket {
+    constructor(ratePerMinute) {
+        this.capacity = Math.max(1, ratePerMinute);
+        this.tokens = this.capacity;          // start full
+        this.refillPerMs = ratePerMinute / 60000;
+        this.last = Date.now();
+    }
+
+    _refill() {
+        const now = Date.now();
+        this.tokens = Math.min(this.capacity, this.tokens + (now - this.last) * this.refillPerMs);
+        this.last = now;
+    }
+
+    // Consume n tokens, waiting as needed. Handles n larger than capacity by
+    // draining across multiple refill windows.
+    async take(n) {
+        let remaining = n;
+        while (remaining > 0) {
+            this._refill();
+            if (this.tokens >= 1) {
+                const consume = Math.min(remaining, Math.floor(this.tokens));
+                this.tokens -= consume;
+                remaining -= consume;
+            } else {
+                const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
+                await sleep(Math.min(Math.max(waitMs, 50), 5000));
+            }
+        }
+    }
+}
+
+// Build one limiter per lender for a job. Persisted for the whole push so the
+// rate is honoured across every page, not reset per page.
+function buildLenderLimiters(lenders) {
+    const limiters = {};
+    lenders.forEach((l) => {
+        const rpm = getRateLimit(l);
+        limiters[l] = new TokenBucket(rpm);
+        console.log(`[Push] Rate limit for ${l}: ${rpm} leads/min`);
+    });
+    return limiters;
+}
+
+// ============================================================================
 // LENDER DISPATCH
 // ============================================================================
 
 const LENDER_BATCH = 50;
-const LENDER_CONC = 3;
-const LENDER_DELAY = 300;
 
-async function dispatchToLender(lender, leads) {
+async function dispatchToLender(lender, leads, limiter) {
     const sendFn = LENDER_MAP[lender];
     if (!sendFn) return { lender, status: 'skipped', message: 'Not configured', total: leads.length };
 
     let successCount = 0;
     let failCount = 0;
 
-    for (let i = 0; i < leads.length; i += LENDER_BATCH * LENDER_CONC) {
-        const round = leads.slice(i, i + LENDER_BATCH * LENDER_CONC);
-        const batches = [];
-        for (let j = 0; j < round.length; j += LENDER_BATCH) batches.push(round.slice(j, j + LENDER_BATCH));
+    // Send in batches, gating each batch on the lender's token bucket so we
+    // never exceed its leads-per-minute limit.
+    for (let i = 0; i < leads.length; i += LENDER_BATCH) {
+        const batch = leads.slice(i, i + LENDER_BATCH);
 
-        const tasks = batches.map((batch) => async () =>
-            Promise.allSettled(batch.map((lead) => sendFn({ ...lead, leadId: lead.leadId })))
+        if (limiter) await limiter.take(batch.length); // throttle to rate limit
+
+        const batchResult = await Promise.allSettled(
+            batch.map((lead) => sendFn({ ...lead, leadId: lead.leadId }))
         );
-
-        const roundResults = await runWithConcurrency(tasks, LENDER_CONC);
-        roundResults.forEach((batchResult) => {
-            if (batchResult?.error) { failCount += LENDER_BATCH; return; }
-            batchResult.forEach((r) => r.status === 'fulfilled' ? successCount++ : failCount++);
-        });
-
-        if (i + LENDER_BATCH * LENDER_CONC < leads.length) await sleep(LENDER_DELAY);
+        batchResult.forEach((r) => r.status === 'fulfilled' ? successCount++ : failCount++);
     }
 
     return { lender, status: 'done', total: leads.length, successCount, failCount };
@@ -387,6 +435,10 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             lenderAccumulators[l] = { lender: l, status: 'running', total: 0, successCount: 0, failCount: 0 };
         });
 
+        // One rate limiter per lender, created once and reused across all pages
+        // so each lender's leads/min cap holds for the entire job.
+        const lenderLimiters = buildLenderLimiters(lenders);
+
         // Restore partial lender results if resuming
         if (job.lenderResults && Object.keys(job.lenderResults).length > 0) {
             Object.entries(job.lenderResults).forEach(([l, r]) => {
@@ -427,7 +479,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             // Dispatch this page to every selected lender
             if (saved.length > 0) {
                 const lenderResults = await Promise.allSettled(
-                    lenders.map((lender) => dispatchToLender(lender, saved))
+                    lenders.map((lender) => dispatchToLender(lender, saved, lenderLimiters[lender]))
                 );
                 lenders.forEach((lender, i) => {
                     const r = lenderResults[i];
