@@ -1723,7 +1723,7 @@ const mapProfession = (profession) => {
   if (p.includes('business')) return 'Business Owner';
   return 'Others';
 };
- 
+
 // Main entry: push a lead to CreditHaat
 async function sendToCreditHaat(lead) {
   console.log('CH', lead);
@@ -1731,7 +1731,7 @@ async function sendToCreditHaat(lead) {
     leadId, fullName, firstName, lastName, phone, panNumber, dateOfBirth,
     pincode, salary, source, email, gender, addressLine1, addressLine2
   } = lead;
- 
+
   let fName = firstName;
   let lName = lastName;
   if ((!fName || !lName) && fullName) {
@@ -1739,31 +1739,31 @@ async function sendToCreditHaat(lead) {
     fName = fName || parts[0] || '';
     lName = lName || (parts.length > 1 ? parts.slice(1).join(' ') : '');
   }
- 
+
   const payload = {
-    agentid:               619898394,
-    agent:                 "RateCut",
-    customerid:            String(leadId),
-    firstname:             fName,
-    lastname:              lName,
-    mobilenumber:          phone,
-    dob:                   formatToYYYYMMDD(dateOfBirth),
-    gender:                gender || 'Rather not say',
-    email:                 email,
-    profession:            mapProfession(lead.profession),
-    income:                String(salary),
-    payment_type:          '1',
-    pincode:               pincode,
-    pan:                   panNumber,
-    addressline1:          addressLine1 || '',
-    addressline2:          addressLine2 || '',
-    consent_timestamp:     new Date().toISOString().slice(0, 19).replace('T', ' '),
-    consent_flag:          'Y',
+    agentid: 619898394,
+    agent: "RateCut",
+    customerid: String(leadId),
+    firstname: fName,
+    lastname: lName,
+    mobilenumber: phone,
+    dob: formatToYYYYMMDD(dateOfBirth),
+    gender: gender || 'Rather not say',
+    email: email,
+    profession: mapProfession(lead.profession),
+    income: String(salary),
+    payment_type: '1',
+    pincode: pincode,
+    pan: panNumber,
+    addressline1: addressLine1 || '',
+    addressline2: addressLine2 || '',
+    consent_timestamp: new Date().toISOString().slice(0, 19).replace('T', ' '),
+    consent_flag: 'Y',
     explicit_consent_flag: 'Y'
   };
- 
+
   const result = await registerCustomer(payload);
- 
+
   if (!result) {
     return CreditHaatResponseLog.create({
       leadId,
@@ -1773,9 +1773,9 @@ async function sendToCreditHaat(lead) {
       responseBody: { code: 500, message: 'Request failed' }
     });
   }
- 
+
   const isSuccess = result.code === 200 || result.code === '200';
- 
+
   return CreditHaatResponseLog.create({
     leadId,
     source,
@@ -1785,9 +1785,9 @@ async function sendToCreditHaat(lead) {
     customerId: result?.data?.customer_id || null
   });
 }
- 
+
 // CreditHaat User Register API (V1 - with consent)
- 
+
 const registerCustomer = async (payload) => {
   const url = 'https://loan.credithaat.com/user/register/api/v1'
   const headers = {
@@ -1803,14 +1803,14 @@ const registerCustomer = async (payload) => {
     return error.response?.data || false;
   }
 };
- 
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CreditLinks Partner API (v2.13)
 // Docs: Create Lead (#2) + Get Offers (#4)
 // ─────────────────────────────────────────────────────────────────────────────
-const CREDITLINKS_BASE_URL ='https://l.creditlinks.in:8000';
-const CREDITLINKS_API_KEY = 'xxxxxxxx-xxxx-xxxx-xxxxxxxxxxxx';
+const CREDITLINKS_BASE_URL = 'https://l.creditlinks.in:8000';
+const CREDITLINKS_API_KEY = 'cbb1559d-3d9f-423a-9b4b-e2344eaa837d';
 
 // Map internal jobType → CreditLinks employmentStatus (1 = Salaried, 2 = Self employed)
 function mapEmploymentStatusToCreditLinks(jobType) {
@@ -1821,6 +1821,28 @@ function mapEmploymentStatusToCreditLinks(jobType) {
 // Consent timestamp in CreditLinks format: YYYY-MM-DD HH:MM:SS
 function creditLinksConsentTimestamp() {
   return new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
+
+// Dedupe (API #1) — check if customer already registered.
+// Returns { eligible: boolean, body, httpStatus } | { error }
+async function dedupeCreditLinks(mobileNumber, headers) {
+  try {
+    const res = await axios.post(
+      `${CREDITLINKS_BASE_URL}/api/partner/dedupe`,
+      { mobileNumber },
+      { headers, validateStatus: () => true }
+    );
+    const body = res.data;
+    // success comes back as the string "true"/"false"
+    const eligible =
+      String(body?.success).toLowerCase() === 'true' ||
+      String(body?.message || '').toLowerCase() === 'eligible';
+    console.log('CreditLinks dedupe response:', res.status, JSON.stringify(body));
+    return { eligible, body, httpStatus: res.status };
+  } catch (error) {
+    console.error('CreditLinks dedupe error:', error?.response?.data || error.message);
+    return { error: error?.response?.data || error.message };
+  }
 }
 
 async function sendToCreditLinks(lead) {
@@ -1841,6 +1863,28 @@ async function sendToCreditLinks(lead) {
   }
 
   const employmentStatus = mapEmploymentStatusToCreditLinks(jobType);
+
+  const mobileNumber = String(phone || '').replace(/\D/g, '').slice(-10);
+
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: CREDITLINKS_API_KEY
+  };
+
+  // ─── Dedupe (#1) ─────────────────────────────────────────────────────────────
+  const dedupe = await dedupeCreditLinks(mobileNumber, headers);
+
+  if (dedupe.error === undefined && dedupe.eligible === false) {
+    console.log('CreditLinks dedupe: not eligible, skipping create-lead');
+    return CreditLinksResponseLog.create({
+      leadId,
+      source,
+      requestPayload: { mobileNumber },
+      responseStatus: 'ALREADY_EXISTS',
+      responseBody: { step: 'dedupe', httpStatus: dedupe.httpStatus, ...dedupe.body }
+    });
+  }
+
 
   // ─── Build Create Lead payload (#2) ──────────────────────────────────────────
   const payload = {
@@ -1866,11 +1910,6 @@ async function sendToCreditLinks(lead) {
     // Self employed → use "No business proof" (8) to keep the lead lightweight
     payload.businessRegistrationType = 8;
   }
-
-  const headers = {
-    'Content-Type': 'application/json',
-    apikey: CREDITLINKS_API_KEY
-  };
 
   let createResponse;
   let httpStatus;
