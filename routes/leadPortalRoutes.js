@@ -96,4 +96,18 @@ router.get('/lender/leads/sent', authenticate, leadPortalController.getSentLeads
 router.get('/lender/leads/:leadId', authenticate, leadPortalController.getLeadById);
 
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DISBURSEMENT ROUTES
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get('/lender/disbursements/stats', authenticate, leadPortalController.getDisbursementStats);
+
+/**
+ * GET /api/lender/disbursements
+ * Disbursement records for this lender (or all sources for superadmin).
+ * Query: ?page=1&limit=100&source=<optional, superadmin only>
+ */
+router.get('/lender/disbursements', authenticate, leadPortalController.getDisbursements);
+
+
 module.exports = router;

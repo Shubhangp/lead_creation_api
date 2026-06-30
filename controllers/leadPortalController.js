@@ -1,4 +1,5 @@
-const Lead = require('../models/leadModel');
+const Lead         = require('../models/leadModel');
+const Disbursement = require('../models/disbursementModel');
 
 // All lenders — immediate API push + MIS-synced
 const ALL_LENDERS = [
@@ -363,10 +364,92 @@ async function getLeadById(req, res) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DISBURSEMENT ENDPOINTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/lender/disbursements/stats
+ * Returns disbursement count + total amount for the logged-in lender's source.
+ * Superadmin gets stats for ALL sources.
+ */
+async function getDisbursementStats(req, res) {
+  try {
+    const { role, source } = req.user;
+
+    if (role === 'superadmin') {
+      // All-source breakdown for superadmin
+      const allStats = await Disbursement.getAllSourceStats();
+      const totalCount  = allStats.reduce((s, x) => s + x.count, 0);
+      const totalAmount = allStats.reduce((s, x) => s + x.totalAmount, 0);
+      return res.json({
+        success: true,
+        isSuperAdmin: true,
+        totalCount,
+        totalAmount: Math.round(totalAmount),
+        bySource: allStats.map(s => ({
+          ...s,
+          totalAmount: Math.round(s.totalAmount),
+        })),
+      });
+    }
+
+    // Single-source for regular lender
+    const stats = await Disbursement.getStatsBySource(source);
+    return res.json({
+      success: true,
+      source,
+      count:       stats.count,
+      totalAmount: Math.round(stats.totalAmount),
+    });
+  } catch (err) {
+    console.error('[getDisbursementStats]', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch disbursement stats.' });
+  }
+}
+
+/**
+ * GET /api/lender/disbursements
+ * Superadmin → returns all disbursement records (paginated).
+ * Regular lender → returns their source's records only.
+ * Query: ?page=1&limit=50&source=<override for superadmin>
+ */
+async function getDisbursements(req, res) {
+  try {
+    const { role, source: userSource } = req.user;
+    const page  = Math.max(1, parseInt(req.query.page  || '1'));
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit || '100')));
+
+    let querySource = userSource;
+    // Superadmin can filter by source or get all
+    if (role === 'superadmin') {
+      querySource = req.query.source || null;
+    }
+
+    const all = await Disbursement.getAll({ source: querySource, limit: 5000 });
+
+    const total      = all.length;
+    const totalPages = Math.ceil(total / limit);
+    const data       = all.slice((page - 1) * limit, page * limit);
+
+    return res.json({
+      success: true,
+      isSuperAdmin: role === 'superadmin',
+      pagination: { page, limit, total, totalPages },
+      disbursements: data,
+    });
+  } catch (err) {
+    console.error('[getDisbursements]', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch disbursements.' });
+  }
+}
+
 module.exports = {
   getStats,
   getAcceptedLeads,
   getSentLeads,
   getAllLeads,
   getLeadById,
+  getDisbursementStats,
+  getDisbursements,
 };
