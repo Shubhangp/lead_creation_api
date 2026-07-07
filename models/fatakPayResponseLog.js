@@ -199,7 +199,7 @@ class FatakPayResponseLog {
         responseStatusBreakdown: {}, messageBreakdown: {},
         permanentBlocks: { total: 0, byMessage: {}, percentage: '0%' },
         sourceBreakdown: {},
-        eligibilityStats: { eligible: 0, notEligible: 0, ageNotEligible: 0 },
+        eligibilityStats: { eligible: 0, notEligible: 0, ageNotEligible: 0, leadExists: 0, loanExists: 0, },
         statusCategoryBreakdown: { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 },
         offerBreakdown: { withOffer: 0, withoutOffer: 0, totalOfferAmount: 0, averageOffer: 0 },
         acceptanceRate: '0%'
@@ -223,8 +223,8 @@ class FatakPayResponseLog {
       responseStatusBreakdown: {}, messageBreakdown: {},
       permanentBlocks: { total: 0, byMessage: {}, percentage: '0%' },
       sourceBreakdown: {},
-      eligibilityStats: { eligible: 0, notEligible: 0, ageNotEligible: 0 },
-      statusCategoryBreakdown: { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 },
+      eligibilityStats: { eligible: 0, notEligible: 0, ageNotEligible: 0, leadExists: 0, loanExists: 0, },
+      statusCategoryBreakdown: { ACCEPT: 0, LeadExists: 0, LoanExists: 0, other: 0 },
       offerBreakdown: { withOffer: 0, withoutOffer: 0, totalOfferAmount: 0, averageOffer: 0 },
       acceptanceRate: '0%', processingTimeMs, indexUsed
     };
@@ -250,15 +250,17 @@ class FatakPayResponseLog {
           if (low.includes('you are eligible')) stats.eligibilityStats.eligible++;
           else if (low.includes('not eligible due to age')) stats.eligibilityStats.ageNotEligible++;
           else if (low.includes('not eligible')) stats.eligibilityStats.notEligible++;
+          else if (low.includes('lead already exists')) { stats.eligibilityStats.leadExists++; }
+          else if (low.includes('loan application already exists')) { stats.eligibilityStats.loanExists++; }
         }
-        const bodyStatus = body.status || 'unknown';
-        if (bodyStatus === 'ACCEPT') {
+        const bodyStatus = body.message;
+        if (bodyStatus === 'you are eligible') {
           stats.statusCategoryBreakdown['ACCEPT']++;
           if (body.offer) { stats.offerBreakdown.withOffer++; stats.offerBreakdown.totalOfferAmount += parseInt(body.offer) || 0; }
-        } else if (bodyStatus === 'REJECTED') {
-          stats.statusCategoryBreakdown['REJECTED']++;
-        } else if (bodyStatus === 'Failed') {
-          stats.statusCategoryBreakdown['Failed']++;
+        } else if (bodyStatus === 'lead already exists') {
+          stats.statusCategoryBreakdown['LeadExists']++;
+        } else if (bodyStatus === 'loan application already exists') {
+          stats.statusCategoryBreakdown['LoanExists']++;
         } else {
           stats.statusCategoryBreakdown['other']++;
         }
@@ -343,8 +345,8 @@ class FatakPayResponseLog {
           const low = msg.toLowerCase();
           if (low.includes('you are eligible')) { map[date].eligible++; map[date].bySource[src].eligible++; }
           else if (low.includes('not eligible')) { map[date].notEligible++; map[date].bySource[src].notEligible++; }
-          if (low.includes('lead already exists')) { map[date].leadExists++; map[date].bySource[src].leadExists++; }
-          if (low.includes('loan application already exists')) { map[date].loanExists++; map[date].bySource[src].loanExists++; }
+          else if (low.includes('lead already exists')) { map[date].leadExists++; map[date].bySource[src].leadExists++; }
+          else if (low.includes('loan application already exists')) { map[date].loanExists++; map[date].bySource[src].loanExists++; }
         }
         const bs = body.status || 'unknown';
         if (['ACCEPT', 'REJECTED', 'Failed'].includes(bs)) {
