@@ -325,16 +325,20 @@ class FatakPayResponseLog {
       const date = item.createdAt.split('T')[0];
       const src = item.source || 'unknown';
       if (!map[date]) {
-        map[date] = { date, total: 0, statusBreakdown: {}, messageBreakdown: {}, permanentBlocks: 0, eligible: 0, notEligible: 0, leadExists: 0, loanExists: 0, statusCategories: { ACCEPT: 0, LeadExists: 0, LoanExists: 0, other: 0 }, sourceBreakdown: {}, bySource: {} };
+        map[date] = { date, total: 0, statusBreakdown: {}, messageBreakdown: {}, permanentBlocks: 0, eligible: 0, notEligible: 0, leadExists: 0, loanExists: 0, statusCategories: { eligible: 0, notEligible: 0, leadExists: 0, loanExists: 0, other: 0 }, sourceBreakdown: {}, bySource: {} };
       }
       map[date].total++;
       map[date].sourceBreakdown[src] = (map[date].sourceBreakdown[src] || 0) + 1;
       if (!map[date].bySource[src]) {
-        map[date].bySource[src] = { total: 0, accept: 0, rejected: 0, failed: 0, other: 0, eligible: 0, notEligible: 0, leadExists: 0, loanExists: 0 };
+        map[date].bySource[src] = { total: 0, eligible: 0, notEligible: 0, leadExists: 0, loanExists: 0, other: 0 };
       }
       map[date].bySource[src].total++;
       const st = item.responseStatus || 'unknown';
       map[date].statusBreakdown[st] = (map[date].statusBreakdown[st] || 0) + 1;
+
+      // Assign each record to exactly ONE mutually-exclusive, message-driven
+      // category. `other` is only the genuine uncategorized remainder.
+      let category = 'other';
       if (item.responseBody) {
         let body = item.responseBody;
         if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) {} }
@@ -343,20 +347,15 @@ class FatakPayResponseLog {
           map[date].messageBreakdown[msg] = (map[date].messageBreakdown[msg] || 0) + 1;
           if (this.isPermanentBlock(body)) map[date].permanentBlocks++;
           const low = msg.toLowerCase();
-          if (low.includes('you are eligible')) { map[date].eligible++; map[date].bySource[src].eligible++; }
-          else if (low.includes('not eligible')) { map[date].notEligible++; map[date].bySource[src].notEligible++; }
-          else if (low.includes('lead already exists')) { map[date].leadExists++; map[date].bySource[src].leadExists++; }
-          else if (low.includes('loan application already exists')) { map[date].loanExists++; map[date].bySource[src].loanExists++; }
-        }
-        const bs = body.message;
-        if (['ACCEPT', 'LeadExists', 'LoanExists'].includes(bs)) {
-          map[date].statusCategories[bs]++;
-          map[date].bySource[src][bs.toLowerCase()]++;
-        } else {
-          map[date].statusCategories['other']++;
-          map[date].bySource[src].other++;
+          if (low.includes('you are eligible')) category = 'eligible';
+          else if (low.includes('not eligible')) category = 'notEligible';
+          else if (low.includes('lead already exists')) category = 'leadExists';
+          else if (low.includes('loan application already exists')) category = 'loanExists';
         }
       }
+      map[date].statusCategories[category]++;
+      map[date].bySource[src][category]++;
+      if (category !== 'other') map[date][category]++;
     });
     return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
   }
