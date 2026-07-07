@@ -1,31 +1,8 @@
-// ============================================================================
-// registry.js — SINGLE SOURCE OF TRUTH for lenders & sources
-// ----------------------------------------------------------------------------
-// Add / rename / remove a lender or source HERE ONLY.
-//
-//   • Backend modules import the named lists below directly.
-//   • Frontends (xlsx_upload, dashboard, loanform) read these same lists at
-//     runtime via the /api/v1/config endpoints (see routes/configRoutes.js),
-//     so adding a lender needs NO frontend redeploy.
-//
-// Rich per-lender metadata (logo, APR, website, ...) lives in lenderCatalog.js
-// and is re-exported here so everything funnels through one module.
-//
-// NOTE: the per-screen lists below are intentionally DIFFERENT from each other
-// (each screen historically showed its own subset). They are kept exact to
-// preserve current behavior. To make a new lender appear on a screen, add its
-// code to that screen's list.
-// ============================================================================
-
 const {
   LENDER_CATALOG,
   DEFAULT_LENDER_ORDER,
   buildLenderList,
 } = require('./lenderCatalog');
-
-// ---------------------------------------------------------------------------
-// SOURCES
-// ---------------------------------------------------------------------------
 
 // Default sources for the DynamoDB response-log models (per-source GSI scan).
 // Individual models may still override via their own *_SOURCES env var.

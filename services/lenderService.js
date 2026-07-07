@@ -22,7 +22,32 @@ const CreditSeaResponseLog = require('../models/creditSeaResponseLog');
 const CreditHaatResponseLog = require('../models/creditHaatResponseLog');
 const CreditLinksResponseLog = require('../models/creditLinksResponseLog');
 
+// ---- Default field handling for lenders ----
+// If any required field is missing (except phone) fall back to a default value.
+function isFieldMissing(value) {
+  return value === undefined || value === null || String(value).trim() === '';
+}
+
+function generateRandomPAN() {
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const digits = '0123456789';
+  let pan = '';
+  for (let i = 0; i < 5; i++) pan += letters[Math.floor(Math.random() * letters.length)];
+  for (let i = 0; i < 4; i++) pan += digits[Math.floor(Math.random() * digits.length)];
+  pan += letters[Math.floor(Math.random() * letters.length)];
+  return pan;
+}
+
+function applyLenderDefaults(lead) {
+  const updated = { ...lead };
+  if (isFieldMissing(updated.email)) updated.email = 'email@gmail.com';
+  if (isFieldMissing(updated.dateOfBirth)) updated.dateOfBirth = '1998-01-01';
+  if (isFieldMissing(updated.panNumber)) updated.panNumber = generateRandomPAN();
+  return updated;
+}
+
 async function sendToSML(lead) {
+  lead = applyLenderDefaults(lead);
   const {
     leadId, fullName, phone, email, dateOfBirth,
     gender, panNumber, jobType, salary, pincode, source
@@ -94,6 +119,7 @@ function formatToYYYYMMDD(dateString) {
 }
 
 async function sendToFreo(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("FREO", lead);
   const {
     leadId, fullName, phone, email, dateOfBirth,
@@ -194,6 +220,7 @@ const getRandomResidenceType = () => {
 };
 
 async function sendToOVLY(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("OVLY", lead);
   const {
     leadId, fullName, phone, email, dateOfBirth,
@@ -296,6 +323,7 @@ async function sendToOVLY(lead) {
 }
 
 async function sendToLendingPlate(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("LP", lead);
   const {
     leadId, fullName, phone, panNumber, dateOfBirth, pincode, salary, source
@@ -379,6 +407,7 @@ const checkMobileExists = async (phone) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function sendToZYPE(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("ZYPE", lead);
   const {
     leadId, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary, source
@@ -473,6 +502,7 @@ const processZypeApplication = async (payload) => {
 }
 
 async function sendToFINTIFI(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("FINTIFI", lead);
   const {
     leadId, fullName, phone, email, dateOfBirth, gender, panNumber, jobType, salary, pincode, source
@@ -521,6 +551,7 @@ async function sendToFINTIFI(lead) {
 }
 
 async function sendToFATAKPAY(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("FATAKPAY", lead);
   const {
     leadId, fullName, firstName, lastName, phone, email, dateOfBirth,
@@ -602,6 +633,7 @@ async function sendToFATAKPAY(lead) {
 }
 
 async function sendToFATAKPAYPL(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("FATAKPAY_PL", lead);
   const {
     leadId, fullName, firstName, lastName, phone, email, dateOfBirth,
@@ -685,6 +717,7 @@ function readExcelFile() {
 const pinCodeData = readExcelFile();
 
 async function sendToRAMFINCROP(lead) {
+  lead = applyLenderDefaults(lead);
   const {
     leadId, fullName, phone, email, dateOfBirth, panNumber, jobType, salary, source
   } = lead;
@@ -788,6 +821,7 @@ async function sendToRAMFINCROP(lead) {
 // }
 
 async function sendToMyMoneyMantra(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("MyMoneyMantra API Call899", lead);
   const {
     leadId, fullName, phone, email, dateOfBirth,
@@ -950,6 +984,7 @@ function mapJobTypeToMMM(jobType) {
 }
 
 async function sendToIndiaLends(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("IndiaLends API Call", lead);
 
   const {
@@ -1146,6 +1181,7 @@ function mapJobTypeToEmploymentType(jobType) {
 }
 
 async function sendToMpokket(lead) {
+  lead = applyLenderDefaults(lead);
   const {
     leadId,
     fullName, firstName, lastName, phone, email, dateOfBirth,
@@ -1357,6 +1393,7 @@ function mapJobTypeToMpokket(jobType) {
 }
 
 async function sendToCrmPaisa(lead) {
+  lead = applyLenderDefaults(lead);
   const {
     leadId, fullName, phone, email, dateOfBirth,
     panNumber, jobType, salary, pincode, source
@@ -1538,6 +1575,7 @@ const pinCodeDataCRMPaisa = readExcelFileCRMPaisa();
 
 
 async function sendToCreditPulse(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("CreditPulse", lead);
 
   const {
@@ -1604,6 +1642,7 @@ const DEDUPE_URL = 'https://backend.creditsea.com/api/v1/leads/dedupe';
 const CREATE_URL = 'https://backend.creditsea.com/api/v1/leads/create-lead-dsa';
 
 async function sendToCreditSea(lead) {
+  lead = applyLenderDefaults(lead);
   console.log("CreditSea", lead);
 
   const {
@@ -1726,6 +1765,7 @@ const mapProfession = (profession) => {
 
 // Main entry: push a lead to CreditHaat
 async function sendToCreditHaat(lead) {
+  lead = applyLenderDefaults(lead);
   console.log('CH', lead);
   const {
     leadId, fullName, firstName, lastName, phone, panNumber, dateOfBirth,
@@ -1846,6 +1886,7 @@ async function dedupeCreditLinks(mobileNumber, headers) {
 }
 
 async function sendToCreditLinks(lead) {
+  lead = applyLenderDefaults(lead);
   console.log('CreditLinks', lead);
 
   const {
