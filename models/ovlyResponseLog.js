@@ -577,11 +577,10 @@ class OvlyResponseLog {
         console.log(`[${TABLE_NAME}] Fetching source-wise stats by date for:`, sources);
 
         // Collect items from all sources
-        let allItems = [];
-        for (const src of sources) {
-          const items = await this._fetchItemsBySource(src, startDate, actualEndDate);
-          allItems = allItems.concat(items);
-        }
+        const _perSourceItems = await Promise.all(
+          sources.map(src => this._fetchItemsBySource(src, startDate, actualEndDate))
+        );
+        let allItems = _perSourceItems.flat();
 
         console.log(`✅ Query complete: ${allItems.length} items from ${sources.length} sources in ${Date.now() - startTime}ms`);
 

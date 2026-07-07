@@ -20,8 +20,8 @@ const PERMANENT_BLOCKS = [
 
 // Known sources — used for parallel queries once source-createdAt-index is ACTIVE.
 // Override via env: FATAKPAY_SOURCES=CashKuber,FREO,BatterySmart,Ratecut,VFC
-const SOURCES = ( 'CashKuber,FREO,BatterySmart,Ratecut,VFC','Apr')
-  .split(',').map(s => s.trim()).filter(Boolean);
+const SOURCES = process.env.FATAKPAY_SOURCES?.split(',').map(s => s.trim()).filter(Boolean)
+  || require('../config/registry').RESPONSELOG_SOURCES;
 
 class FatakPayResponseLog {
 
@@ -321,10 +321,16 @@ class FatakPayResponseLog {
     const map = {};
     items.forEach(item => {
       const date = item.createdAt.split('T')[0];
+      const src = item.source || 'unknown';
       if (!map[date]) {
-        map[date] = { date, total: 0, statusBreakdown: {}, messageBreakdown: {}, permanentBlocks: 0, eligible: 0, notEligible: 0, statusCategories: { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 } };
+        map[date] = { date, total: 0, statusBreakdown: {}, messageBreakdown: {}, permanentBlocks: 0, eligible: 0, notEligible: 0, statusCategories: { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 }, sourceBreakdown: {}, bySource: {} };
       }
       map[date].total++;
+      map[date].sourceBreakdown[src] = (map[date].sourceBreakdown[src] || 0) + 1;
+      if (!map[date].bySource[src]) {
+        map[date].bySource[src] = { total: 0, accept: 0, rejected: 0, failed: 0, other: 0, eligible: 0, notEligible: 0 };
+      }
+      map[date].bySource[src].total++;
       const st = item.responseStatus || 'unknown';
       map[date].statusBreakdown[st] = (map[date].statusBreakdown[st] || 0) + 1;
       if (item.responseBody) {
@@ -335,12 +341,17 @@ class FatakPayResponseLog {
           map[date].messageBreakdown[msg] = (map[date].messageBreakdown[msg] || 0) + 1;
           if (this.isPermanentBlock(body)) map[date].permanentBlocks++;
           const low = msg.toLowerCase();
-          if (low.includes('you are eligible')) map[date].eligible++;
-          else if (low.includes('not eligible')) map[date].notEligible++;
+          if (low.includes('you are eligible')) { map[date].eligible++; map[date].bySource[src].eligible++; }
+          else if (low.includes('not eligible')) { map[date].notEligible++; map[date].bySource[src].notEligible++; }
         }
         const bs = body.status || 'unknown';
-        if (['ACCEPT', 'REJECTED', 'Failed'].includes(bs)) map[date].statusCategories[bs]++;
-        else map[date].statusCategories['other']++;
+        if (['ACCEPT', 'REJECTED', 'Failed'].includes(bs)) {
+          map[date].statusCategories[bs]++;
+          map[date].bySource[src][bs.toLowerCase()]++;
+        } else {
+          map[date].statusCategories['other']++;
+          map[date].bySource[src].other++;
+        }
       }
     });
     return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));

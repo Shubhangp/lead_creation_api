@@ -66,13 +66,10 @@ class ZypeResponseLog {
 
   // ✅ Fetch items for all sources
   static async _fetchAllSources(startDate, endDate) {
-    let allItems = [];
-    for (const src of SOURCES) {
-      const items = await this._queryAll(this._sourceParams(src, startDate, endDate));
-      console.log(`  [${TABLE_NAME}] ${src}: ${items.length} items`);
-      allItems = allItems.concat(items);
-    }
-    return allItems;
+    const _perSource = await Promise.all(
+      SOURCES.map(src => this._queryAll(this._sourceParams(src, startDate, endDate)))
+    );
+    return _perSource.flat();
   }
   static async create(logData) {
     if (!logData.leadId) throw new Error('leadId is required');

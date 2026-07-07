@@ -181,11 +181,10 @@ class CreditHaatResponseLog {
                 const sources = require('../config/registry').RESPONSELOG_SOURCES;
                 console.log(`[${TABLE_NAME}] Fetching stats for all sources:`, sources);
 
-                let allItems = [];
-                for (const src of sources) {
-                    const items = await this._fetchItemsBySource(src, startDate, endDate);
-                    allItems = allItems.concat(items);
-                }
+                const _perSourceItems = await Promise.all(
+                  sources.map(src => this._fetchItemsBySource(src, startDate, endDate))
+                );
+                let allItems = _perSourceItems.flat();
 
                 console.log(`✅ Query complete: ${allItems.length} items from ${sources.length} sources`);
 
@@ -349,11 +348,10 @@ class CreditHaatResponseLog {
                 const sources = require('../config/registry').RESPONSELOG_SOURCES;
                 console.log(`[${TABLE_NAME}] Fetching stats by date for all sources:`, sources);
 
-                let allItems = [];
-                for (const src of sources) {
-                    const items = await this._fetchItemsBySource(src, startDate, actualEndDate);
-                    allItems = allItems.concat(items);
-                }
+                const _perSourceItems = await Promise.all(
+                  sources.map(src => this._fetchItemsBySource(src, startDate, actualEndDate))
+                );
+                let allItems = _perSourceItems.flat();
 
                 console.log(`✅ Query complete: ${allItems.length} items`);
 

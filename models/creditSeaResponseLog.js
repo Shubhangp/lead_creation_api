@@ -172,12 +172,10 @@ class CreditSeaResponseLog {
         try {
             if (!source) {
                 const sources = require('../config/registry').RESPONSELOG_SOURCES;
-                let allItems = [];
-
-                for (const src of sources) {
-                    const items = await this._fetchItemsBySource(src, startDate, endDate);
-                    allItems = allItems.concat(items);
-                }
+                const _perSourceItems = await Promise.all(
+                  sources.map(src => this._fetchItemsBySource(src, startDate, endDate))
+                );
+                let allItems = _perSourceItems.flat();
 
                 const stats = this._calculateStats(allItems, null, startDate, endDate);
                 stats.processingTimeMs = Date.now() - startTime;
@@ -314,12 +312,10 @@ class CreditSeaResponseLog {
 
             if (!source) {
                 const sources = require('../config/registry').RESPONSELOG_SOURCES;
-                let allItems = [];
-
-                for (const src of sources) {
-                    const items = await this._fetchItemsBySource(src, startDate, actualEndDate);
-                    allItems = allItems.concat(items);
-                }
+                const _perSourceItems = await Promise.all(
+                  sources.map(src => this._fetchItemsBySource(src, startDate, actualEndDate))
+                );
+                let allItems = _perSourceItems.flat();
 
                 const statsByDate = this._groupByDate(allItems);
                 return Object.values(statsByDate).sort((a, b) => a.date.localeCompare(b.date));
