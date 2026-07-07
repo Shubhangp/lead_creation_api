@@ -323,12 +323,12 @@ class FatakPayResponseLog {
       const date = item.createdAt.split('T')[0];
       const src = item.source || 'unknown';
       if (!map[date]) {
-        map[date] = { date, total: 0, statusBreakdown: {}, messageBreakdown: {}, permanentBlocks: 0, eligible: 0, notEligible: 0, statusCategories: { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 }, sourceBreakdown: {}, bySource: {} };
+        map[date] = { date, total: 0, statusBreakdown: {}, messageBreakdown: {}, permanentBlocks: 0, eligible: 0, notEligible: 0, leadExists: 0, loanExists: 0, statusCategories: { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 }, sourceBreakdown: {}, bySource: {} };
       }
       map[date].total++;
       map[date].sourceBreakdown[src] = (map[date].sourceBreakdown[src] || 0) + 1;
       if (!map[date].bySource[src]) {
-        map[date].bySource[src] = { total: 0, accept: 0, rejected: 0, failed: 0, other: 0, eligible: 0, notEligible: 0 };
+        map[date].bySource[src] = { total: 0, accept: 0, rejected: 0, failed: 0, other: 0, eligible: 0, notEligible: 0, leadExists: 0, loanExists: 0 };
       }
       map[date].bySource[src].total++;
       const st = item.responseStatus || 'unknown';
@@ -343,6 +343,8 @@ class FatakPayResponseLog {
           const low = msg.toLowerCase();
           if (low.includes('you are eligible')) { map[date].eligible++; map[date].bySource[src].eligible++; }
           else if (low.includes('not eligible')) { map[date].notEligible++; map[date].bySource[src].notEligible++; }
+          if (low.includes('lead already exists')) { map[date].leadExists++; map[date].bySource[src].leadExists++; }
+          if (low.includes('loan application already exists')) { map[date].loanExists++; map[date].bySource[src].loanExists++; }
         }
         const bs = body.status || 'unknown';
         if (['ACCEPT', 'REJECTED', 'Failed'].includes(bs)) {
