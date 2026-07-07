@@ -6,15 +6,15 @@ const {
 
 // Default sources for the DynamoDB response-log models (per-source GSI scan).
 // Individual models may still override via their own *_SOURCES env var.
-const RESPONSELOG_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr'];
+const RESPONSELOG_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr', 'CreditHaat', 'BAL'];
 
 // Default for models that read process.env.LEAD_SOURCES (creditLinks, leadModel).
-const LEAD_SOURCES_DEFAULT = ['BatterySmart', 'VFC', 'FREO', 'CashKuber', 'Ratecut'];
+const LEAD_SOURCES_DEFAULT = ['BatterySmart', 'VFC', 'FREO', 'CashKuber', 'Ratecut', 'CreditHaat', 'BAL', 'Apr'];
 
 // Named source lists consumed by the frontends. Kept exact to current values.
 const SOURCE_LISTS = {
-  upload:       ['FREO', 'Ratecut', 'Apr', 'CashKuber'],                          // xlsx_upload › lead_upload
-  distribution: ['FREO', 'CashKuber', 'SML', 'Ratecut', 'MyMoneyMantra', 'Apr'],  // dashboard › lead_distribution
+  upload:       ['FREO', 'Ratecut', 'Apr', 'CashKuber', 'CreditHaat', 'BAL', 'BatterySmart', 'VFC' ],                          // xlsx_upload › lead_upload
+  distribution: ['FREO', 'CashKuber', 'Ratecut', 'Apr', 'CreditHaat', 'BAL', 'BatterySmart', 'VFC', ],  // dashboard › lead_distribution
   responseLog:  RESPONSELOG_SOURCES,
 };
 
