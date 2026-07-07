@@ -275,7 +275,7 @@ const LENDER_CATALOG = {
   },
   ZYPE: {
     code: 'ZYPE',
-    name: 'Zype', logo: '/zype.png',
+    name: 'Zype', logo: '/Zype_svg_black.svg',
     maxAmount: 200000, minInterest: 18,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
     website: 'https://portal.getzype.com/?utm_campaign=web_Ratecut&utm_source=RateCut&utm_medium={utm_medium}',
@@ -286,7 +286,7 @@ const LENDER_CATALOG = {
   },
   LendingPlate: {
     code: 'LendingPlate',
-    name: 'Lending Plate', logo: '/LP.png',
+    name: 'Lending Plate', logo: '/LendingPlate Logo.gif',
     maxAmount: 250000, minInterest: 18,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
     website: 'https://lendingplate.com/personal-loan-lead-form?utm_source=RATECUT&utm_campaign=RATECUT&utm_medium={utm_medium}#applynow',
