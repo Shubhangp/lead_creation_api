@@ -321,13 +321,25 @@ class Lead {
     return result.Item || null;
   }
 
+  // Duplicate checks only look at leads created within this window (in days).
+  static DUPLICATE_LOOKBACK_DAYS = 30;
+
+  static _lookbackCutoffISO() {
+    return new Date(
+      Date.now() - this.DUPLICATE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+    ).toISOString();
+  }
+
   static async findByPhone(phone) {
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'phone-index',
       KeyConditionExpression: 'phone = :phone',
-      ExpressionAttributeValues: { ':phone': phone },
-      Limit: 1
+      FilterExpression: 'createdAt >= :cutoff',
+      ExpressionAttributeValues: {
+        ':phone': phone,
+        ':cutoff': this._lookbackCutoffISO(),
+      },
     }));
     return result.Items?.[0] || null;
   }
@@ -337,8 +349,11 @@ class Lead {
       TableName: TABLE_NAME,
       IndexName: 'panNumber-index',
       KeyConditionExpression: 'panNumber = :panNumber',
-      ExpressionAttributeValues: { ':panNumber': panNumber },
-      Limit: 1
+      FilterExpression: 'createdAt >= :cutoff',
+      ExpressionAttributeValues: {
+        ':panNumber': panNumber,
+        ':cutoff': this._lookbackCutoffISO(),
+      },
     }));
     return result.Items?.[0] || null;
   }
