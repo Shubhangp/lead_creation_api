@@ -442,6 +442,37 @@ function normalizePhone(phone) {
   return null;
 }
 
+// Parse "₹26,460.00" / "26,460" / 26460 → 26460 (number) or null
+function parseAmount(val) {
+  if (val === null || val === undefined || val === '') return null;
+  const cleaned = String(val).replace(/[^0-9.\-]/g, '');
+  if (!cleaned) return null;
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+// Statuses that count as an actual disbursal (vs merely approved/sanctioned).
+// Explicit config.disbursedStatuses wins; otherwise auto-derive from
+// successStatuses (anything containing "disburs" or "unlock").
+function getDisbursedStatuses(config) {
+  if (config.disbursedStatuses) return config.disbursedStatuses;
+  const derived = (config.successStatuses || []).filter(s => /disburs|unlock/i.test(s));
+  return derived.length ? derived : (config.successStatuses || []);
+}
+
+// Normalize a date value ("26/06/2026", "2026-06-26", Excel Date string…)
+// to canonical "YYYY-MM-DD" so date-range filtering works on the dashboard.
+function normalizeDate(val) {
+  if (!val) return null;
+  const s = String(val).trim();
+  // dd/mm/yyyy or dd-mm-yyyy (Indian MIS convention)
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+  return s; // keep raw value if unparseable
+}
+
 function tryParseJSON(val) {
   if (!val) return null;
   if (typeof val === 'object') return val;
@@ -526,10 +557,19 @@ async function buildResponseLogMap(config) {
 //   3. For non-utm types: update leads table (lenderStatuses + successfulLenders)
 //   4. Write disbursement record to disbursements table
 //
-async function syncMISToLeads(rows, config) {
+const CHUNK_SIZE = 25; // rows processed concurrently per chunk
+
+async function syncMISToLeads(rows, config, options = {}) {
+  // Optional common disbursal date (YYYY-MM-DD) applied to ALL disbursed rows.
+  // When set, it overrides per-row dates so the whole upload lands on one date
+  // and the dashboard date-range filter picks it up.
+  const commonDisbursalDate = options.commonDisbursalDate || null;
+
   const result = {
     totalInFile:     rows.length,
-    disbursedInFile: 0,
+    successInFile:   0,   // rows with any success status (Approved/Sanctioned/Disbursed…)
+    disbursedInFile: 0,   // rows with an actual disbursed status
+    disbursedAmountInFile: 0, // sum of disbursal amounts across disbursed rows
     matched:         0,
     updated:         0,
     disbursementsRecorded: 0,
@@ -537,7 +577,10 @@ async function syncMISToLeads(rows, config) {
     errors:          [],
     lender:          config.displayName,
     tableName:       'leads',
+    disbursalDateApplied: commonDisbursalDate,
   };
+
+  const disbursedStatuses = getDisbursedStatuses(config);
 
   // Build response-log map once upfront for responselog-type lenders
   let responseLogMap = null;
@@ -547,53 +590,88 @@ async function syncMISToLeads(rows, config) {
     console.log(`[${config.lenderKey}] Map built: ${responseLogMap.size} entries`);
   }
 
-  for (const row of rows) {
+  // ── Per-row processor (called concurrently within a chunk) ──────────────
+  async function processRow(row, rowIndex) {
     try {
       // ── Step 1: Only process disbursed rows ───────────────────────────────
       const status    = config.extractStatus(row);
       const isSuccess = config.successStatuses.some(
         s => s.toLowerCase() === (status || '').toLowerCase()
       );
-      if (!isSuccess) continue;    // skip non-disbursed rows entirely
-      result.disbursedInFile++;
+      if (!isSuccess) return;    // skip non-success rows entirely
+      result.successInFile++;
+
+      // Is this row an actual disbursal (vs merely approved/sanctioned)?
+      const isDisbursed = disbursedStatuses.some(
+        s => s.toLowerCase() === (status || '').toLowerCase()
+      );
+      const rowAmount = parseAmount(config.extractDisbursalAmount ? config.extractDisbursalAmount(row) : null);
+      // Common date (if provided) overrides the row's own date
+      const rowDate = commonDisbursalDate
+        || normalizeDate(config.extractDisbursalDate ? config.extractDisbursalDate(row) : null);
+      if (isDisbursed) {
+        result.disbursedInFile++;
+        if (rowAmount) result.disbursedAmountInFile += rowAmount;
+      }
 
       // ── Step 2a: UTM-type → write disbursement record only (no leads lookup) ─
       if (config.idType === 'utm') {
-        const utm  = config.extractUTM ? config.extractUTM(row) : {};
-        // Resolve source from UTM (try utmSource → utmCampaign → utmMedium)
-        const rawUTM   = utm.utmSource || utm.utmCampaign || utm.utmMedium || null;
-        const source   = rawUTM ? resolveSource(rawUTM) : config.displayName;
+        if (isDisbursed) {
+          const utm  = config.extractUTM ? config.extractUTM(row) : {};
+          // Resolve source from UTM (try utmSource → utmCampaign → utmMedium)
+          const rawUTM   = utm.utmSource || utm.utmCampaign || utm.utmMedium || null;
+          const source   = rawUTM ? resolveSource(rawUTM) : config.displayName;
+          const phone    = config.extractPhone ? config.extractPhone(row) : null;
 
-        await Disbursement.create({
-          source,
-          lender:          config.displayName,
-          lenderKey:       config.lenderKey,
-          disbursalAmount: config.extractDisbursalAmount ? config.extractDisbursalAmount(row) : null,
-          disbursalDate:   config.extractDisbursalDate   ? config.extractDisbursalDate(row)   : null,
-          name:            config.extractName  ? config.extractName(row)  : null,
-          phone:           config.extractPhone ? config.extractPhone(row) : null,
-          utmCampaign:     utm.utmCampaign || null,
-          utmMedium:       utm.utmMedium   || null,
-          utmSource:       utm.utmSource   || null,
-        });
-        result.disbursementsRecorded++;
-        continue;
+          await Disbursement.create({
+            // Deterministic id → re-uploads and duplicate rows overwrite, not duplicate
+            _id:             phone ? `${config.lenderKey}#${phone}` : undefined,
+            source,
+            lender:          config.displayName,
+            lenderKey:       config.lenderKey,
+            disbursalAmount: rowAmount,
+            disbursalDate:   rowDate,
+            name:            config.extractName ? config.extractName(row) : null,
+            phone,
+            utmCampaign:     utm.utmCampaign || null,
+            utmMedium:       utm.utmMedium   || null,
+            utmSource:       utm.utmSource   || null,
+          });
+          result.disbursementsRecorded++;
+        }
+        return;
       }
 
       // ── Step 2b: none-type → skip (no matching key available) ─────────────
       if (config.idType === 'none') {
         result.unmatched++;
-        continue;
+        return;
       }
 
       // ── Step 2c: Resolve our lead ─────────────────────────────────────────
       const identifier = config.extractId(row);
-      if (!identifier) { result.unmatched++; continue; }
+      if (!identifier) {
+        result.unmatched++;
+        // Still record disbursed rows so dashboard totals match the MIS file
+        if (isDisbursed) {
+          await Disbursement.create({
+            _id:             `${config.lenderKey}#unmatched#row${rowIndex}`,
+            source:          'Unknown',
+            lender:          config.displayName,
+            lenderKey:       config.lenderKey,
+            disbursalAmount: rowAmount,
+            disbursalDate:   rowDate,
+            unmatched:       true,
+          });
+          result.disbursementsRecorded++;
+        }
+        return;
+      }
 
       let lead;
       if (config.idType === 'responselog') {
         const ourLeadId = responseLogMap.get(String(identifier));
-        if (!ourLeadId) { result.unmatched++; continue; }
+        if (!ourLeadId) { result.unmatched++; return; }
         lead = await Lead.findById(ourLeadId);
       } else if (config.idType === 'phone') {
         lead = await Lead.findByPhone(identifier);
@@ -602,7 +680,24 @@ async function syncMISToLeads(rows, config) {
         lead = await Lead.findById(identifier);
       }
 
-      if (!lead) { result.unmatched++; continue; }
+      if (!lead) {
+        result.unmatched++;
+        // Still record disbursed rows so dashboard totals match the MIS file
+        if (isDisbursed) {
+          await Disbursement.create({
+            _id:             `${config.lenderKey}#unmatched#${identifier}`,
+            source:          'Unknown',
+            lender:          config.displayName,
+            lenderKey:       config.lenderKey,
+            disbursalAmount: rowAmount,
+            disbursalDate:   rowDate,
+            phone:           config.idType === 'phone' ? identifier : null,
+            unmatched:       true,
+          });
+          result.disbursementsRecorded++;
+        }
+        return;
+      }
       result.matched++;
 
       // ── Step 3: Update leads table ────────────────────────────────────────
@@ -623,18 +718,24 @@ async function syncMISToLeads(rows, config) {
       await Lead.updateByIdNoValidation(lead.leadId, updates);
       result.updated++;
 
-      // ── Step 4: Write disbursement record ─────────────────────────────────
-      await Disbursement.create({
-        leadId:          lead.leadId,
-        source:          lead.source,
-        lender:          config.displayName,
-        lenderKey:       config.lenderKey,
-        disbursalAmount: config.extractDisbursalAmount ? config.extractDisbursalAmount(row) : null,
-        disbursalDate:   config.extractDisbursalDate   ? config.extractDisbursalDate(row)   : null,
-        name:            lead.fullName || null,
-        phone:           lead.phone   || null,
-      });
-      result.disbursementsRecorded++;
+      // ── Step 4: Write disbursement record (disbursed rows only) ───────────
+      // Approved/Sanctioned rows update the lead above but must NOT count as
+      // disbursals on the dashboard.
+      if (isDisbursed) {
+        await Disbursement.create({
+          // Deterministic id → re-uploads and duplicate rows overwrite, not duplicate
+          _id:             `${config.lenderKey}#${lead.leadId}`,
+          leadId:          lead.leadId,
+          source:          lead.source,
+          lender:          config.displayName,
+          lenderKey:       config.lenderKey,
+          disbursalAmount: rowAmount,
+          disbursalDate:   rowDate,
+          name:            lead.fullName || null,
+          phone:           lead.phone   || null,
+        });
+        result.disbursementsRecorded++;
+      }
 
     } catch (err) {
       console.error(`[${config.lenderKey}] Row error:`, err.message);
@@ -642,6 +743,17 @@ async function syncMISToLeads(rows, config) {
         identifier: (() => { try { return config.extractId(row); } catch { return '?'; } })(),
         error: err.message,
       });
+    }
+  }
+
+  // ── Chunked execution: CHUNK_SIZE rows in parallel, chunks sequential ────
+  // Keeps total time low on production (no request timeout on big files)
+  // without hammering DynamoDB with unbounded concurrency.
+  for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+    const chunk = rows.slice(i, i + CHUNK_SIZE);
+    await Promise.all(chunk.map((row, j) => processRow(row, i + j)));
+    if (rows.length > CHUNK_SIZE) {
+      console.log(`[${config.lenderKey}] Processed ${Math.min(i + CHUNK_SIZE, rows.length)}/${rows.length} rows`);
     }
   }
 
@@ -699,12 +811,24 @@ exports.uploadAndSync = async (req, res) => {
       });
     }
 
+    // Optional common disbursal date (applied to every disbursed row)
+    let commonDisbursalDate = null;
+    if (req.body.disbursalDate) {
+      commonDisbursalDate = normalizeDate(req.body.disbursalDate);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(commonDisbursalDate || '')) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid disbursalDate "${req.body.disbursalDate}". Use YYYY-MM-DD.`,
+        });
+      }
+    }
+
     const rows = parseFile(filePath, file.originalname, config);
-    console.log(`[${lender}] Parsed ${rows.length} rows (sheet: ${config.sheetName || 'first'})`);
+    console.log(`[${lender}] Parsed ${rows.length} rows (sheet: ${config.sheetName || 'first'})${commonDisbursalDate ? `, common disbursal date: ${commonDisbursalDate}` : ''}`);
 
     if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); filePath = null; }
 
-    const syncResult = await syncMISToLeads(rows, config);
+    const syncResult = await syncMISToLeads(rows, config, { commonDisbursalDate });
 
     res.json({ success: true, ...syncResult });
 
@@ -716,3 +840,4 @@ exports.uploadAndSync = async (req, res) => {
 };
 
 exports.LENDER_CONFIGS = LENDER_CONFIGS;
+exports.syncMISToLeads = syncMISToLeads; // exported for testing

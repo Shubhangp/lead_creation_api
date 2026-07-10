@@ -10,6 +10,40 @@ const {
 
 const TABLE_NAME = 'disbursements';
 
+// Robust amount parser: "₹26,460.00" / "26,460" / 26460 → 26460
+function parseAmount(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  const cleaned = String(val).replace(/[^0-9.\-]/g, '');
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num;
+}
+
+// Normalize a stored disbursalDate to "YYYY-MM-DD" for comparison (handles
+// "26/06/2026", ISO timestamps, etc). Returns null if unparseable.
+function toISODate(val) {
+  if (!val) return null;
+  const s = String(val).trim();
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1];
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
+}
+
+// Filter items by disbursalDate range (inclusive). Items without a parseable
+// date are excluded when a range is active, included otherwise.
+function filterByDateRange(items, startDate, endDate) {
+  if (!startDate && !endDate) return items;
+  return items.filter(item => {
+    const d = toISODate(item.disbursalDate);
+    if (!d) return false;
+    if (startDate && d < startDate) return false;
+    if (endDate && d > endDate) return false;
+    return true;
+  });
+}
+
 class Disbursement {
   /**
    * Create a new disbursement record.
@@ -30,7 +64,9 @@ class Disbursement {
   static async create(data) {
     const now = new Date().toISOString();
     const item = {
-      _id:             uuidv4(),
+      // Caller may pass a deterministic _id (e.g. `${lenderKey}#${leadId}`) so
+      // re-uploads overwrite the existing record instead of duplicating it.
+      _id:             data._id || uuidv4(),
       source:          data.source,
       lender:          data.lender       || null,
       lenderKey:       data.lenderKey    || null,
@@ -42,6 +78,7 @@ class Disbursement {
       utmCampaign:     data.utmCampaign  || null,
       utmMedium:       data.utmMedium    || null,
       utmSource:       data.utmSource    || null,
+      unmatched:       data.unmatched    || null,
       createdAt:       now,
       updatedAt:       now,
     };
@@ -59,13 +96,11 @@ class Disbursement {
    * Get disbursement stats for one source.
    * Returns { count, totalAmount, items }
    */
-  static async getStatsBySource(source) {
-    const items = await Disbursement._queryAllBySource(source);
+  static async getStatsBySource(source, { startDate, endDate } = {}) {
+    let items = await Disbursement._queryAllBySource(source);
+    items = filterByDateRange(items, startDate, endDate);
     const count = items.length;
-    const totalAmount = items.reduce((sum, item) => {
-      const amt = parseFloat(item.disbursalAmount || '0');
-      return sum + (isNaN(amt) ? 0 : amt);
-    }, 0);
+    const totalAmount = items.reduce((sum, item) => sum + parseAmount(item.disbursalAmount), 0);
     return { count, totalAmount, items };
   }
 
@@ -97,14 +132,14 @@ class Disbursement {
    * Get per-source stats for all sources (superadmin).
    * Returns Array<{ source, count, totalAmount }>
    */
-  static async getAllSourceStats() {
+  static async getAllSourceStats({ startDate, endDate } = {}) {
     // Full scan — acceptable since this is superadmin-only and table is append-only
-    const all = [];
+    let all = [];
     let lastKey = null;
     do {
       const params = {
         TableName:            TABLE_NAME,
-        ProjectionExpression: '#src, disbursalAmount',
+        ProjectionExpression: '#src, disbursalAmount, disbursalDate',
         ExpressionAttributeNames: { '#src': 'source' },
       };
       if (lastKey) params.ExclusiveStartKey = lastKey;
@@ -113,14 +148,15 @@ class Disbursement {
       lastKey = res.LastEvaluatedKey;
     } while (lastKey);
 
+    all = filterByDateRange(all, startDate, endDate);
+
     // Group by source
     const bySource = {};
     for (const item of all) {
       const src = item.source || 'Unknown';
       if (!bySource[src]) bySource[src] = { source: src, count: 0, totalAmount: 0 };
       bySource[src].count++;
-      const amt = parseFloat(item.disbursalAmount || '0');
-      if (!isNaN(amt)) bySource[src].totalAmount += amt;
+      bySource[src].totalAmount += parseAmount(item.disbursalAmount);
     }
 
     return Object.values(bySource).sort((a, b) => b.totalAmount - a.totalAmount);

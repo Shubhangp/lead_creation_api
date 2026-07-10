@@ -376,10 +376,13 @@ async function getLeadById(req, res) {
 async function getDisbursementStats(req, res) {
   try {
     const { role, source } = req.user;
+    // Optional ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD → filter by disbursalDate
+    const { startDate, endDate } = req.query;
+    const dateRange = { startDate: startDate || null, endDate: endDate || null };
 
     if (role === 'superadmin') {
       // All-source breakdown for superadmin
-      const allStats = await Disbursement.getAllSourceStats();
+      const allStats = await Disbursement.getAllSourceStats(dateRange);
       const totalCount  = allStats.reduce((s, x) => s + x.count, 0);
       const totalAmount = allStats.reduce((s, x) => s + x.totalAmount, 0);
       return res.json({
@@ -395,7 +398,7 @@ async function getDisbursementStats(req, res) {
     }
 
     // Single-source for regular lender
-    const stats = await Disbursement.getStatsBySource(source);
+    const stats = await Disbursement.getStatsBySource(source, dateRange);
     return res.json({
       success: true,
       source,
