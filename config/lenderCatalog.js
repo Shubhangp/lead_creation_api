@@ -89,7 +89,7 @@ const LENDER_CATALOG = {
   CreditSea: {
     code: 'CreditSea',
     name: 'CreditSea', logo: '/creditsea.png',
-    maxAmount: 200000, minInterest: 14,
+    maxAmount: 50000, minInterest: 14,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
     website: 'https://www.creditsea.com/onboarding/sign-up/enter-mobile?source=12850119&utm_medium={utm_medium}&utm_campaign=ratecut_website',
     apr: 18, type: 'Digital · Quick',
