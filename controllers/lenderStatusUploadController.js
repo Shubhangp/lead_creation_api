@@ -567,6 +567,9 @@ async function syncMISToLeads(rows, config, options = {}) {
   // When set, it overrides per-row dates so the whole upload lands on one date
   // and the dashboard date-range filter picks it up.
   const commonDisbursalDate = options.commonDisbursalDate || null;
+  // Global row offset (used by batched /upload-rows so unmatched-row ids stay
+  // stable across batch boundaries on re-uploads)
+  const rowOffset = options.rowOffset || 0;
 
   const result = {
     totalInFile:     rows.length,
@@ -754,7 +757,7 @@ async function syncMISToLeads(rows, config, options = {}) {
   // without hammering DynamoDB with unbounded concurrency.
   for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
     const chunk = rows.slice(i, i + CHUNK_SIZE);
-    await Promise.all(chunk.map((row, j) => processRow(row, i + j)));
+    await Promise.all(chunk.map((row, j) => processRow(row, rowOffset + i + j)));
     if (rows.length > CHUNK_SIZE) {
       console.log(`[${config.lenderKey}] Processed ${Math.min(i + CHUNK_SIZE, rows.length)}/${rows.length} rows`);
     }
@@ -842,55 +845,28 @@ exports.uploadAndSync = async (req, res) => {
   }
 };
 
-// ─── Chunked upload (for large MIS files that hit proxy body-size limits) ────
+// ─── Row-batch sync (client-side parsed) ─────────────────────────────────────
 //
-// Client splits the file into small chunks and POSTs them sequentially:
-//   POST /upload-chunk   (multipart: chunk + uploadId, chunkIndex)
-//   POST /upload-finalize (json: uploadId, totalChunks, filename, lender, disbursalDate)
-// Finalize reassembles the chunks in order and runs the same sync as /upload.
+// For large MIS files the dashboard parses the file in the browser (xlsx pkg)
+// and POSTs rows in small JSON batches, so no single request exceeds the
+// proxy body-size limit and the server never handles the full file.
+//
+//   POST /upload-rows  (json: { lender, rows: [...], rowOffset?, disbursalDate? })
+//
+// Each batch runs through the same syncMISToLeads as /upload; the client
+// aggregates the per-batch results.
 // ──────────────────────────────────────────────────────────────────────────────
 
-const CHUNK_DIR = '/tmp/chunked-uploads';
-
-function chunkDir(uploadId) {
-  // sanitise: uploadId must be a simple token (no path traversal)
-  if (!/^[A-Za-z0-9_-]{8,64}$/.test(uploadId)) throw new Error('Invalid uploadId');
-  return path.join(CHUNK_DIR, uploadId);
-}
-
-exports.uploadChunk = (req, res) => {
+exports.syncRows = async (req, res) => {
   try {
-    const { uploadId, chunkIndex } = req.body;
-    if (!req.file)  return res.status(400).json({ success: false, error: 'No chunk provided' });
-    if (!uploadId)  return res.status(400).json({ success: false, error: 'uploadId is required' });
-    const idx = parseInt(chunkIndex, 10);
-    if (isNaN(idx) || idx < 0) {
-      return res.status(400).json({ success: false, error: 'Valid chunkIndex is required' });
+    const { lender, rows, disbursalDate, rowOffset } = req.body || {};
+
+    if (!lender) return res.status(400).json({ success: false, error: 'lender is required' });
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ success: false, error: 'rows must be a non-empty array' });
     }
-
-    const dir = chunkDir(uploadId);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.renameSync(req.file.path, path.join(dir, `chunk_${idx}`));
-
-    res.json({ success: true, uploadId, chunkIndex: idx });
-  } catch (error) {
-    console.error('[uploadChunk] Error:', error);
-    if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-    res.status(500).json({ success: false, error: error.message || 'Internal server error' });
-  }
-};
-
-exports.finalizeChunkedUpload = async (req, res) => {
-  let assembledPath = null;
-  let dir = null;
-
-  try {
-    const { uploadId, totalChunks, filename, lender, disbursalDate } = req.body;
-    if (!uploadId || !totalChunks || !filename || !lender) {
-      return res.status(400).json({
-        success: false,
-        error: 'uploadId, totalChunks, filename and lender are required',
-      });
+    if (rows.length > 1000) {
+      return res.status(400).json({ success: false, error: 'Max 1000 rows per batch' });
     }
 
     const config = LENDER_CONFIGS[lender.toLowerCase()];
@@ -901,38 +877,6 @@ exports.finalizeChunkedUpload = async (req, res) => {
       });
     }
 
-    const ext = path.extname(filename).toLowerCase();
-    if (!config.allowedExtensions.includes(ext)) {
-      return res.status(400).json({
-        success: false,
-        error: `File type ${ext} not allowed for ${config.displayName}. Allowed: ${config.allowedExtensions.join(', ')}`,
-      });
-    }
-
-    dir = chunkDir(uploadId);
-    const total = parseInt(totalChunks, 10);
-
-    // Verify all chunks arrived
-    const missing = [];
-    for (let i = 0; i < total; i++) {
-      if (!fs.existsSync(path.join(dir, `chunk_${i}`))) missing.push(i);
-    }
-    if (missing.length) {
-      return res.status(400).json({
-        success: false,
-        error: `Missing chunks: ${missing.join(', ')}. Re-upload and try again.`,
-      });
-    }
-
-    // Reassemble in order
-    assembledPath = path.join(dir, `assembled${ext}`);
-    const out = fs.createWriteStream(assembledPath);
-    for (let i = 0; i < total; i++) {
-      out.write(fs.readFileSync(path.join(dir, `chunk_${i}`)));
-    }
-    await new Promise((resolve, reject) => { out.end(err => err ? reject(err) : resolve()); });
-
-    // Optional common disbursal date
     let commonDisbursalDate = null;
     if (disbursalDate) {
       commonDisbursalDate = normalizeDate(disbursalDate);
@@ -944,19 +888,16 @@ exports.finalizeChunkedUpload = async (req, res) => {
       }
     }
 
-    const rows = parseFile(assembledPath, filename, config);
-    console.log(`[${lender}] (chunked) Assembled ${total} chunks → ${rows.length} rows${commonDisbursalDate ? `, common disbursal date: ${commonDisbursalDate}` : ''}`);
+    const offset = parseInt(rowOffset, 10) || 0;
+    console.log(`[${lender}] Row-batch sync: ${rows.length} rows (offset ${offset})${commonDisbursalDate ? `, common disbursal date: ${commonDisbursalDate}` : ''}`);
 
-    const syncResult = await syncMISToLeads(rows, config, { commonDisbursalDate });
+    const syncResult = await syncMISToLeads(rows, config, { commonDisbursalDate, rowOffset: offset });
 
     res.json({ success: true, ...syncResult });
 
   } catch (error) {
-    console.error('[finalizeChunkedUpload] Error:', error);
+    console.error('[syncRows] Error:', error);
     res.status(500).json({ success: false, error: error.message || 'Internal server error' });
-  } finally {
-    // Clean up chunk dir regardless of outcome
-    try { if (dir && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
 };
 

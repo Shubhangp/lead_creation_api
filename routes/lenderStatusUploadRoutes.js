@@ -21,15 +21,10 @@ const upload = multer({
   }
 });
 
-// Chunk uploader: no extension filter (chunks are raw binary slices), small size cap
-const chunkUpload = multer({
-  dest: '/tmp/uploads/',
-  limits: { fileSize: 4 * 1024 * 1024 }, // each chunk must stay under proxy body limit
-});
-
 router.get('/lenders', lenderSyncController.getLenders);
 router.post('/upload', upload.single('file'), lenderSyncController.uploadAndSync);
-router.post('/upload-chunk', chunkUpload.single('chunk'), lenderSyncController.uploadChunk);
-router.post('/upload-finalize', express.json(), lenderSyncController.finalizeChunkedUpload);
+// Row-batch sync: dashboard parses the file in the browser and sends small
+// JSON batches of rows, so no request ever exceeds the proxy body limit.
+router.post('/upload-rows', express.json({ limit: '2mb' }), lenderSyncController.syncRows);
 
 module.exports = router;
