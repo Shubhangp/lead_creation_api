@@ -155,10 +155,13 @@ const LENDER_CONFIGS = {
     allowedExtensions: ['.csv', '.xlsx', '.xls'],
     sheetName: null,
     idType: 'phone',
-    successStatuses: ['approved', 'Approved', 'ACCEPT', 'disbursed', 'Disbursed'],
+    successStatuses: ['Disbursed'],
     extractId: (row) => normalizePhone(String(pick(row, 'mobile_number', 'phone', 'Mobile') || '')),
-    extractStatus: (row) => pick(row, 'approval_status', 'l2_status', 'l1_status') || 'Unknown',
-    extractDisbursalAmount: (row) => pick(row, 'principal_amount', 'credit_limit'),
+    extractStatus: (row) =>
+      pick(row, 'disbursedon_date')
+        ? 'Disbursed'
+        : (pick(row, 'approval_status', 'l2_status', 'l1_status') || 'Unknown'),
+    extractDisbursalAmount: (row) => pick(row, 'principal_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursedon_date'),
     extractDetails: (row) => ({
       l1Status:        pick(row, 'l1_status'),
