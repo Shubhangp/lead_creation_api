@@ -22,7 +22,7 @@ const LENDER_MESSAGES = {
                 url: 'https://hdfc.com/apply'
             }
         }
-    },
+    }, 
     '2': {
         lenderName: 'ICICI Bank',
         message: 'ICICI Bank offers you pre-approved personal loans. Check your eligibility now!',
