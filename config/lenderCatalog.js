@@ -296,7 +296,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
 };
-
+ 
 const DEFAULT_LENDER_ORDER = [
   'RAMFINCROP', 'MPOKKET', 'PoonawallaFincorp', 'MPOKKETSE', 'CreditSea',
   'AdityaBirla', 'AdityaBirlaPL', 'INDIALENDS', 'Prefr', 'HERO', 'FATAKPAY',
