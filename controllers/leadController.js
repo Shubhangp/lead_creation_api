@@ -138,7 +138,7 @@ exports.createLead = async (req, res) => {
       savedLead, 
       distributionRules.immediate, 
       'immediate'
-    );
+    ); 
 
     if (immediateSuccessfulLenders.length > 0) {
       setTimeout(async () => {
