@@ -32,7 +32,7 @@ const LENDER_LISTS = {
     'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea', 'CreditHaat', 'CreditLinks',
     // MIS lenders (status updated via file upload, not immediate API response)
     'CASHVIA', 'DIGICREDIT', 'TAP4CREDIT', 'SPEEDOLOAN',
-    'PAISABOXX', 'HEROFINCORP', 'PREFR',
+    'PAISABOXX', 'HEROFINCORP', 'PREFR', 'AryseFin',
   ],
   // frontend: xlsx_upload › lead_upload (push-to-lenders selection)
   upload: [

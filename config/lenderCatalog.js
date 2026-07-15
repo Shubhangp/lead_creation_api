@@ -295,13 +295,24 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+  AryseFin: {
+    code: 'AryseFin',
+    name: 'AryseFin', logo: '/Aryse_Logo.webp',
+    maxAmount: 500000, minInterest: 12,
+    processingTime: '0-1 Day', approval: 'EXCELLENT',
+    website: 'https://arysefin.com/PL-Affiliate?dsa=619898394&source=RateCut&utm_campaign&utm_medium={utm_medium}',
+    apr: 24, type: 'Fintech · Quick',
+    rateRange: '12% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 };
  
 const DEFAULT_LENDER_ORDER = [
   'RAMFINCROP', 'MPOKKET', 'PoonawallaFincorp', 'MPOKKETSE', 'CreditSea',
   'AdityaBirla', 'AdityaBirlaPL', 'INDIALENDS', 'Prefr', 'HERO', 'FATAKPAY',
   'SPEEDO', 'TrueFund', 'TAP4CREDIT', 'RupeeDhan', 'PaisaBoxx', 'DigiCredit',
-  'Cashvia', 'SabkaLoan', 'CRMPaisa',
+  'Cashvia', 'SabkaLoan', 'CRMPaisa', 'AryseFin',
 ];
 
 function buildLenderList(codes) {
