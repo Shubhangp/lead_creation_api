@@ -306,6 +306,17 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+  Lnt: {
+    code: 'Lnt',
+    name: 'L&T Finance PL', logo: '/lnt-finance-logo.png',
+    maxAmount: 1000000, minInterest: 10.5,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://www.urbanmoney.com/personal-loan/lt-finance/apply-online?agentCode=MTE2NjI4&utm_medium={utm_medium}&utm_campaign=ratecut_website',
+    apr: 24, type: 'Fintech · Quick',
+    rateRange: '10% – 15% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 };
  
 const DEFAULT_LENDER_ORDER = [
