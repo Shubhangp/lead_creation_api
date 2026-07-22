@@ -261,7 +261,7 @@ const LENDER_CATALOG = {
     rateRange: '15% – 30% p.a.', processingFee: 'Upto 5% of loan amount',
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
-  },
+  }, 
   Bajaj: {
     code: 'Bajaj',
     name: 'Bajaj Markets', logo: '/bajaj.png',
