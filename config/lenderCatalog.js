@@ -257,7 +257,7 @@ const LENDER_CATALOG = {
     maxAmount: 300000, minInterest: 10,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
     website: 'https://banxx.com/in/gold-loans/app/zkedCGIL/?utm_source=RateCut&utm_medium={utm_medium}&utm_campaign=ratecut_website',
-    apr: 24, tag: 'Gold Loan', type: 'Fintech · Quick',
+    apr: 24, tag: 'Gold Loan Only', type: 'Fintech · Quick',
     rateRange: '15% – 30% p.a.', processingFee: 'Upto 5% of loan amount',
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
