@@ -389,6 +389,42 @@ const LENDER_CONFIGS = {
     }),
   },
 
+  // truefund → UTM attribution (MIS has no phone column; leadId/customerId are
+  // TrueFund-internal UUIDs). Their leadId is used as the deterministic row key
+  // so re-uploads overwrite instead of duplicating.
+  truefund: {
+    displayName: 'TrueFund',
+    lenderKey: 'TrueFund',
+    allowedExtensions: ['.xlsx', '.xls', '.csv'],
+    sheetName: null,
+    idType: 'utm',
+    successStatuses: ['Approved', 'Disbursed', 'Auto_Disbursal'],
+    extractId:     (row) => null,
+    extractStatus: (row) => pick(row, 'status', 'Status') || 'Unknown',
+    extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'disbursal_amount', 'approvalAmount'),
+    extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'disbursal_date', 'updated_at'),
+    extractUTM: (row) => ({
+      utmCampaign: pick(row, 'ppc_campaign', 'utm_campaign', 'campaign'),
+      utmMedium:   pick(row, 'medium', 'utm_medium'),
+      utmSource:   pick(row, 'utm_source', 'ppc_source', 'source'),
+    }),
+    extractName:  (row) => pick(row, 'name', 'Name', 'customer_name'),
+    extractPhone: (row) => normalizePhone(String(pick(row, 'phone', 'Phone', 'mobile', 'Mobile') || '')),
+    extractRowKey: (row) => pick(row, 'leadId', 'lead_id', 'customerId'),
+    extractDetails: (row) => ({
+      truefundLeadId:  pick(row, 'leadId'),
+      approvalAmount:  pick(row, 'approvalAmount'),
+      breApproveAmount:pick(row, 'breApproveAmount'),
+      disbursedAmount: pick(row, 'disbursalAmount'),
+      disbursedDate:   pick(row, 'disbursalDate'),
+      remarks:         pick(row, 'remarks'),
+      agentName:       pick(row, 'AgentName'),
+      salaryMode:      pick(row, 'SalaryMode'),
+      city:            pick(row, 'city'),
+      state:           pick(row, 'state'),
+    }),
+  },
+
   // ── No match key ──────────────────────────────────────────────────────────
 
   herofincorp: {
@@ -628,10 +664,12 @@ async function syncMISToLeads(rows, config, options = {}) {
           const rawUTM   = utm.utmSource || utm.utmCampaign || utm.utmMedium || null;
           const source   = rawUTM ? resolveSource(rawUTM) : config.displayName;
           const phone    = config.extractPhone ? config.extractPhone(row) : null;
+          // Fallback row key for MIS files without a phone column (e.g. TrueFund)
+          const rowKey   = phone || (config.extractRowKey ? config.extractRowKey(row) : null);
 
           await Disbursement.create({
             // Deterministic id → re-uploads and duplicate rows overwrite, not duplicate
-            _id:             phone ? `${config.lenderKey}#${phone}` : undefined,
+            _id:             rowKey ? `${config.lenderKey}#${rowKey}` : undefined,
             source,
             lender:          config.displayName,
             lenderKey:       config.lenderKey,
