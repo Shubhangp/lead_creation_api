@@ -317,6 +317,17 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+  tatacapital: {
+    code: 'tatacapital',
+    name: 'Tata Capital', logo: '/tatacapital_logo.png',
+    maxAmount: 1000000, minInterest: 10.99,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://www.tatacapital.com/online/loans/personal-loans/apply-now-personal-loan?sourceName=PL_Fastcredit&subsource=PL_Fastcredit&utm_medium={utm_medium}&utm_campaign=ratecut_website&LEAD_SUB_SOURCE_1=PL_Fastcredit&cid=affiliate:pl:july26:PL_Fastcredit::#!/nb70',
+    apr: 24, type: 'Fintech · Quick',
+    rateRange: '10% – 15% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 };
  
 const DEFAULT_LENDER_ORDER = [
