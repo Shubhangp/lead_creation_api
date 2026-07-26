@@ -38,7 +38,7 @@ const LENDER_LISTS = {
   upload: [
     'SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI',
     'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat'
+    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks'
   ],
   // frontend: dashboard › lead_distribution (filter UI)
   distribution: [
