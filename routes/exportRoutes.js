@@ -414,20 +414,49 @@ async function executeCount(params) {
 // GET TABLES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Pretty display labels for tables that shouldn't just be the raw table name.
+const TABLE_LABELS = {
+  fatakpay_pl__response_logs: 'FatakPay Personal Loan',
+  credit_sea_response_logs: 'Credit Sea',
+};
+
+// Human-friendly label from a table name (fallback when not in TABLE_LABELS).
+function prettyTableLabel(name) {
+  if (TABLE_LABELS[name]) return TABLE_LABELS[name];
+  return name;
+}
+
 router.get('/tables', (req, res) => {
   const tables = Object.keys(TABLE_CONFIG).concat([
     'leads_uat', 'lead_distribution_stats',
     'lead_distribution_processing'
   ]);
 
+  // Frontend-ready config map keyed by table name. The exporter UI consumes
+  // this directly instead of hardcoding TABLE_CONFIG — adding a table/source
+  // here (or in config/registry.js) reflects in the UI with no frontend deploy.
+  const config = {};
+  Object.entries(TABLE_CONFIG).forEach(([name, cfg]) => {
+    config[name] = {
+      type: cfg.type,
+      gsi: cfg.primaryGSI,
+      sources: cfg.sources || [],
+      // Leads-style tables can be queried by a single leadId as an alternative.
+      allowLeadId: cfg.type === 'leads' || cfg.type === 'lead_success',
+      requiresLeadId: cfg.requiresLeadId || false,
+      label: prettyTableLabel(name),
+    };
+  });
+
   res.json({
     tables,
-    tableInfo: Object.entries(TABLE_CONFIG).map(([name, config]) => ({
+    config,
+    tableInfo: Object.entries(TABLE_CONFIG).map(([name, cfg]) => ({
       name,
-      type: config.type,
-      primaryGSI: config.primaryGSI,
-      availableSources: config.sources || null,
-      requiresLeadId: config.requiresLeadId || false
+      type: cfg.type,
+      primaryGSI: cfg.primaryGSI,
+      availableSources: cfg.sources || null,
+      requiresLeadId: cfg.requiresLeadId || false
     }))
   });
 });
