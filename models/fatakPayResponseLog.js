@@ -97,14 +97,15 @@ class FatakPayResponseLog {
   }
 
   // Internal: query one source via source-createdAt-index
-  static async _queryBySource(source, startDate, endDate) {
+  static async _queryBySource(source, startDate, endDate, extra = {}) {
     return this._queryAll({
       TableName: TABLE_NAME,
       IndexName: 'source-createdAt-index',
       KeyConditionExpression: '#src = :src AND createdAt BETWEEN :start AND :end',
       ExpressionAttributeNames: { '#src': 'source' },
       ExpressionAttributeValues: { ':src': source, ':start': startDate, ':end': endDate },
-      ScanIndexForward: true
+      ScanIndexForward: true,
+      ...extra
     });
   }
 
@@ -289,7 +290,11 @@ class FatakPayResponseLog {
     if (!startDate || !end) throw new Error(`[${TABLE_NAME}] startDate and endDate are required`);
 
     try {
-      const allItems = (await Promise.all(SOURCES.map(src => this._queryBySource(src, startDate, end)))).flat();
+      // Only fetch attributes the daily aggregation reads — skips large fields like
+      // requestPayload so high-volume days (100k–200k+ rows) stay fast and don't
+      // exhaust the function's memory budget.
+      const PROJECTION = { ProjectionExpression: '#src, createdAt, responseStatus, responseBody' };
+      const allItems = (await Promise.all(SOURCES.map(src => this._queryBySource(src, startDate, end, PROJECTION)))).flat();
       console.log(`[${TABLE_NAME}] getStatsByDate: ${allItems.length} items`);
       return this._groupByDate(allItems);
     } catch (err) {

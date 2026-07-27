@@ -576,9 +576,14 @@ class OvlyResponseLog {
         const sources = require('../config/registry').RESPONSELOG_SOURCES;
         console.log(`[${TABLE_NAME}] Fetching source-wise stats by date for:`, sources);
 
+        // Only fetch attributes the daily aggregation reads — skips large fields
+        // like requestPayload/responseBody so high-volume days (100k–200k+ rows)
+        // stay fast and don't exhaust the function's memory budget.
+        const PROJECTION = { ProjectionExpression: '#source, #createdAt, responseStatus' };
+
         // Collect items from all sources
         const _perSourceItems = await Promise.all(
-          sources.map(src => this._fetchItemsBySource(src, startDate, actualEndDate))
+          sources.map(src => this._fetchItemsBySource(src, startDate, actualEndDate, PROJECTION))
         );
         let allItems = _perSourceItems.flat();
 
@@ -608,7 +613,10 @@ class OvlyResponseLog {
           ':startDate': startDate,
           ':endDate': actualEndDate
         },
-        ScanIndexForward: false
+        ScanIndexForward: false,
+        // Only fetch attributes the daily aggregation reads — skips large fields
+        // so high-volume days stay fast and don't exhaust memory.
+        ProjectionExpression: '#source, #createdAt, responseStatus'
       };
 
       do {
@@ -637,7 +645,7 @@ class OvlyResponseLog {
   /**
    * ✅ Helper to fetch items for a single source
    */
-  static async _fetchItemsBySource(source, startDate, endDate) {
+  static async _fetchItemsBySource(source, startDate, endDate, extra = {}) {
     let allItems = [];
     let lastKey = null;
 
@@ -654,7 +662,8 @@ class OvlyResponseLog {
         ':startDate': startDate,
         ':endDate': endDate
       },
-      ScanIndexForward: false
+      ScanIndexForward: false,
+      ...extra
     };
 
     do {

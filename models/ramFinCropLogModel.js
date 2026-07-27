@@ -68,9 +68,9 @@ class RamFinCropLog {
     return p;
   }
 
-  static async _fetchAllSources(startDate, endDate) {
+  static async _fetchAllSources(startDate, endDate, extra = {}) {
     const _perSource = await Promise.all(
-      SOURCES.map(src => this._queryAll(this._sourceParams(src, startDate, endDate)))
+      SOURCES.map(src => this._queryAll(this._sourceParams(src, startDate, endDate, extra)))
     );
     return _perSource.flat();
   }
@@ -274,9 +274,13 @@ class RamFinCropLog {
       source = null; startDate = sourceOrStart; actualEndDate = startOrEnd;
     }
 
+    // Only fetch attributes the daily aggregation reads — skips large fields like
+    // requestPayload/responseBody so high-volume days (100k–200k+ rows) stay fast
+    // and don't exhaust the function's memory budget.
+    const PROJECTION = '#src, #ca, responseStatus';
     const allItems = source
-      ? await this._queryAll(this._sourceParams(source, startDate, actualEndDate, { ScanIndexForward: true }))
-      : await this._fetchAllSources(startDate, actualEndDate);
+      ? await this._queryAll(this._sourceParams(source, startDate, actualEndDate, { ScanIndexForward: true, ProjectionExpression: PROJECTION }))
+      : await this._fetchAllSources(startDate, actualEndDate, { ProjectionExpression: PROJECTION });
 
     console.log(`[${TABLE_NAME}] getStatsByDate: ${allItems.length} items in ${Date.now() - t0}ms`);
 

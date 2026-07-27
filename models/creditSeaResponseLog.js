@@ -132,7 +132,7 @@ class CreditSeaResponseLog {
 
     // ─── Helper: Fetch items for a single source ──────────────────────────────
 
-    static async _fetchItemsBySource(source, startDate, endDate) {
+    static async _fetchItemsBySource(source, startDate, endDate, extra = {}) {
         let allItems = [];
         let lastKey = null;
 
@@ -142,7 +142,8 @@ class CreditSeaResponseLog {
             KeyConditionExpression: '#source = :source',
             ExpressionAttributeNames: { '#source': 'source' },
             ExpressionAttributeValues: { ':source': source },
-            ScanIndexForward: false
+            ScanIndexForward: false,
+            ...extra
         };
 
         if (startDate && endDate) {
@@ -310,10 +311,15 @@ class CreditSeaResponseLog {
                 actualEndDate = startDateOrEndDate;
             }
 
+            // Only fetch attributes the daily aggregation reads (_extractStatus uses
+            // responseStatus + responseBody) — skips large fields like requestPayload
+            // so high-volume days (100k–200k+ rows) stay fast and don't exhaust memory.
+            const PROJECTION = { ProjectionExpression: '#source, #createdAt, responseStatus, responseBody' };
+
             if (!source) {
                 const sources = require('../config/registry').RESPONSELOG_SOURCES;
                 const _perSourceItems = await Promise.all(
-                  sources.map(src => this._fetchItemsBySource(src, startDate, actualEndDate))
+                  sources.map(src => this._fetchItemsBySource(src, startDate, actualEndDate, PROJECTION))
                 );
                 let allItems = _perSourceItems.flat();
 
@@ -321,7 +327,7 @@ class CreditSeaResponseLog {
                 return Object.values(statsByDate).sort((a, b) => a.date.localeCompare(b.date));
             }
 
-            const allItems = await this._fetchItemsBySource(source, startDate, actualEndDate);
+            const allItems = await this._fetchItemsBySource(source, startDate, actualEndDate, PROJECTION);
             const statsByDate = this._groupByDate(allItems);
             return Object.values(statsByDate).sort((a, b) => a.date.localeCompare(b.date));
         } catch (error) {

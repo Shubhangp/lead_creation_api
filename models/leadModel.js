@@ -940,6 +940,10 @@ class Lead {
         IndexName: 'createdAt-index',
         KeyConditionExpression: 'datePartition = :partition AND createdAt BETWEEN :start AND :end',
         ExpressionAttributeValues: { ':partition': partition, ':start': startDate, ':end': endDate },
+        // Only fetch the attributes the daily aggregation needs — avoids pulling
+        // full lead records (which include large payloads) so high-volume days
+        // (100k–200k+ rows) don't exhaust the function's memory/time budget.
+        ProjectionExpression: 'createdAt, phone, panNumber, gender, consent',
         Limit: CHUNK_SIZE
       };
       if (lastKey) params.ExclusiveStartKey = lastKey;
@@ -968,7 +972,6 @@ class Lead {
       });
 
       lastKey = result.LastEvaluatedKey;
-      if (lastKey) await new Promise(resolve => setTimeout(resolve, 10));
     } while (lastKey);
   }
 

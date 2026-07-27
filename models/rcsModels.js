@@ -312,6 +312,7 @@ class RCSQueue {
         KeyConditionExpression: '#st = :st AND scheduledTime BETWEEN :from AND :to',
         ExpressionAttributeNames: { '#st': 'status' },
         ExpressionAttributeValues: { ':st': status, ':from': startDate, ':to': endDate },
+        ProjectionExpression: '#st, scheduledTime, createdAt, rcsType',
         ScanIndexForward: true
       }))
     );
