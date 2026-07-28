@@ -2,6 +2,7 @@
 const Lead = require('../models/leadModel');
 const LeadDistributionStats = require('../models/leadDistributionStatsModel');
 const { getRateLimit } = require('../config/lenderRateLimits');
+const { categorizeLenderResult } = require('../config/lenderResultCategorizer');
 
 // Import your lender-specific sending functions
 const {
@@ -167,30 +168,6 @@ class TokenBucket {
 }
 
 /**
- * Map a lender send-function result (or thrown error) into one of the
- * dashboard status categories: ACCEPT / REJECTED / Failed / other.
- * Mirrors the categorization used by the stats dashboard (responseBody.status).
- */
-const categorizeResult = (result, error) => {
-  if (error) return 'Failed';
-  // Some lenders early-return undefined (e.g. skipped/ineligible) — count as "other".
-  if (result === undefined || result === null) return 'other';
-
-  let body = result.responseBody;
-  if (typeof body === 'string') {
-    try { body = JSON.parse(body); } catch (_) { /* keep as string */ }
-  }
-  const bodyStatus = (body && typeof body === 'object') ? body.status : undefined;
-  const raw = String(bodyStatus || result.responseStatus || '').trim().toUpperCase();
-
-  if (!raw) return 'other';
-  if (raw === 'ACCEPT' || raw.includes('ACCEPT') || raw.includes('APPROV') || raw === 'SUCCESS') return 'ACCEPT';
-  if (raw.includes('REJECT') || raw.includes('DECLINE')) return 'REJECTED';
-  if (raw.includes('FAIL') || raw.includes('ERROR')) return 'Failed';
-  return 'other';
-};
-
-/**
  * Background job processing function
  *
  * MEMORY-SAFE / STREAMING: instead of collecting every lead into one giant
@@ -212,11 +189,13 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
   let successCount = 0;   // sent to lender API without throwing
   let failCount = 0;      // threw an error
   let matchedCount = 0;   // leads passing the filter (== totalLeads)
-  const categoryTotals = { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 };
+  const categoryTotals = {}; // dynamic per-lender category → running count
   let processingRecords = [];
   // Pending deltas flushed to DynamoDB periodically (throttle-safe).
   let pending = { processedLeads: 0, successfulLeads: 0, failedLeads: 0 };
-  let pendingCats = { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 };
+  let pendingCats = {}; // dynamic per-lender category → pending delta
+
+  const sumValues = (obj) => Object.values(obj).reduce((a, b) => a + b, 0);
 
   const flushCounters = async (force = false) => {
     if (force || pending.processedLeads >= 50) {
@@ -229,9 +208,9 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
         totalLeads: delta.processedLeads // totalLeads == matched == processed in streaming mode
       });
     }
-    if (force || (pendingCats.ACCEPT + pendingCats.REJECTED + pendingCats.Failed + pendingCats.other) >= 50) {
+    if (force || sumValues(pendingCats) >= 50) {
       const cats = pendingCats;
-      pendingCats = { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 };
+      pendingCats = {};
       await LeadDistributionStats.incrementStatusCategories(batchId, cats);
     }
   };
@@ -262,7 +241,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
           let sendError = null;
           try {
             const result = await sendFunction(lead);
-            category = categorizeResult(result, null);
+            category = categorizeLenderResult(lender, result, null);
 
             let retries = 3;
             while (retries > 0) {
@@ -290,7 +269,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
             successCount++;
           } catch (error) {
             sendError = error;
-            category = 'Failed';
+            category = categorizeLenderResult(lender, undefined, error);
 
             let retries = 3;
             while (retries > 0) {
@@ -331,7 +310,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
             failCount++;
           }
 
-          // Tally categorized stats (ACCEPT / REJECTED / Failed / other).
+          // Tally categorized stats (dynamic per-lender category keys).
           categoryTotals[category] = (categoryTotals[category] || 0) + 1;
           pendingCats[category] = (pendingCats[category] || 0) + 1;
           processedCount++;
@@ -357,7 +336,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
       await flushProcessingRecords();
       await flushCounters();
 
-      console.log(`[Batch ${batchId}] Progress: ${processedCount} processed (Success: ${successCount}, Failed: ${failCount}) | ACCEPT ${categoryTotals.ACCEPT} REJECTED ${categoryTotals.REJECTED} Failed ${categoryTotals.Failed} other ${categoryTotals.other}`);
+      console.log(`[Batch ${batchId}] Progress: ${processedCount} processed (Success: ${successCount}, Failed: ${failCount}) | categories: ${JSON.stringify(categoryTotals)}`);
 
       if (i + batchSize < filtered.length && delayMs > 0) {
         await new Promise(resolve => setTimeout(resolve, delayMs));
@@ -438,17 +417,19 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
       return;
     }
 
-    // Final authoritative status + totals (overwrites the incremental values).
+    // Final authoritative status + totals (overwrites the incremental values,
+    // including the full categorized breakdown so the stored map is exact).
     await LeadDistributionStats.updateBatchStats(batchId, {
       status: failCount === 0 ? 'COMPLETED' : (successCount === 0 ? 'FAILED' : 'PARTIAL'),
       completedAt: new Date().toISOString(),
       totalLeads: matchedCount,
       processedLeads: processedCount,
       successfulLeads: successCount,
-      failedLeads: failCount
+      failedLeads: failCount,
+      statusCategories: categoryTotals
     });
 
-    console.log(`[Batch ${batchId}] ✅ Completed: ${successCount} successful, ${failCount} failed out of ${processedCount} | ACCEPT ${categoryTotals.ACCEPT} REJECTED ${categoryTotals.REJECTED} Failed ${categoryTotals.Failed} other ${categoryTotals.other}`);
+    console.log(`[Batch ${batchId}] ✅ Completed: ${successCount} successful, ${failCount} failed out of ${processedCount} | categories: ${JSON.stringify(categoryTotals)}`);
 
     if (progressCallback) {
       progressCallback({

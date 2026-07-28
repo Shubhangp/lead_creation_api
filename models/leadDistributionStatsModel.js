@@ -50,14 +50,11 @@ class LeadDistributionStats {
       successfulLeads: 0,
       failedLeads: 0,
       processedLeads: 0,
-      // Categorized status breakdown (like the stats dashboard: ACCEPT / REJECTED / Failed / other).
-      // Stored WITH the batch/history record so the dashboard reads it directly (no recompute).
-      statusCategories: {
-        ACCEPT: 0,
-        REJECTED: 0,
-        Failed: 0,
-        other: 0
-      },
+      // Per-lender categorized status breakdown (matches the stats dashboard, e.g.
+      // CreditLinks: LEAD_CREATED/ALREADY_EXISTS/..., ZYPE: ACCEPT/REJECTED/Failed).
+      // Kept as a DYNAMIC map — keys are added on the fly per lender — and stored
+      // WITH the batch/history record so the dashboard reads it directly (no recompute).
+      statusCategories: {},
       status: 'PROCESSING', // PROCESSING, COMPLETED, FAILED, PARTIAL
       startedAt: new Date().toISOString(),
       completedAt: null,
