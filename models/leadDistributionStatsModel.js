@@ -50,6 +50,14 @@ class LeadDistributionStats {
       successfulLeads: 0,
       failedLeads: 0,
       processedLeads: 0,
+      // Categorized status breakdown (like the stats dashboard: ACCEPT / REJECTED / Failed / other).
+      // Stored WITH the batch/history record so the dashboard reads it directly (no recompute).
+      statusCategories: {
+        ACCEPT: 0,
+        REJECTED: 0,
+        Failed: 0,
+        other: 0
+      },
       status: 'PROCESSING', // PROCESSING, COMPLETED, FAILED, PARTIAL
       startedAt: new Date().toISOString(),
       completedAt: null,
@@ -142,6 +150,45 @@ class LeadDistributionStats {
         console.warn(`[${batchId}] Throughput exceeded on counter increment, retrying...`);
         await new Promise(resolve => setTimeout(resolve, 500));
         return this.incrementCounters(batchId, counters);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Atomically increment the categorized status counters (ACCEPT / REJECTED / Failed / other)
+   * stored on the batch record. Nested map path increments; throttle-safe with retry.
+   */
+  static async incrementStatusCategories(batchId, cats) {
+    const keys = Object.keys(cats || {}).filter(k => cats[k] > 0);
+    if (keys.length === 0) return null;
+
+    const updateExpression = [];
+    const expressionAttributeNames = { '#sc': 'statusCategories', '#lastUpdatedAt': 'lastUpdatedAt' };
+    const expressionAttributeValues = { ':zero': 0, ':now': new Date().toISOString() };
+
+    keys.forEach((k, index) => {
+      expressionAttributeNames[`#k${index}`] = k;
+      expressionAttributeValues[`:v${index}`] = cats[k];
+      updateExpression.push(`#sc.#k${index} = if_not_exists(#sc.#k${index}, :zero) + :v${index}`);
+    });
+    updateExpression.push('#lastUpdatedAt = :now');
+
+    try {
+      const result = await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { batchId },
+        UpdateExpression: `SET ${updateExpression.join(', ')}`,
+        ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues,
+        ReturnValues: 'ALL_NEW'
+      }));
+      return result.Attributes;
+    } catch (error) {
+      if (error.name === 'ProvisionedThroughputExceededException') {
+        console.warn(`[${batchId}] Throughput exceeded on status-category increment, retrying...`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return this.incrementStatusCategories(batchId, cats);
       }
       throw error;
     }

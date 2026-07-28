@@ -1,6 +1,7 @@
 // controllers/leadDistributionController.js
 const Lead = require('../models/leadModel');
 const LeadDistributionStats = require('../models/leadDistributionStatsModel');
+const { getRateLimit } = require('../config/lenderRateLimits');
 
 // Import your lender-specific sending functions
 const {
@@ -129,139 +130,149 @@ const getLenderSendFunction = (lender) => {
 };
 
 /**
+ * Token-bucket rate limiter (per-minute). Same pattern used in processLeadController.js.
+ * refillPerMs = ratePerMinute / 60000 → tokens trickle back continuously.
+ */
+class TokenBucket {
+  constructor(ratePerMinute) {
+    this.capacity = Math.max(1, ratePerMinute);
+    this.tokens = this.capacity;
+    this.refillPerMs = ratePerMinute / 60000;
+    this.last = Date.now();
+  }
+
+  _refill() {
+    const now = Date.now();
+    const elapsed = now - this.last;
+    if (elapsed > 0) {
+      this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillPerMs);
+      this.last = now;
+    }
+  }
+
+  async take(n = 1) {
+    // If the request is bigger than the whole bucket, cap the wait to one full refill.
+    const need = Math.min(n, this.capacity);
+    while (true) {
+      this._refill();
+      if (this.tokens >= need) {
+        this.tokens -= need;
+        return;
+      }
+      const deficit = need - this.tokens;
+      const waitMs = Math.ceil(deficit / this.refillPerMs);
+      await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, 1000)));
+    }
+  }
+}
+
+/**
+ * Map a lender send-function result (or thrown error) into one of the
+ * dashboard status categories: ACCEPT / REJECTED / Failed / other.
+ * Mirrors the categorization used by the stats dashboard (responseBody.status).
+ */
+const categorizeResult = (result, error) => {
+  if (error) return 'Failed';
+  // Some lenders early-return undefined (e.g. skipped/ineligible) — count as "other".
+  if (result === undefined || result === null) return 'other';
+
+  let body = result.responseBody;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch (_) { /* keep as string */ }
+  }
+  const bodyStatus = (body && typeof body === 'object') ? body.status : undefined;
+  const raw = String(bodyStatus || result.responseStatus || '').trim().toUpperCase();
+
+  if (!raw) return 'other';
+  if (raw === 'ACCEPT' || raw.includes('ACCEPT') || raw.includes('APPROV') || raw === 'SUCCESS') return 'ACCEPT';
+  if (raw.includes('REJECT') || raw.includes('DECLINE')) return 'REJECTED';
+  if (raw.includes('FAIL') || raw.includes('ERROR')) return 'Failed';
+  return 'other';
+};
+
+/**
  * Background job processing function
+ *
+ * MEMORY-SAFE / STREAMING: instead of collecting every lead into one giant
+ * `allLeads` array (and a second `filteredLeads` copy) — which caused OOM crashes
+ * on 2L+ datasets — we now process ONE DynamoDB page at a time: fetch → filter →
+ * rate-limited send → discard. Peak memory stays bounded to a single page.
+ * A per-lender TokenBucket enforces the lender's per-minute rate limit.
  */
 const processLeadsInBackground = async (batchId, lender, filters, batchSize, delayMs, progressCallback) => {
   const sendFunction = getLenderSendFunction(lender);
 
-  try {
-    // Query ALL leads with proper pagination
-    let allLeads = [];
+  // Per-lender rate limiter (per minute). Sending is throttled to the lender's cap.
+  const rpm = getRateLimit(lender);
+  const limiter = new TokenBucket(rpm);
+  console.log(`[Batch ${batchId}] Rate limit for ${lender}: ${rpm} leads/min`);
 
-    console.log(`[Batch ${batchId}] Starting lead collection...`);
+  // Running totals — shared across all pages (kept as plain scalars, not arrays).
+  let processedCount = 0;
+  let successCount = 0;   // sent to lender API without throwing
+  let failCount = 0;      // threw an error
+  let matchedCount = 0;   // leads passing the filter (== totalLeads)
+  const categoryTotals = { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 };
+  let processingRecords = [];
+  // Pending deltas flushed to DynamoDB periodically (throttle-safe).
+  let pending = { processedLeads: 0, successfulLeads: 0, failedLeads: 0 };
+  let pendingCats = { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 };
 
-    if (filters.sources && filters.sources.length > 0) {
-      // Query each source with pagination
-      for (const source of filters.sources) {
-        console.log(`[Batch ${batchId}] Querying source: ${source}`);
-        let lastEvaluatedKey = null;
-        let sourceCount = 0;
-
-        do {
-          const queryOptions = {
-            limit: 1000,
-            startDate: filters.startDate,
-            endDate: filters.endDate
-          };
-
-          if (lastEvaluatedKey) {
-            queryOptions.lastEvaluatedKey = lastEvaluatedKey;
-          }
-
-          const result = await Lead.findBySource(source, queryOptions);
-
-          // Handle both array and object response formats
-          let leads = [];
-          if (Array.isArray(result)) {
-            leads = result;
-            lastEvaluatedKey = null; // Arrays don't have pagination info
-          } else {
-            leads = result.items || [];
-            lastEvaluatedKey = result.lastEvaluatedKey || null;
-          }
-
-          sourceCount += leads.length;
-          allLeads = allLeads.concat(leads);
-
-          console.log(`[Batch ${batchId}] Source ${source}: fetched ${leads.length} leads (total so far: ${allLeads.length})`);
-
-          // Small delay to avoid rate limiting
-          await new Promise(resolve => setTimeout(resolve, 100));
-
-        } while (lastEvaluatedKey);
-
-        console.log(`[Batch ${batchId}] Source ${source} complete: ${sourceCount} leads`);
-      }
-    } else {
-      // No sources filter — query all known sources
-      const sources = process.env.LEAD_SOURCES?.split(',').map(s => s.trim()) || [];
-
-      if (sources.length > 0) {
-        for (const source of sources) {
-          let lastEvaluatedKey = null;
-          do {
-            const result = await Lead.findBySource(source, {
-              limit: 1000,
-              startDate: filters.startDate,
-              endDate: filters.endDate,
-              lastEvaluatedKey
-            });
-            allLeads = allLeads.concat(result.items || []);
-            lastEvaluatedKey = result.lastEvaluatedKey || null;
-            await new Promise(resolve => setTimeout(resolve, 100));
-          } while (lastEvaluatedKey);
-        }
-      } else if (filters.startDate && filters.endDate) {
-        // Fallback: use date range query
-        const result = await Lead.findByDateRange(filters.startDate, filters.endDate, { limit: null });
-        allLeads = result.items || [];
-      } else {
-        throw new Error('Either sources or a date range (startDate + endDate) must be provided when LEAD_SOURCES env is not set.');
-      }
-    }
-
-    console.log(`[Batch ${batchId}] Total leads fetched: ${allLeads.length}`);
-
-    // Apply additional filters
-    const filteredLeads = allLeads.filter(lead => filterLead(lead, filters));
-
-    console.log(`[Batch ${batchId}] After filtering: ${filteredLeads.length} leads match criteria`);
-
-    // Update batch with total leads
-    await LeadDistributionStats.updateBatchStats(batchId, {
-      totalLeads: filteredLeads.length
-    });
-
-    if (progressCallback) {
-      progressCallback({
-        type: 'filtering_complete',
-        totalLeads: filteredLeads.length
+  const flushCounters = async (force = false) => {
+    if (force || pending.processedLeads >= 50) {
+      const delta = pending;
+      pending = { processedLeads: 0, successfulLeads: 0, failedLeads: 0 };
+      await LeadDistributionStats.incrementCounters(batchId, {
+        processedLeads: delta.processedLeads,
+        successfulLeads: delta.successfulLeads,
+        failedLeads: delta.failedLeads,
+        totalLeads: delta.processedLeads // totalLeads == matched == processed in streaming mode
       });
     }
-
-    if (filteredLeads.length === 0) {
-      await LeadDistributionStats.updateBatchStats(batchId, {
-        status: 'COMPLETED',
-        completedAt: new Date().toISOString()
-      });
-      console.log(`[Batch ${batchId}] No leads to process`);
-      return;
+    if (force || (pendingCats.ACCEPT + pendingCats.REJECTED + pendingCats.Failed + pendingCats.other) >= 50) {
+      const cats = pendingCats;
+      pendingCats = { ACCEPT: 0, REJECTED: 0, Failed: 0, other: 0 };
+      await LeadDistributionStats.incrementStatusCategories(batchId, cats);
     }
+  };
 
-    // Process leads in batches with throttling
-    let processedCount = 0;
-    let successCount = 0;
-    let failCount = 0;
-    let processingRecords = [];
+  const flushProcessingRecords = async (force = false) => {
+    if (processingRecords.length >= 25 || (force && processingRecords.length > 0)) {
+      const toWrite = processingRecords;
+      processingRecords = [];
+      await LeadDistributionStats.recordLeadProcessingBatch(toWrite);
+    }
+  };
 
-    for (let i = 0; i < filteredLeads.length; i += batchSize) {
-      const batchLeads = filteredLeads.slice(i, i + batchSize);
+  // Process one filtered page (bounded slice) of leads, sub-batched + rate-limited.
+  const processPage = async (pageLeads) => {
+    const filtered = pageLeads.filter(lead => filterLead(lead, filters));
+    if (filtered.length === 0) return;
+    matchedCount += filtered.length;
 
-      // Process batch in parallel
-      const results = await Promise.allSettled(
-        batchLeads.map(async (lead) => {
+    for (let i = 0; i < filtered.length; i += batchSize) {
+      const subBatch = filtered.slice(i, i + batchSize);
+
+      // Enforce the lender's per-minute rate limit before firing this sub-batch.
+      await limiter.take(subBatch.length);
+
+      await Promise.allSettled(
+        subBatch.map(async (lead) => {
+          let category;
+          let sendError = null;
           try {
-            await sendFunction(lead);
+            const result = await sendFunction(lead);
+            category = categorizeResult(result, null);
 
-            // Update lead with push status (with retry logic)
             let retries = 3;
             while (retries > 0) {
               try {
                 await Lead.updateByIdNoValidation(lead.leadId, {
                   [`pushedTo.${lender}`]: {
-                    batchId: batchId,
+                    batchId,
                     pushedAt: new Date().toISOString(),
-                    status: 'success'
+                    status: 'success',
+                    category
                   }
                 });
                 break;
@@ -275,39 +286,21 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
               }
             }
 
-            // Queue for batch recording
-            processingRecords.push({
-              batchId,
-              leadId: lead.leadId,
-              status: 'success'
-            });
-
+            processingRecords.push({ batchId, leadId: lead.leadId, status: 'success', category });
             successCount++;
-            processedCount++;
-
-            if (progressCallback) {
-              progressCallback({
-                type: 'lead_processed',
-                leadId: lead.leadId,
-                status: 'success',
-                processed: processedCount,
-                total: filteredLeads.length,
-                successful: successCount,
-                failed: failCount
-              });
-            }
-
-            return { success: true, leadId: lead.leadId };
           } catch (error) {
-            // Update lead with error status (with retry logic)
+            sendError = error;
+            category = 'Failed';
+
             let retries = 3;
             while (retries > 0) {
               try {
                 await Lead.updateByIdNoValidation(lead.leadId, {
                   [`pushedTo.${lender}`]: {
-                    batchId: batchId,
+                    batchId,
                     pushedAt: new Date().toISOString(),
                     status: 'failed',
+                    category,
                     error: error.message
                   }
                 });
@@ -317,94 +310,154 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
                   retries--;
                   await new Promise(resolve => setTimeout(resolve, 500));
                 } else {
-                  // If we can't update lead, just log it
                   console.error(`Failed to update lead ${lead.leadId}:`, updateError.message);
                   break;
                 }
               }
             }
 
-            // Queue for batch recording
             processingRecords.push({
               batchId,
               leadId: lead.leadId,
               status: 'failed',
+              category,
               errorMessage: error.message.substring(0, 500)
             });
 
-            // Add to error summary
             await LeadDistributionStats.addError(batchId, {
               message: `Lead ${lead.leadId}: ${error.message}`
             });
 
             failCount++;
-            processedCount++;
+          }
 
-            if (progressCallback) {
-              progressCallback({
-                type: 'lead_processed',
-                leadId: lead.leadId,
-                status: 'failed',
-                error: error.message,
-                processed: processedCount,
-                total: filteredLeads.length,
-                successful: successCount,
-                failed: failCount
-              });
-            }
+          // Tally categorized stats (ACCEPT / REJECTED / Failed / other).
+          categoryTotals[category] = (categoryTotals[category] || 0) + 1;
+          pendingCats[category] = (pendingCats[category] || 0) + 1;
+          processedCount++;
+          pending.processedLeads++;
+          if (sendError) pending.failedLeads++; else pending.successfulLeads++;
 
-            return { success: false, leadId: lead.leadId, error: error.message };
+          if (progressCallback) {
+            progressCallback({
+              type: 'lead_processed',
+              leadId: lead.leadId,
+              status: sendError ? 'failed' : 'success',
+              category,
+              error: sendError ? sendError.message : undefined,
+              processed: processedCount,
+              total: matchedCount,
+              successful: successCount,
+              failed: failCount
+            });
           }
         })
       );
 
-      // Batch record processing logs every 25 leads
-      if (processingRecords.length >= 25) {
-        await LeadDistributionStats.recordLeadProcessingBatch(processingRecords);
-        processingRecords = [];
-      }
+      await flushProcessingRecords();
+      await flushCounters();
 
-      // Update counters in batch stats (less frequently to avoid throughput issues)
-      if (processedCount % 50 === 0 || i + batchSize >= filteredLeads.length) {
-        await LeadDistributionStats.incrementCounters(batchId, {
-          processedLeads: batchLeads.length,
-          successfulLeads: batchLeads.filter((_, idx) => results[idx].status === 'fulfilled' && results[idx].value?.success).length,
-          failedLeads: batchLeads.filter((_, idx) => results[idx].status === 'rejected' || results[idx].value?.success === false).length
-        });
-      }
+      console.log(`[Batch ${batchId}] Progress: ${processedCount} processed (Success: ${successCount}, Failed: ${failCount}) | ACCEPT ${categoryTotals.ACCEPT} REJECTED ${categoryTotals.REJECTED} Failed ${categoryTotals.Failed} other ${categoryTotals.other}`);
 
-      // Log progress
-      console.log(`[Batch ${batchId}] Progress: ${processedCount}/${filteredLeads.length} (Success: ${successCount}, Failed: ${failCount})`);
-
-      // Delay between batches to prevent rate limiting
-      if (i + batchSize < filteredLeads.length && delayMs > 0) {
+      if (i + batchSize < filtered.length && delayMs > 0) {
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
     }
+  };
 
-    // Record any remaining processing logs
-    if (processingRecords.length > 0) {
-      await LeadDistributionStats.recordLeadProcessingBatch(processingRecords);
+  try {
+    console.log(`[Batch ${batchId}] Starting streaming distribution...`);
+
+    // Determine which sources to stream over.
+    let sourcesToStream = null;
+    let useDateRangeFallback = false;
+    if (filters.sources && filters.sources.length > 0) {
+      sourcesToStream = filters.sources;
+    } else {
+      const envSources = process.env.LEAD_SOURCES?.split(',').map(s => s.trim()).filter(Boolean) || [];
+      if (envSources.length > 0) {
+        sourcesToStream = envSources;
+      } else if (filters.startDate && filters.endDate) {
+        useDateRangeFallback = true;
+      } else {
+        throw new Error('Either sources or a date range (startDate + endDate) must be provided when LEAD_SOURCES env is not set.');
+      }
     }
 
-    // Update final batch status
+    if (sourcesToStream) {
+      // Stream page-by-page per source: fetch → filter → send → discard.
+      for (const source of sourcesToStream) {
+        console.log(`[Batch ${batchId}] Streaming source: ${source}`);
+        let lastEvaluatedKey = null;
+        do {
+          const queryOptions = {
+            limit: 1000,
+            startDate: filters.startDate,
+            endDate: filters.endDate
+          };
+          if (lastEvaluatedKey) queryOptions.lastEvaluatedKey = lastEvaluatedKey;
+
+          const result = await Lead.findBySource(source, queryOptions);
+
+          let pageLeads = [];
+          if (Array.isArray(result)) {
+            pageLeads = result;
+            lastEvaluatedKey = null; // arrays carry no pagination cursor
+          } else {
+            pageLeads = result.items || [];
+            lastEvaluatedKey = result.lastEvaluatedKey || null;
+          }
+
+          await processPage(pageLeads);
+          // pageLeads goes out of scope on next iteration → eligible for GC.
+        } while (lastEvaluatedKey);
+
+        console.log(`[Batch ${batchId}] Source ${source} complete.`);
+      }
+    } else if (useDateRangeFallback) {
+      // Date-range fallback. findByDateRange doesn't page here, so guard memory
+      // by processing whatever it returns, then discarding.
+      const result = await Lead.findByDateRange(filters.startDate, filters.endDate, { limit: null });
+      await processPage(result.items || []);
+    }
+
+    // Final flush of any remaining buffered records/counters.
+    await flushProcessingRecords(true);
+    await flushCounters(true);
+
+    if (matchedCount === 0) {
+      await LeadDistributionStats.updateBatchStats(batchId, {
+        status: 'COMPLETED',
+        totalLeads: 0,
+        completedAt: new Date().toISOString()
+      });
+      console.log(`[Batch ${batchId}] No leads matched criteria.`);
+      if (progressCallback) {
+        progressCallback({ type: 'batch_completed', batchId, totalLeads: 0, successful: 0, failed: 0, status: 'COMPLETED' });
+      }
+      return;
+    }
+
+    // Final authoritative status + totals (overwrites the incremental values).
     await LeadDistributionStats.updateBatchStats(batchId, {
       status: failCount === 0 ? 'COMPLETED' : (successCount === 0 ? 'FAILED' : 'PARTIAL'),
       completedAt: new Date().toISOString(),
+      totalLeads: matchedCount,
       processedLeads: processedCount,
       successfulLeads: successCount,
       failedLeads: failCount
     });
 
-    console.log(`[Batch ${batchId}] ✅ Completed: ${successCount} successful, ${failCount} failed out of ${processedCount} total`);
+    console.log(`[Batch ${batchId}] ✅ Completed: ${successCount} successful, ${failCount} failed out of ${processedCount} | ACCEPT ${categoryTotals.ACCEPT} REJECTED ${categoryTotals.REJECTED} Failed ${categoryTotals.Failed} other ${categoryTotals.other}`);
 
     if (progressCallback) {
       progressCallback({
         type: 'batch_completed',
-        batchId: batchId,
-        totalLeads: filteredLeads.length,
+        batchId,
+        totalLeads: matchedCount,
         successful: successCount,
         failed: failCount,
+        statusCategories: categoryTotals,
         status: failCount === 0 ? 'COMPLETED' : (successCount === 0 ? 'FAILED' : 'PARTIAL')
       });
     }
