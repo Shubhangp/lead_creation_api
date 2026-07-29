@@ -358,6 +358,57 @@ class Lead {
     return result.Items?.[0] || null;
   }
 
+  // Cutoff for an arbitrary lookback window (in days). Kept separate from the
+  // 30-day _lookbackCutoffISO() so callers that need a custom window (e.g. the
+  // bulk dedup pre-check at 90 days) don't affect the create()/update() paths.
+  static _cutoffISOForDays(lookbackDays) {
+    const days = Number(lookbackDays) > 0 ? Number(lookbackDays) : this.DUPLICATE_LOOKBACK_DAYS;
+    return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  /**
+   * Read-only existence check: does a lead with this phone exist within the
+   * last `lookbackDays` days? Uses Select:'COUNT' + Limit:1 so it never pulls
+   * full items — memory-safe for high-volume batch dedup. Returns boolean.
+   */
+  static async phoneExists(phone, lookbackDays = 90) {
+    if (!phone) return false;
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'phone-index',
+      KeyConditionExpression: 'phone = :phone',
+      FilterExpression: 'createdAt >= :cutoff',
+      ExpressionAttributeValues: {
+        ':phone': String(phone),
+        ':cutoff': this._cutoffISOForDays(lookbackDays),
+      },
+      Select: 'COUNT',
+      Limit: 1,
+    }));
+    return (result.Count || 0) > 0;
+  }
+
+  /**
+   * Read-only existence check: does a lead with this PAN exist within the
+   * last `lookbackDays` days? Returns boolean.
+   */
+  static async panExists(panNumber, lookbackDays = 90) {
+    if (!panNumber) return false;
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'panNumber-index',
+      KeyConditionExpression: 'panNumber = :panNumber',
+      FilterExpression: 'createdAt >= :cutoff',
+      ExpressionAttributeValues: {
+        ':panNumber': String(panNumber),
+        ':cutoff': this._cutoffISOForDays(lookbackDays),
+      },
+      Select: 'COUNT',
+      Limit: 1,
+    }));
+    return (result.Count || 0) > 0;
+  }
+
   static async findBySource(source, options = {}) {
     const {
       limit = 100,

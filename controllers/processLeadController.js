@@ -885,6 +885,83 @@ exports.getLeadCount = async (req, res) => {
 };
 
 /**
+ * POST /api/v1/process-leads/dedup-check
+ *
+ * Body (JSON): { phones: string[], pans: string[], lookbackDays?: number }
+ *
+ * READ-ONLY. Checks which of the supplied phones / PANs already exist in the
+ * `leads` table within the lookback window (default 90 days). Does NOT insert
+ * anything. Returns the subset that already exist so the caller can drop those
+ * rows before uploading.
+ *
+ * Used by the combined restructure+upload page: step 1 sends the real phones
+ * and real PANs from the file (before any PAN auto-generation) and removes
+ * every row whose phone OR PAN comes back as existing.
+ */
+const DEDUP_CONCURRENCY = 25;
+
+exports.dedupCheckLeads = async (req, res) => {
+    try {
+        const body = req.body || {};
+        const lookbackDays = Number(body.lookbackDays) > 0 ? Number(body.lookbackDays) : 90;
+
+        // Normalise + de-duplicate the input lists so we issue one query per
+        // distinct value (phones as strings, PANs upper-cased).
+        const phones = Array.from(new Set(
+            (Array.isArray(body.phones) ? body.phones : [])
+                .map((p) => (p == null ? '' : String(p).trim()))
+                .filter(Boolean)
+        ));
+        const pans = Array.from(new Set(
+            (Array.isArray(body.pans) ? body.pans : [])
+                .map((p) => (p == null ? '' : String(p).trim().toUpperCase()))
+                .filter(Boolean)
+        ));
+
+        if (phones.length === 0 && pans.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Provide at least one of phones[] or pans[]',
+            });
+        }
+
+        const phoneResults = await runWithConcurrency(
+            phones.map((phone) => async () => ({
+                phone,
+                exists: await Lead.phoneExists(phone, lookbackDays),
+            })),
+            DEDUP_CONCURRENCY
+        );
+        const panResults = await runWithConcurrency(
+            pans.map((pan) => async () => ({
+                pan,
+                exists: await Lead.panExists(pan, lookbackDays),
+            })),
+            DEDUP_CONCURRENCY
+        );
+
+        const existingPhones = phoneResults
+            .filter((r) => r && !r.error && r.exists)
+            .map((r) => r.phone);
+        const existingPans = panResults
+            .filter((r) => r && !r.error && r.exists)
+            .map((r) => r.pan);
+
+        return res.status(200).json({
+            success: true,
+            lookbackDays,
+            checkedPhones: phones.length,
+            checkedPans: pans.length,
+            existingPhones,
+            existingPans,
+        });
+    } catch (err) {
+        console.error('[ProcessLead] Dedup-check error:', err);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
+    }
+};
+
+/**
  * GET /api/v1/process-leads/template
  */
 exports.downloadTemplate = (_req, res) => {

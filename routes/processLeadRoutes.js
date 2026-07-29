@@ -7,6 +7,7 @@ const {
   getPushJobStatus,
   getAvailableLenders,
   getLeadCount,
+  dedupCheckLeads,
   downloadTemplate,
 } = require('../controllers/processLeadController');
 
@@ -29,6 +30,10 @@ router.get('/push-jobs/:jobId', getPushJobStatus);
 
 // Preview count before pushing
 router.get('/count', getLeadCount);
+
+// Read-only duplicate pre-check against the leads table (phone OR PAN, 90-day
+// lookback by default). Used by the combined restructure+upload page.
+router.post('/dedup-check', dedupCheckLeads);
 
 // List valid lender keys
 router.get('/lenders', getAvailableLenders);
