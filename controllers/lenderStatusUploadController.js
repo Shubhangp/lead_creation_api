@@ -124,6 +124,54 @@ const LENDER_CONFIGS = {
     }),
   },
 
+  // mpokket → response-log matching on requestId.
+  mpokket: {
+    displayName: 'mPokket',
+    lenderKey: 'MPOKKET',
+    allowedExtensions: ['.csv', '.xlsx', '.xls'],
+    sheetName: null,
+    idType: 'responselog',
+    tableName: 'mpokket_response_logs',
+    // Only logs that carry a requestId are matchable (successful pushes).
+    successFilterExpr: {
+      FilterExpression: 'contains(#rb, :msg)',
+      ExpressionAttributeNames: { '#rb': 'responseBody' },
+      ExpressionAttributeValues: { ':msg': 'requestId' },
+    },
+    extractLenderIdFromLog: (log) => {
+      const body = tryParseJSON(log.responseBody);
+      // Handle DynamoDB-typed ({ data: { M: { requestId: { S } } } }) and
+      // plain-JSON ({ data: { requestId } }) shapes.
+      return body?.data?.M?.requestId?.S
+          || body?.data?.requestId?.S
+          || body?.data?.requestId
+          || body?.requestId?.S
+          || body?.requestId
+          || null;
+    },
+    extractId:      (row) => pick(row, 'api_request_id', 'apiRequestId', 'request_id', 'requestId'),
+    extractStatus:  (row) => pick(row, 'activity', 'Activity', 'ACTIVITY') || 'Unknown',
+    successStatuses: ['Disbursal'],
+    extractDisbursalAmount: (row) => pick(row, 'Loan_amount', 'loan_amount', 'Loan Amount', 'LoanAmount'),
+    extractDisbursalDate:   (row) => pick(row, 'loan_disbursed_timestamp_ist', 'loan_disbursed_date', 'disbursed_date'),
+    extractDetails: (row) => ({
+      externalUserId:    pick(row, 'external_user_id'),
+      activity:          pick(row, 'activity'),
+      loanAmount:        pick(row, 'Loan_amount', 'loan_amount'),
+      loanDisbursedAt:   pick(row, 'loan_disbursed_timestamp_ist'),
+      approvalDate:      pick(row, 'complete_approval_timestamp_ist'),
+      registeredSince:   pick(row, 'registered_since_timestamp_ist'),
+      apiLeadPushDate:   pick(row, 'api_partner_lead_push_date'),
+      apiRequestId:      pick(row, 'api_request_id'),
+      userCategory:      pick(row, 'user_category'),
+      profession:        pick(row, 'profession'),
+      residenceCity:     pick(row, 'residence_city'),
+      residenceState:    pick(row, 'residence_state'),
+      attrSource:        pick(row, 'attr_source'),
+      rejectedReason:    pick(row, 'Rejected_reason'),
+    }),
+  },
+
   // ── Phone-based matching ───────────────────────────────────────────────────
 
   lendingplate: {
@@ -365,27 +413,44 @@ const LENDER_CONFIGS = {
     }),
   },
 
+  // ramfincorp → reads the "Disbursal MTD Dump" sheet. That sheet has no phone
+  // or usable lead id to resolve the user, so attribution is UTM-only: every row
+  // is a disbursal, and the real sub-source lives in Actual_utmMedium (mapped
+  // through resolveSource). leadID is used as the deterministic row key so
+  // re-uploads overwrite instead of duplicating.
   ramfincorp: {
     displayName: 'RamFinCorp',
     lenderKey: 'RAMFINCROP',
     allowedExtensions: ['.xlsx', '.xls', '.csv'],
-    sheetName: null,
+    sheetName: 'Disbursal MTD Dump',
     idType: 'utm',
-    successStatuses: ['Disbursed', 'Approved', 'DISBURSED', 'APPROVED'],
+    successStatuses: ['Disbursed'],
     extractId:     (row) => null,
-    extractStatus: (row) => pick(row, 'Status', 'status', 'loan_status') || 'Unknown',
-    extractDisbursalAmount: (row) => pick(row, 'Disbursed Amount', 'disbursal_amount', 'loan_amount'),
-    extractDisbursalDate:   (row) => pick(row, 'Disbursed Date', 'disbursal_date', 'disbursement_date'),
+    // Every row in the Disbursal MTD Dump is a disbursal — there is no status column.
+    extractStatus: (row) => 'Disbursed',
+    extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'Disbursed Amount', 'disbursal_amount'),
+    extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'Disbursed Date', 'disbursal_date'),
+    // Real sub-source is in Actual_utmMedium (Actual_utmSource is always "RateCut").
+    extractSource: (row) => pick(row, 'Actual_utmMedium', 'actual_utmMedium', 'utm_medium'),
     extractUTM: (row) => ({
-      utmCampaign: pick(row, 'utm_campaign', 'UTM Campaign', 'campaign'),
-      utmMedium:   pick(row, 'utm_medium',   'UTM Medium',   'medium'),
-      utmSource:   pick(row, 'utm_source',   'UTM Source',   'source'),
+      utmSource:   pick(row, 'Actual_utmSource',   'actual_utmSource'),
+      utmMedium:   pick(row, 'Actual_utmMedium',   'actual_utmMedium'),
+      utmCampaign: pick(row, 'Actual_utmCampaign', 'actual_utmCampaign'),
     }),
-    extractName:  (row) => pick(row, 'Name', 'name', 'customer_name'),
-    extractPhone: (row) => normalizePhone(String(pick(row, 'Phone', 'phone', 'Mobile', 'mobile') || '')),
+    extractName:  (row) => null,
+    extractPhone: (row) => null,
+    extractRowKey: (row) => pick(row, 'leadID', 'leadId', 'customerID', 'customerId'),
     extractDetails: (row) => ({
-      loanAmount:    pick(row, 'loan_amount', 'Loan Amount'),
-      disbursedDate: pick(row, 'disbursal_date', 'Disbursed Date'),
+      leadID:         pick(row, 'leadID'),
+      customerID:     pick(row, 'customerID'),
+      disbursalDate:  pick(row, 'disbursalDate'),
+      disbursalAmount:pick(row, 'disbursalAmount'),
+      createdDate:    pick(row, 'createdDate'),
+      tenureType:     pick(row, 'tenure_type'),
+      expiryDate:     pick(row, 'expiryDate'),
+      actualUtmSource:  pick(row, 'Actual_utmSource'),
+      actualUtmMedium:  pick(row, 'Actual_utmMedium'),
+      actualUtmCampaign:pick(row, 'Actual_utmCampaign'),
     }),
   },
 
@@ -660,9 +725,18 @@ async function syncMISToLeads(rows, config, options = {}) {
       if (config.idType === 'utm') {
         if (isDisbursed) {
           const utm  = config.extractUTM ? config.extractUTM(row) : {};
-          // Resolve source from UTM (try utmSource → utmCampaign → utmMedium)
-          const rawUTM   = utm.utmSource || utm.utmCampaign || utm.utmMedium || null;
-          const source   = rawUTM ? resolveSource(rawUTM) : config.displayName;
+          // Resolve source. Some lenders (e.g. RamFinCorp) carry the real
+          // sub-source in a specific column rather than utmSource — an
+          // extractSource hook overrides the generic UTM precedence.
+          let source;
+          if (config.extractSource) {
+            const rawSrc = config.extractSource(row);
+            source = rawSrc ? resolveSource(rawSrc) : config.displayName;
+          } else {
+            // Resolve source from UTM (try utmSource → utmCampaign → utmMedium)
+            const rawUTM = utm.utmSource || utm.utmCampaign || utm.utmMedium || null;
+            source = rawUTM ? resolveSource(rawUTM) : config.displayName;
+          }
           const phone    = config.extractPhone ? config.extractPhone(row) : null;
           // Fallback row key for MIS files without a phone column (e.g. TrueFund)
           const rowKey   = phone || (config.extractRowKey ? config.extractRowKey(row) : null);
