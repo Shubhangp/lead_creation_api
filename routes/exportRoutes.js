@@ -104,6 +104,20 @@ const TABLE_CONFIG = {
     sources: require('../config/registry').RESPONSELOG_SOURCES,
     fallbackGSI: 'leadId-index'
   },
+  'credithaat_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: require('../config/registry').RESPONSELOG_SOURCES,
+    fallbackGSI: 'leadId-index'
+  },
+  'credit_links_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: require('../config/registry').RESPONSELOG_SOURCES,
+    fallbackGSI: 'leadId-index'
+  },
 
   // ── Leads tables ───────────────────────────────────────────────────────────
   'leads': {
@@ -418,6 +432,8 @@ async function executeCount(params) {
 const TABLE_LABELS = {
   fatakpay_pl__response_logs: 'FatakPay Personal Loan',
   credit_sea_response_logs: 'Credit Sea',
+  credithaat_response_logs: 'CreditHaat',
+  credit_links_response_logs: 'CreditLinks',
 };
 
 // Human-friendly label from a table name (fallback when not in TABLE_LABELS).
