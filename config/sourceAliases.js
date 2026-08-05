@@ -9,6 +9,10 @@ const SOURCE_ALIASES = {
   fr: 'FREO',
   freo: 'FREO',
 
+  wc: 'WeCredit',
+  WeCredit: 'WeCredit',
+  wecredit: 'WeCredit',
+
   ap: 'Apr',
   apr: 'Apr',
 
