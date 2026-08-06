@@ -471,12 +471,7 @@ const LENDER_CONFIGS = {
     idType: 'utm',
     successStatuses: ['Disbursed'],
     extractId:     (row) => null,
-    // Treat any row with a positive disbursalAmount as Disbursed (money went out),
-    // regardless of the loan's current lifecycle status.
-    extractStatus: (row) => {
-      const amt = parseAmount(pick(row, 'disbursalAmount', 'disbursal_amount'));
-      return (amt !== null && amt > 0) ? 'Disbursed' : (pick(row, 'status', 'Status') || 'Unknown');
-    },
+    extractStatus: (row) => pick(row, 'status', 'Status') || 'Unknown',
     extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'disbursal_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'disbursal_date', 'updated_at'),
     // Sub-source lives in `medium`; utm_source is always "RateCut".
