@@ -291,12 +291,22 @@ const LENDER_CONFIGS = {
     lenderKey: 'PAISABOXX',
     allowedExtensions: ['.xlsx', '.xls'],
     sheetName: 'DisbursalData',
-    idType: 'phone',
+    idType: 'leadId',
+    // A row counts as disbursed when it carries both a Loan Amount and a
+    // Disbursed Date (Paisaboxx keeps status at "Approve"/"Proceed to Bank"
+    // even after money goes out), so we normalize those to 'Disbursed'.
     successStatuses: ['Disbursed', 'Approve', 'Proceed to Bank'],
-    extractId: (row) => normalizePhone(String(pick(row, 'Mobile Number', 'mobile_number', 'mobile', 'Phone') || '')),
-    extractStatus:  (row) => pick(row, 'Status', 'status') || 'Unknown',
+    disbursedStatuses: ['Disbursed'],
+    extractId: (row) => String(pick(row, 'Lead ID', 'lead_id', 'leadId', 'LeadID') || ''),
+    extractStatus:  (row) => {
+      const amt = parseAmount(pick(row, 'Loan Amount', 'loan_amount'));
+      const dt  = pick(row, 'Disbursed Date', 'disbursed_date');
+      if (amt !== null && amt > 0 && dt) return 'Disbursed';
+      return pick(row, 'Status', 'status') || 'Unknown';
+    },
     extractDisbursalAmount: (row) => pick(row, 'Loan Amount', 'loan_amount'),
     extractDisbursalDate:   (row) => pick(row, 'Disbursed Date', 'disbursed_date'),
+    extractSource: (row) => pick(row, 'UTM Source', 'utm_source', 'utmSource'),
     extractDetails: (row) => ({
       loanAmount:    pick(row, 'Loan Amount', 'loan_amount'),
       disbursedDate: pick(row, 'Disbursed Date', 'disbursed_date'),
@@ -419,7 +429,19 @@ const LENDER_CONFIGS = {
     extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'Disbursed Amount', 'disbursal_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'Disbursed Date', 'disbursal_date'),
     // Real sub-source is in Actual_utmMedium (Actual_utmSource is always "RateCut").
-    extractSource: (row) => pick(row, 'Actual_utmMedium', 'actual_utmMedium', 'utm_medium'),
+    // Only fr/ck/ap/cpc are recognized sub-sources; everything else
+    // (default_medium, undefined, applynow1, API, …) falls back to Ratecut.
+    extractSource: (row) => {
+      const raw = String(pick(row, 'Actual_utmMedium', 'actual_utmMedium', 'utm_medium') || '').trim().toLowerCase();
+      // Leading alphabetic token → handles URL-encoded variants like
+      // "fr%26p13%3d…" while keeping "applynow1" distinct from "ap".
+      const m = (raw.match(/^[a-z]+/) || [''])[0];
+      if (m === 'fr')  return 'FREO';
+      if (m === 'ck')  return 'CashKuber';
+      if (m === 'ap')  return 'Apr';
+      if (m === 'cpc') return 'cpc';
+      return 'Ratecut';
+    },
     extractUTM: (row) => ({
       utmSource:   pick(row, 'Actual_utmSource',   'actual_utmSource'),
       utmMedium:   pick(row, 'Actual_utmMedium',   'actual_utmMedium'),
@@ -556,6 +578,19 @@ function getDisbursedStatuses(config) {
   if (config.disbursedStatuses) return config.disbursedStatuses;
   const derived = (config.successStatuses || []).filter(s => /disburs|unlock/i.test(s));
   return derived.length ? derived : (config.successStatuses || []);
+}
+
+// Source for a disbursement row that couldn't be matched to a lead in our DB.
+// If the config derives source from the file itself (e.g. CreditSea's `medium`
+// column), use that — otherwise fall back to 'Unknown'.
+function resolveUnmatchedSource(config, row) {
+  if (config.extractSource) {
+    try {
+      const rawSrc = config.extractSource(row);
+      if (rawSrc) return resolveSource(rawSrc);
+    } catch { /* fall through */ }
+  }
+  return 'Unknown';
 }
 
 // Normalize a date value ("26/06/2026", "2026-06-26", Excel Date string…)
@@ -799,7 +834,7 @@ async function syncMISToLeads(rows, config, options = {}) {
         if (isDisbursed) {
           await Disbursement.create({
             _id:             `${config.lenderKey}#unmatched#row${rowIndex}`,
-            source:          'Unknown',
+            source:          resolveUnmatchedSource(config, row),
             lender:          config.displayName,
             lenderKey:       config.lenderKey,
             disbursalAmount: rowAmount,
@@ -829,7 +864,7 @@ async function syncMISToLeads(rows, config, options = {}) {
         if (isDisbursed) {
           await Disbursement.create({
             _id:             `${config.lenderKey}#unmatched#${identifier}`,
-            source:          'Unknown',
+            source:          resolveUnmatchedSource(config, row),
             lender:          config.displayName,
             lenderKey:       config.lenderKey,
             disbursalAmount: rowAmount,
