@@ -136,7 +136,7 @@ const LENDER_CONFIGS = {
           || body?.requestId?.S
           || body?.requestId
           || null;
-    },
+    }, 
     extractId:      (row) => pick(row, 'api_request_id', 'apiRequestId', 'request_id', 'requestId'),
     extractStatus:  (row) => pick(row, 'activity', 'Activity', 'ACTIVITY') || 'Unknown',
     successStatuses: ['Disbursal'],
