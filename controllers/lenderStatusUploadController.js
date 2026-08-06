@@ -13,18 +13,6 @@ const { resolveSource } = require('../config/sourceAliases');
 
 const RESPONSELOG_SOURCES = require('../config/registry').RESPONSELOG_SOURCES;
 
-// ─── Lender Configs ───────────────────────────────────────────────────────────
-//
-// idType values:
-//   'responselog' → match MIS row's lender-internal-id against our response log tables
-//   'phone'       → match by normalised phone against leads table
-//   'leadId'      → match by our UUID against leads table
-//   'utm'         → no leads lookup; resolve source from UTM → write disbursement record only
-//   'none'        → no viable match key in MIS; skip
-//
-// All lenders now only process DISBURSED rows (filtered by successStatuses).
-// ─────────────────────────────────────────────────────────────────────────────
-
 const LENDER_CONFIGS = {
 
   // ── Response-log matching ──────────────────────────────────────────────────
@@ -233,8 +221,11 @@ const LENDER_CONFIGS = {
     sheetName: 'Sheet1',
     idType: 'phone',
     successStatuses: ['Approved', 'Disbursed'],
-    extractId: (row) => normalizePhone(String(pick(row, 'phoneNumber', 'phone', 'Phone', 'Mobile') || '')),
-    extractStatus:  (row) => pick(row, 'status', 'Status') || 'Unknown',
+    extractId: (row) => normalizePhone(String(pick(row, 'phoneNumber', 'phone', 'Phone', 'Mobile', 'mobile') || '')),
+    extractStatus:  (row) => {
+      const amt = parseAmount(pick(row, 'disbursalAmount', 'disbursal_amount'));
+      return (amt !== null && amt > 0) ? 'Disbursed' : (pick(row, 'status', 'Status') || 'Unknown');
+    },
     extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'disbursal_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'disbursal_date'),
     extractDetails: (row) => ({
@@ -278,6 +269,13 @@ const LENDER_CONFIGS = {
     extractStatus:  (row) => pick(row, 'loanStatus', 'loan_status', 'status') || 'Unknown',
     extractDisbursalAmount: (row) => pick(row, 'disbursedAmount', 'disbursed_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursedAt', 'disbursed_at'),
+    extractSource: (row) => {
+      const m = String(pick(row, 'medium', 'Medium', 'utm_medium') || '').toLowerCase();
+      if (m.startsWith('fr')) return 'FREO';
+      if (m.startsWith('ck')) return 'CashKuber';
+      if (m.startsWith('ap')) return 'Apr';
+      return 'Ratecut';
+    },
     extractDetails: (row) => ({
       disbursedAmount:   pick(row, 'disbursedAmount', 'disbursed_amount'),
       disbursedAt:       pick(row, 'disbursedAt', 'disbursed_at'),
@@ -351,11 +349,6 @@ const LENDER_CONFIGS = {
     }),
   },
 
-  // ── UTM-based attribution (no leads-table lookup) ─────────────────────────
-  // These lenders' MIS files contain UTM params. Source is resolved via
-  // sourceAliases.js from the UTM value. Only disbursements table is written.
-
-  // cashvia → UTM per ODS (was leadId)
   cashvia: {
     displayName: 'Cashvia',
     lenderKey: 'CASHVIA',
@@ -413,11 +406,6 @@ const LENDER_CONFIGS = {
     }),
   },
 
-  // ramfincorp → reads the "Disbursal MTD Dump" sheet. That sheet has no phone
-  // or usable lead id to resolve the user, so attribution is UTM-only: every row
-  // is a disbursal, and the real sub-source lives in Actual_utmMedium (mapped
-  // through resolveSource). leadID is used as the deterministic row key so
-  // re-uploads overwrite instead of duplicating.
   ramfincorp: {
     displayName: 'RamFinCorp',
     lenderKey: 'RAMFINCROP',
@@ -454,15 +442,7 @@ const LENDER_CONFIGS = {
     }),
   },
 
-  // truefund → UTM attribution (MIS has no phone column; leadId/customerId are
-  // TrueFund-internal UUIDs). Their leadId is used as the deterministic row key
-  // so re-uploads overwrite instead of duplicating.
-  //
-  // A TrueFund row counts as a disbursal whenever it carries a real
-  // disbursalAmount — the money already went out — even if the loan later moved
-  // to closed / auto_withdrawal / rejected. Keying off the current `status`
-  // alone under-counts (misses disbursed-then-moved loans). Source comes from
-  // the `medium` column: fr→FREO, ck→CashKuber, ap→Apr, rtct/existing/other→Ratecut.
+
   truefund: {
     displayName: 'TrueFund',
     lenderKey: 'TrueFund',
@@ -885,11 +865,18 @@ async function syncMISToLeads(rows, config, options = {}) {
       // Approved/Sanctioned rows update the lead above but must NOT count as
       // disbursals on the dashboard.
       if (isDisbursed) {
+        // Source: honor a config-level extractSource hook (e.g. CreditSea derives
+        // source from the `medium` column) — otherwise fall back to the lead's source.
+        let disbSource = lead.source;
+        if (config.extractSource) {
+          const rawSrc = config.extractSource(row);
+          if (rawSrc) disbSource = resolveSource(rawSrc);
+        }
         await Disbursement.create({
           // Deterministic id → re-uploads and duplicate rows overwrite, not duplicate
           _id:             `${config.lenderKey}#${lead.leadId}`,
           leadId:          lead.leadId,
-          source:          lead.source,
+          source:          disbSource,
           lender:          config.displayName,
           lenderKey:       config.lenderKey,
           disbursalAmount: rowAmount,
