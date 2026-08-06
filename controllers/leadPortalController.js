@@ -91,9 +91,52 @@ async function fetchLeadsInRange(source, startDate, endDate) {
 async function getStats(req, res) {
   try {
     const source = req.user.source;
+    const role   = req.user.role;
     const { startDate, endDate } = parseDateRange(req.query);
 
-    console.log(`[getStats] source=${source}, ${startDate} → ${endDate}`);
+    console.log(`[getStats] source=${source}, role=${role}, ${startDate} → ${endDate}`);
+
+    // ── Superadmin: aggregate leads across ALL sources ──────────────────────
+    // A superadmin's own `source` holds ~no leads (real leads live under
+    // sub-sources like CashKuber/FREO), so a single-source query returns 0.
+    // Query the date-partition index (source-agnostic) instead — same reason
+    // getDisbursementStats has a dedicated superadmin branch.
+    if (role === 'superadmin') {
+      const { items: leads } = await Lead.findByDateRange(startDate, endDate, { limit: null });
+
+      const accepted = leads.filter(l => getSuccessfulLenders(l).length > 0);
+      const sent     = leads.filter(l => getSuccessfulLenders(l).length === 0);
+
+      const lenderBreakdown = {};
+      for (const lender of ALL_LENDERS) lenderBreakdown[lender] = 0;
+      for (const lead of accepted) {
+        for (const lender of getSuccessfulLenders(lead)) {
+          if (lenderBreakdown[lender] !== undefined) lenderBreakdown[lender]++;
+        }
+      }
+
+      let totalSentAllTime = leads.length;
+      try {
+        const totals = await Lead.getAccurateTotalCount();
+        if (totals && totals.totalLogs) totalSentAllTime = totals.totalLogs;
+      } catch (e) {
+        console.error('[getStats] getAccurateTotalCount error:', e.message);
+      }
+
+      return res.status(200).json({
+        success: true,
+        source,
+        isSuperAdmin: true,
+        dateRange: { startDate, endDate },
+        stats: {
+          totalSent:        totalSentAllTime,
+          totalSentInRange: leads.length,
+          accepted:         accepted.length,
+          sent:             sent.length,
+          lenderBreakdown,
+        },
+      });
+    }
 
     // All-time total sent
     let totalSentAllTime = 0;
