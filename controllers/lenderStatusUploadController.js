@@ -457,17 +457,36 @@ const LENDER_CONFIGS = {
   // truefund → UTM attribution (MIS has no phone column; leadId/customerId are
   // TrueFund-internal UUIDs). Their leadId is used as the deterministic row key
   // so re-uploads overwrite instead of duplicating.
+  //
+  // A TrueFund row counts as a disbursal whenever it carries a real
+  // disbursalAmount — the money already went out — even if the loan later moved
+  // to closed / auto_withdrawal / rejected. Keying off the current `status`
+  // alone under-counts (misses disbursed-then-moved loans). Source comes from
+  // the `medium` column: fr→FREO, ck→CashKuber, ap→Apr, rtct/existing/other→Ratecut.
   truefund: {
     displayName: 'TrueFund',
     lenderKey: 'TrueFund',
     allowedExtensions: ['.xlsx', '.xls', '.csv'],
     sheetName: null,
     idType: 'utm',
-    successStatuses: ['Approved', 'Disbursed', 'Auto_Disbursal'],
+    successStatuses: ['Disbursed'],
     extractId:     (row) => null,
-    extractStatus: (row) => pick(row, 'status', 'Status') || 'Unknown',
-    extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'disbursal_amount', 'approvalAmount'),
+    // Treat any row with a positive disbursalAmount as Disbursed (money went out),
+    // regardless of the loan's current lifecycle status.
+    extractStatus: (row) => {
+      const amt = parseAmount(pick(row, 'disbursalAmount', 'disbursal_amount'));
+      return (amt !== null && amt > 0) ? 'Disbursed' : (pick(row, 'status', 'Status') || 'Unknown');
+    },
+    extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'disbursal_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'disbursal_date', 'updated_at'),
+    // Sub-source lives in `medium`; utm_source is always "RateCut".
+    extractSource: (row) => {
+      const m = String(pick(row, 'medium', 'Medium', 'utm_medium') || '').toLowerCase();
+      if (m === 'fr' || m === 'freo')      return 'FREO';
+      if (m === 'ck' || m === 'cashkuber') return 'CashKuber';
+      if (m === 'ap' || m === 'apr')       return 'Apr';
+      return 'Ratecut'; // rtct, existing, blank, or anything else
+    },
     extractUTM: (row) => ({
       utmCampaign: pick(row, 'ppc_campaign', 'utm_campaign', 'campaign'),
       utmMedium:   pick(row, 'medium', 'utm_medium'),
@@ -608,7 +627,37 @@ function parseFile(filePath, originalFilename, config) {
 // (server-side filter) + ProjectionExpression (minimal payload).
 // Returns Map<lenderInternalId → ourLeadId>
 //
-async function buildResponseLogMap(config) {
+// Cache built response-log maps across the batched /upload-rows requests that
+// make up a single upload. Without this, every batch re-scans the whole
+// response-log table (→ gateway 504 on large tables). The frontend sends
+// batches sequentially, so the first batch builds the map and the rest reuse
+// it. Keyed by table name; short TTL so a fresh upload later sees new logs.
+const _responseLogMapCache = new Map(); // tableName -> { map, builtAt, promise }
+const RESPONSELOG_MAP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+async function buildResponseLogMap(config, { useCache = false } = {}) {
+  if (useCache) {
+    const cached = _responseLogMapCache.get(config.tableName);
+    if (cached && (Date.now() - cached.builtAt) < RESPONSELOG_MAP_TTL_MS) {
+      // If a build is still in flight (first batch), await the same promise
+      // instead of kicking off a second full-table scan.
+      return cached.promise ? cached.promise : cached.map;
+    }
+    const promise = _buildResponseLogMap(config);
+    _responseLogMapCache.set(config.tableName, { map: null, builtAt: Date.now(), promise });
+    try {
+      const map = await promise;
+      _responseLogMapCache.set(config.tableName, { map, builtAt: Date.now(), promise: null });
+      return map;
+    } catch (err) {
+      _responseLogMapCache.delete(config.tableName); // don't cache a failed build
+      throw err;
+    }
+  }
+  return _buildResponseLogMap(config);
+}
+
+async function _buildResponseLogMap(config) {
   const map = new Map();
 
   for (const source of RESPONSELOG_SOURCES) {
@@ -689,11 +738,12 @@ async function syncMISToLeads(rows, config, options = {}) {
 
   const disbursedStatuses = getDisbursedStatuses(config);
 
-  // Build response-log map once upfront for responselog-type lenders
+  // Build response-log map once upfront for responselog-type lenders.
+  // For batched uploads the map is cached across batches (see buildResponseLogMap).
   let responseLogMap = null;
   if (config.idType === 'responselog') {
     console.log(`[${config.lenderKey}] Building response log map…`);
-    responseLogMap = await buildResponseLogMap(config);
+    responseLogMap = await buildResponseLogMap(config, { useCache: !!options.useResponseLogCache });
     console.log(`[${config.lenderKey}] Map built: ${responseLogMap.size} entries`);
   }
 
@@ -1003,7 +1053,11 @@ exports.syncRows = async (req, res) => {
     const offset = parseInt(rowOffset, 10) || 0;
     console.log(`[${lender}] Row-batch sync: ${rows.length} rows (offset ${offset})${commonDisbursalDate ? `, common disbursal date: ${commonDisbursalDate}` : ''}`);
 
-    const syncResult = await syncMISToLeads(rows, config, { commonDisbursalDate, rowOffset: offset });
+    const syncResult = await syncMISToLeads(rows, config, {
+      commonDisbursalDate,
+      rowOffset: offset,
+      useResponseLogCache: true, // reuse the response-log map across batches
+    });
 
     res.json({ success: true, ...syncResult });
 
