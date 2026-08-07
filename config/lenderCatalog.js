@@ -329,7 +329,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   mudrasewa: {
-    code: 'mudrasewa',
+    code: 'mudrasewa', 
     name: 'Mudrasewa', logo: '/mudrasewa_logo.jpeg',
     maxAmount: 150000, minInterest: 35,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
