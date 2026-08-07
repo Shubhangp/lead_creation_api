@@ -592,6 +592,91 @@ class Lead {
     return result.Item?.count || 0;
   }
 
+  // ── Memory-safe COUNT helpers ───────────────────────────────────────────────
+  // These use Select:'COUNT' so DynamoDB returns only tallies — no lead items are
+  // ever loaded into the Node heap. Safe to run on the EC2 box without OOM.
+
+  // Count of leads for one source within a createdAt range.
+  static async countBySourceInRange(source, startDate, endDate) {
+    let count = 0, lastKey = null;
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source AND createdAt BETWEEN :start AND :end',
+        ExpressionAttributeNames:  { '#source': 'source' },
+        ExpressionAttributeValues: { ':source': source, ':start': startDate, ':end': endDate },
+        Select: 'COUNT',
+      };
+      if (lastKey) params.ExclusiveStartKey = lastKey;
+      const result = await docClient.send(new QueryCommand(params));
+      count += result.Count || 0;
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+    return count;
+  }
+
+  // Count of *accepted* leads (successfulLenders non-empty) for one source in range.
+  static async countAcceptedBySourceInRange(source, startDate, endDate) {
+    let count = 0, lastKey = null;
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'source-createdAt-index',
+        KeyConditionExpression: '#source = :source AND createdAt BETWEEN :start AND :end',
+        FilterExpression: 'attribute_exists(successfulLenders) AND size(successfulLenders) > :zero',
+        ExpressionAttributeNames:  { '#source': 'source' },
+        ExpressionAttributeValues: { ':source': source, ':start': startDate, ':end': endDate, ':zero': 0 },
+        Select: 'COUNT',
+      };
+      if (lastKey) params.ExclusiveStartKey = lastKey;
+      const result = await docClient.send(new QueryCommand(params));
+      count += result.Count || 0;
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+    return count;
+  }
+
+  // Count all leads (any source) in a createdAt range, via the datePartition index.
+  static async countInDateRange(startDate, endDate) {
+    const partitions = this.getMonthPartitions(startDate, endDate);
+    const counts = await Promise.all(
+      partitions.map(p => this._countPartitionInRange(p, startDate, endDate, false))
+    );
+    return counts.reduce((a, b) => a + b, 0);
+  }
+
+  // Count accepted leads (any source) in a createdAt range.
+  static async countAcceptedInDateRange(startDate, endDate) {
+    const partitions = this.getMonthPartitions(startDate, endDate);
+    const counts = await Promise.all(
+      partitions.map(p => this._countPartitionInRange(p, startDate, endDate, true))
+    );
+    return counts.reduce((a, b) => a + b, 0);
+  }
+
+  static async _countPartitionInRange(partition, startDate, endDate, acceptedOnly) {
+    let count = 0, lastKey = null;
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        IndexName: 'createdAt-index',
+        KeyConditionExpression: 'datePartition = :p AND createdAt BETWEEN :s AND :e',
+        ExpressionAttributeValues: { ':p': partition, ':s': startDate, ':e': endDate },
+        Select: 'COUNT',
+      };
+      if (acceptedOnly) {
+        params.FilterExpression = 'attribute_exists(successfulLenders) AND size(successfulLenders) > :zero';
+        params.ExpressionAttributeValues[':zero'] = 0;
+      }
+      if (lastKey) params.ExclusiveStartKey = lastKey;
+      const result = await docClient.send(new QueryCommand(params));
+      count += result.Count || 0;
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+    return count;
+  }
+
   // ============================================================================
   // STATISTICS
   // ============================================================================

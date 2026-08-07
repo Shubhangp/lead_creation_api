@@ -96,32 +96,23 @@ async function getStats(req, res) {
 
     console.log(`[getStats] source=${source}, role=${role}, ${startDate} → ${endDate}`);
 
-    // ── Superadmin: aggregate leads across ALL sources ──────────────────────
+    // IMPORTANT: all figures below are computed with server-side COUNT queries
+    // (Select:'COUNT'). We never load lead items into the Node heap here — doing
+    // so on a large date range/source was OOM-killing the EC2 box on every
+    // dashboard load.
+
+    // ── Superadmin: aggregate across ALL sources via the datePartition index ──
     // A superadmin's own `source` holds ~no leads (real leads live under
     // sub-sources like CashKuber/FREO), so a single-source query returns 0.
-    // Query the date-partition index (source-agnostic) instead — same reason
-    // getDisbursementStats has a dedicated superadmin branch.
     if (role === 'superadmin') {
-      const { items: leads } = await Lead.findByDateRange(startDate, endDate, { limit: null });
-
-      const accepted = leads.filter(l => getSuccessfulLenders(l).length > 0);
-      const sent     = leads.filter(l => getSuccessfulLenders(l).length === 0);
-
-      const lenderBreakdown = {};
-      for (const lender of ALL_LENDERS) lenderBreakdown[lender] = 0;
-      for (const lead of accepted) {
-        for (const lender of getSuccessfulLenders(lead)) {
-          if (lenderBreakdown[lender] !== undefined) lenderBreakdown[lender]++;
-        }
-      }
-
-      let totalSentAllTime = leads.length;
-      try {
-        const totals = await Lead.getAccurateTotalCount();
-        if (totals && totals.totalLogs) totalSentAllTime = totals.totalLogs;
-      } catch (e) {
-        console.error('[getStats] getAccurateTotalCount error:', e.message);
-      }
+      const [totalSentInRange, totalsAllTime] = await Promise.all([
+        Lead.countInDateRange(startDate, endDate),
+        Lead.getAccurateTotalCount().catch(e => {
+          console.error('[getStats] getAccurateTotalCount error:', e.message);
+          return null;
+        }),
+      ]);
+      const totalSentAllTime = totalsAllTime?.totalLogs || totalSentInRange;
 
       return res.status(200).json({
         success: true,
@@ -130,40 +121,19 @@ async function getStats(req, res) {
         dateRange: { startDate, endDate },
         stats: {
           totalSent:        totalSentAllTime,
-          totalSentInRange: leads.length,
-          accepted:         accepted.length,
-          sent:             sent.length,
-          lenderBreakdown,
+          totalSentInRange,
         },
       });
     }
 
-    // All-time total sent
-    let totalSentAllTime = 0;
-    try {
-      totalSentAllTime = await Lead.countBySource(source);
-    } catch (e) {
-      console.error('[getStats] countBySource error:', e.message);
-    }
-
-    // Leads in date range — source of truth for all stats
-    const leads = await fetchLeadsInRange(source, startDate, endDate);
-
-    const accepted = leads.filter(l => getSuccessfulLenders(l).length > 0);
-    const sent     = leads.filter(l => getSuccessfulLenders(l).length === 0);
-
-    // Per-lender acceptance breakdown
-    const lenderBreakdown = {};
-    for (const lender of ALL_LENDERS) {
-      lenderBreakdown[lender] = 0;
-    }
-    for (const lead of accepted) {
-      for (const lender of getSuccessfulLenders(lead)) {
-        if (lenderBreakdown[lender] !== undefined) {
-          lenderBreakdown[lender]++;
-        }
-      }
-    }
+    // ── Regular lender: single-source COUNT queries ─────────────────────────
+    const [totalSentAllTime, totalSentInRange] = await Promise.all([
+      Lead.countBySource(source).catch(e => {
+        console.error('[getStats] countBySource error:', e.message);
+        return 0;
+      }),
+      Lead.countBySourceInRange(source, startDate, endDate),
+    ]);
 
     return res.status(200).json({
       success: true,
@@ -171,10 +141,7 @@ async function getStats(req, res) {
       dateRange: { startDate, endDate },
       stats: {
         totalSent:        totalSentAllTime,
-        totalSentInRange: leads.length,
-        accepted:         accepted.length,
-        sent:             sent.length,
-        lenderBreakdown,
+        totalSentInRange,
       },
     });
   } catch (err) {

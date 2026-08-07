@@ -1118,7 +1118,7 @@ exports.searchLeads = async (req, res) => {
 exports.countLeadsBySource = async (req, res) => {
   try {
     const { source } = req.params;
-    const count = await Lead.countBySource(source);
+    const count = await Lead.getQuickStats();
 
     res.status(200).json({
       status: 'success',
