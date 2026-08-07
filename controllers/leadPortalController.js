@@ -19,7 +19,7 @@ function parseDateRange(query) {
     const now  = new Date();
     endDate    = now.toISOString();
     const past = new Date(now);
-    past.setDate(past.getDate() - 30);
+    past.setDate(past.getDate() - 7);
     startDate  = past.toISOString();
   } else {
     if (!startDate.includes('T')) startDate = `${startDate}T00:00:00.000Z`;
@@ -107,8 +107,9 @@ async function getStats(req, res) {
     // A superadmin's own `source` holds ~no leads (real leads live under
     // sub-sources like CashKuber/FREO), so a single-source query returns 0.
     if (role === 'superadmin') {
-      const [totalSentInRange, totalsAllTime] = await Promise.all([
+      const [totalSentInRange, ratecutInRange, totalsAllTime] = await Promise.all([
         Lead.countAllDaily(startDate, endDate),
+        Lead.countBySourceDaily('Ratecut', startDate, endDate),
         Lead.getAccurateTotalCount().catch(e => {
           console.error('[getStats] getAccurateTotalCount error:', e.message);
           return null;
@@ -124,6 +125,7 @@ async function getStats(req, res) {
         stats: {
           totalSent:        totalSentAllTime,
           totalSentInRange,
+          ratecutInRange,
         },
       });
     }
