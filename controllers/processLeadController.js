@@ -378,8 +378,37 @@ async function savePageToLeadsTable(leads) {
         SAVE_CONCURRENCY
     );
 
+    const saved = results.filter((r) => r.ok).map((r) => r.lead);
+
+    // ── Keep counters in sync (createFast does not touch them) ──────────────
+    // All-time per-source counter + daily counters, bucketed to minimize writes.
+    if (saved.length) {
+        const sourceIncrements = {};   // source -> count
+        const dailyIncrements  = {};   // "source|YYYY-MM-DD" -> count
+        for (const lead of saved) {
+            const src = lead.source;
+            if (!src) continue;
+            sourceIncrements[src] = (sourceIncrements[src] || 0) + 1;
+            const day = String(lead.createdAt || '').slice(0, 10);
+            if (day) {
+                const dk = `${src}|${day}`;
+                dailyIncrements[dk] = (dailyIncrements[dk] || 0) + 1;
+            }
+        }
+        await Promise.all(
+            Object.entries(sourceIncrements).map(([src, cnt]) =>
+                Lead.incrementCounterBy(src, cnt).catch((err) =>
+                    console.error(`[Push] all-time counter update failed (${src}):`, err.message)
+                )
+            )
+        );
+        await Lead.bumpDailyCountersBulk(dailyIncrements).catch((err) =>
+            console.error('[Push] Daily counter bulk update failed:', err.message)
+        );
+    }
+
     return {
-        saved: results.filter((r) => r.ok).map((r) => r.lead),
+        saved,
         failed: results.filter((r) => !r.ok),
     };
 }

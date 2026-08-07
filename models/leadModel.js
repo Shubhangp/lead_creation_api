@@ -4,7 +4,8 @@ const {
   GetCommand,
   QueryCommand,
   UpdateCommand,
-  DeleteCommand
+  DeleteCommand,
+  BatchGetCommand
 } = require('@aws-sdk/lib-dynamodb');
 const { ConditionalCheckFailedException } = require('@aws-sdk/client-dynamodb');
 const { v4: uuidv4 } = require('uuid');
@@ -155,6 +156,92 @@ class Lead {
   }
 
   // ============================================================================
+  // DAILY COUNTERS  (for sub-second date-range stats)
+  // ============================================================================
+  // Two counter items are maintained per lead-created-day:
+  //   DAYCOUNT#<source>#<YYYY-MM-DD>   — per-source daily total
+  //   DAYCOUNT#__ALL__#<YYYY-MM-DD>    — all-sources daily total (for superadmin)
+  // A date-range read sums the relevant day keys with ONE BatchGet — no scan.
+
+  // UTC calendar day (matches how createdAt is stored — an ISO string).
+  static _dayKeyFromISO(iso) {
+    return String(iso || '').slice(0, 10); // "YYYY-MM-DD"
+  }
+
+  // Inclusive list of "YYYY-MM-DD" days spanning an ISO start→end range (UTC).
+  static _enumerateDays(startISO, endISO) {
+    const days = [];
+    const start = new Date(this._dayKeyFromISO(startISO) + 'T00:00:00.000Z');
+    const end   = new Date(this._dayKeyFromISO(endISO)   + 'T00:00:00.000Z');
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      days.push(d.toISOString().slice(0, 10));
+    }
+    return days;
+  }
+
+  // Bump both the source-day and all-sources-day counters by `delta`.
+  static async bumpDailyCounter(source, dayKey, delta = 1) {
+    if (!source || !dayKey || !delta) return;
+    const bump = (id) => docClient.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { leadId: id },
+      UpdateExpression: 'ADD #count :inc',
+      ExpressionAttributeNames: { '#count': 'count' },
+      ExpressionAttributeValues: { ':inc': delta },
+    }));
+    try {
+      await Promise.all([
+        bump(`DAYCOUNT#${source}#${dayKey}`),
+        bump(`DAYCOUNT#__ALL__#${dayKey}`),
+      ]);
+    } catch (e) {
+      console.error(`[DailyCounter] bump failed (${source} ${dayKey}):`, e.message);
+    }
+  }
+
+  // Bulk variant: buckets = Map or object keyed by "source|YYYY-MM-DD" → delta.
+  static async bumpDailyCountersBulk(buckets) {
+    const entries = buckets instanceof Map ? [...buckets.entries()] : Object.entries(buckets);
+    await Promise.all(entries.map(([key, delta]) => {
+      const idx = key.lastIndexOf('|');
+      const source = key.slice(0, idx);
+      const dayKey = key.slice(idx + 1);
+      return this.bumpDailyCounter(source, dayKey, delta);
+    }));
+  }
+
+  // Read helpers: sum day counters over a range via BatchGet (chunks of 100).
+  static async _sumDayKeys(prefix, startISO, endISO) {
+    const days = this._enumerateDays(startISO, endISO);
+    if (days.length === 0) return 0;
+    const keys = days.map(day => ({ leadId: `${prefix}#${day}` }));
+    let total = 0;
+    for (let i = 0; i < keys.length; i += 100) {
+      let unprocessed = keys.slice(i, i + 100);
+      while (unprocessed.length) {
+        const resp = await docClient.send(new BatchGetCommand({
+          RequestItems: {
+            [TABLE_NAME]: { Keys: unprocessed, ProjectionExpression: '#c', ExpressionAttributeNames: { '#c': 'count' } },
+          },
+        }));
+        for (const item of resp.Responses?.[TABLE_NAME] || []) {
+          total += item.count || 0;
+        }
+        unprocessed = resp.UnprocessedKeys?.[TABLE_NAME]?.Keys || [];
+      }
+    }
+    return total;
+  }
+
+  static countBySourceDaily(source, startISO, endISO) {
+    return this._sumDayKeys(`DAYCOUNT#${source}`, startISO, endISO);
+  }
+
+  static countAllDaily(startISO, endISO) {
+    return this._sumDayKeys('DAYCOUNT#__ALL__', startISO, endISO);
+  }
+
+  // ============================================================================
   // CRUD OPERATIONS
   // ============================================================================
 
@@ -180,6 +267,7 @@ class Lead {
 
     await docClient.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
     await this._incrementCounter(leadData.source);
+    await this.bumpDailyCounter(leadData.source, this._dayKeyFromISO(item.createdAt), 1);
 
     return item;
   }
@@ -309,6 +397,7 @@ class Lead {
 
     await docClient.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
     await this._incrementCounter(source);
+    await this.bumpDailyCounter(source, this._dayKeyFromISO(item.createdAt), 1);
 
     return { created: true, lead: item };
   }
@@ -576,7 +665,10 @@ class Lead {
   static async deleteById(leadId) {
     const lead = await this.findById(leadId);
     await docClient.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { leadId } }));
-    if (lead?.source) await this._decrementCounter(lead.source);
+    if (lead?.source) {
+      await this._decrementCounter(lead.source);
+      await this.bumpDailyCounter(lead.source, this._dayKeyFromISO(lead.createdAt), -1);
+    }
     return { deleted: true };
   }
 

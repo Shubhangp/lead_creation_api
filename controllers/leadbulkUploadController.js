@@ -237,6 +237,8 @@ const bulkUpload = async (req, res) => {
         const seenPhones = new Set();
         const seenPans   = new Set();
         const sourceIncrements = {};
+        // Daily counter deltas keyed by "source|YYYY-MM-DD" (for fast range stats)
+        const dailyIncrements = {};
 
         for await (const chunk of streamExcelChunks(tempFilePath, CHUNK_SIZE)) {
             const chunkTasks = [];
@@ -295,7 +297,14 @@ const bulkUpload = async (req, res) => {
                             summary.succeeded++;
                             results.push({ row: _rowNum, status: 'success', leadId: created.leadId });
                             const src = _leadData.source;
-                            if (src) sourceIncrements[src] = (sourceIncrements[src] || 0) + 1;
+                            if (src) {
+                                sourceIncrements[src] = (sourceIncrements[src] || 0) + 1;
+                                const day = String(created.createdAt || '').slice(0, 10);
+                                if (day) {
+                                    const dk = `${src}|${day}`;
+                                    dailyIncrements[dk] = (dailyIncrements[dk] || 0) + 1;
+                                }
+                            }
                         } catch (err) {
                             // Release reservation on failure
                             if (_phone) seenPhones.delete(_phone);
@@ -321,6 +330,11 @@ const bulkUpload = async (req, res) => {
                     console.error(`[Counter] Failed to update "${src}":`, err.message)
                 )
             )
+        );
+
+        // Daily counters — one bump per (source, day) bucket
+        await Lead.bumpDailyCountersBulk(dailyIncrements).catch(err =>
+            console.error('[DailyCounter] Bulk update failed:', err.message)
         );
 
         results.sort((a, b) => (a.row ?? 0) - (b.row ?? 0));

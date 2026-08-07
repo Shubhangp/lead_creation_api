@@ -96,17 +96,19 @@ async function getStats(req, res) {
 
     console.log(`[getStats] source=${source}, role=${role}, ${startDate} → ${endDate}`);
 
-    // IMPORTANT: all figures below are computed with server-side COUNT queries
-    // (Select:'COUNT'). We never load lead items into the Node heap here — doing
-    // so on a large date range/source was OOM-killing the EC2 box on every
-    // dashboard load.
+    // IMPORTANT: the date-range figure below is computed from pre-aggregated
+    // DAILY COUNTER items (DAYCOUNT#…) read with a single BatchGet — sub-second,
+    // no scan, no items in the Node heap. This replaced the Select:'COUNT'
+    // queries that were taking 20–70s and OOM-killing the EC2 box.
+    // NOTE: daily counters must be backfilled once (scripts/backfillDailyCounters.js)
+    // for historical leads to be counted.
 
-    // ── Superadmin: aggregate across ALL sources via the datePartition index ──
+    // ── Superadmin: aggregate across ALL sources via the __ALL__ daily key ──
     // A superadmin's own `source` holds ~no leads (real leads live under
     // sub-sources like CashKuber/FREO), so a single-source query returns 0.
     if (role === 'superadmin') {
       const [totalSentInRange, totalsAllTime] = await Promise.all([
-        Lead.countInDateRange(startDate, endDate),
+        Lead.countAllDaily(startDate, endDate),
         Lead.getAccurateTotalCount().catch(e => {
           console.error('[getStats] getAccurateTotalCount error:', e.message);
           return null;
@@ -126,13 +128,13 @@ async function getStats(req, res) {
       });
     }
 
-    // ── Regular lender: single-source COUNT queries ─────────────────────────
+    // ── Regular lender: all-time counter + daily-counter range sum ──────────
     const [totalSentAllTime, totalSentInRange] = await Promise.all([
       Lead.countBySource(source).catch(e => {
         console.error('[getStats] countBySource error:', e.message);
         return 0;
       }),
-      Lead.countBySourceInRange(source, startDate, endDate),
+      Lead.countBySourceDaily(source, startDate, endDate),
     ]);
 
     return res.status(200).json({

@@ -60,6 +60,26 @@ router.patch('/auth/password', authenticate, authController.updatePassword);
 router.get('/lender/stats', authenticate, leadPortalController.getStats);
 
 /**
+ * GET /api/lender/stats-test   ← LOCAL DEBUG ONLY, NO AUTH
+ * Disabled in production. Fakes req.user from the query string so you can hit
+ * the exact getStats code path without a JWT while debugging the crash.
+ * Query: ?source=Ratecut&role=superadmin&startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+ *   - role=superadmin → aggregates across all sources
+ *   - role=lender (default) → single-source (uses ?source=…)
+ */
+router.get('/lender/stats-test', (req, res, next) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ success: false, message: 'Not found' });
+  }
+  req.user = {
+    source: req.query.source || 'Ratecut',
+    role:   req.query.role   || 'lender',
+  };
+  console.log('[stats-test] NO-AUTH debug route hit:', req.user);
+  return leadPortalController.getStats(req, res, next);
+});
+
+/**
  * GET /api/lender/leads/all
  * All leads (accepted + sent) for this source.
  * Query: ?startDate=&endDate=&page=1&limit=50&search=&status=all|accepted|sent
