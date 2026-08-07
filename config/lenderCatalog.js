@@ -339,7 +339,7 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
-};
+}; 
 
 const DEFAULT_LENDER_ORDER = [
   'RAMFINCROP', 'MPOKKET', 'PoonawallaFincorp', 'MPOKKETSE', 'CreditSea',
