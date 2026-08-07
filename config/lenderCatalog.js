@@ -330,7 +330,7 @@ const LENDER_CATALOG = {
   },
   mudrasewa: {
     code: 'mudrasewa',
-    name: 'Mudrasewa', logo: '/mudrasewa_logo.png',
+    name: 'Mudrasewa', logo: '/mudrasewa_logo.jpeg',
     maxAmount: 150000, minInterest: 35,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
     website: 'https://mudrasewa.com/apply-now?utm_source=GM&utm_medium=cpd&utm_content=9696',
