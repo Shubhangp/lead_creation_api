@@ -328,13 +328,24 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+  mudrasewa: {
+    code: 'mudrasewa',
+    name: 'Mudrasewa', logo: '/mudrasewa_logo.png',
+    maxAmount: 150000, minInterest: 35,
+    processingTime: '0-1 Day', approval: 'EXCELLENT',
+    website: 'https://mudrasewa.com/apply-now?utm_source=GM&utm_medium=cpd&utm_content=9696',
+    apr: 24, tag: 'Salaried Only', type: 'Fintech · Quick',
+    rateRange: '25% – 35% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 };
- 
+
 const DEFAULT_LENDER_ORDER = [
   'RAMFINCROP', 'MPOKKET', 'PoonawallaFincorp', 'MPOKKETSE', 'CreditSea',
   'AdityaBirla', 'AdityaBirlaPL', 'INDIALENDS', 'Prefr', 'HERO', 'FATAKPAY',
   'SPEEDO', 'TrueFund', 'TAP4CREDIT', 'RupeeDhan', 'PaisaBoxx', 'DigiCredit',
-  'Cashvia', 'SabkaLoan', 'CRMPaisa', 'AryseFin',
+  'Cashvia', 'SabkaLoan', 'CRMPaisa', 'AryseFin', 'Mudrasewa'
 ];
 
 function buildLenderList(codes) {
