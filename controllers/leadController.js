@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const Lead = require('../models/leadModel');
+const LeadUAT = require('../models/leadUATModel');
 const ExcelLead = require('../models/ExcelLeadModel');
 // const PendingLead = require('../models/pendingLeadModel');
 const { parseFileInChunks, deleteFile } = require('../utils/readFile');
