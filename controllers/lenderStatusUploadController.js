@@ -317,6 +317,36 @@ const LENDER_CONFIGS = {
     }),
   },
 
+  // CreditLinks (Leverse Labs) → phone matching on the RAW sheet.
+  // Only rows whose "Final Status" is "Disbursed" count. Amount = "Value",
+  // disbursal date = "Final Date". File is an Excel binary workbook (.xlsb).
+  creditlinks: {
+    displayName: 'CreditLinks',
+    lenderKey: 'CREDITLINKS',
+    allowedExtensions: ['.xlsb', '.xlsx', '.xls'],
+    // Sheet depends on the file format: .xlsb dumps live on "RAW", the payout
+    // .xlsx keeps the same fields on "Sheet1".
+    sheetName: 'RAW',
+    sheetByExt: { '.xlsb': 'RAW', '.xlsx': 'Sheet1', '.xls': 'Sheet1' },
+    idType: 'phone',
+    successStatuses: ['Disbursed'],
+    extractId: (row) => normalizePhone(String(pick(row, 'MobilePhoneNumber', 'Mobile Number', 'mobile', 'phone') || '')),
+    extractStatus:  (row) => pick(row, 'Final Status', 'final_status', 'status') || 'Unknown',
+    extractDisbursalAmount: (row) => pick(row, 'Value', 'value'),
+    extractDisbursalDate:   (row) => pick(row, 'Final Date', 'final_date'),
+    extractDetails: (row) => ({
+      value:          pick(row, 'Value'),
+      finalStatus:    pick(row, 'Final Status'),
+      finalDate:      pick(row, 'Final Date'),
+      finalMonth:     pick(row, 'Final Month'),
+      reason:         pick(row, 'Reason'),
+      type:           pick(row, 'Type'),
+      category:       pick(row, 'Category'),
+      email:          pick(row, 'Email'),
+      currentPartner: pick(row, 'CurrentPartner'),
+    }),
+  },
+
   prefr: {
     displayName: 'Prefr',
     lenderKey: 'PREFR',
@@ -621,7 +651,9 @@ function parseFile(filePath, originalFilename, config) {
     rows = csv.parse(content, { columns: true, skip_empty_lines: true, trim: true });
   } else {
     const workbook = XLSX.readFile(filePath, { cellDates: true });
-    let sheetName = config.sheetName;
+    // Prefer an extension-specific sheet (e.g. RAW for .xlsb, Sheet1 for .xlsx),
+    // then the config default, then the first sheet.
+    let sheetName = (config.sheetByExt && config.sheetByExt[ext]) || config.sheetName;
     if (!sheetName || !workbook.SheetNames.includes(sheetName)) {
       sheetName = workbook.SheetNames[0];
     }
@@ -956,6 +988,7 @@ exports.getLenders = (req, res) => {
       lenderKey:         c.lenderKey || null,
       idType:            c.idType,
       sheetName:         c.sheetName || 'first sheet',
+      sheetByExt:        c.sheetByExt || null,
       allowedExtensions: c.allowedExtensions,
       successStatuses:   c.successStatuses || [],
       note: c.idType === 'none'

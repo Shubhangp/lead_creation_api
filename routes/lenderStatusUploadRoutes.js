@@ -10,7 +10,7 @@ const upload = multer({
     fileSize: 20 * 1024 * 1024
   },
   fileFilter: (req, file, cb) => {
-    const allowedExts = ['.csv', '.xlsx', '.xls'];
+    const allowedExts = ['.csv', '.xlsx', '.xls', '.xlsb'];
     const ext = file.originalname.toLowerCase().substring(file.originalname.lastIndexOf('.'));
     
     if (allowedExts.includes(ext)) {
