@@ -19,6 +19,11 @@ const SOURCE_ALIASES = {
   bls: 'Blostem',
   blostem: 'Blostem',
 
+  bosc: 'BoostScore',
+  bos: 'BoostScore',
+  boc: 'BoostScore',
+  boostscore: 'BoostScore',
+
   bs: 'BatterySmart',
   batterysmart: 'BatterySmart',
 
