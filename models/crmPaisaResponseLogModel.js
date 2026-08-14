@@ -1,5 +1,6 @@
 // models/crmPaisaResponseLog.js
 const { docClient } = require('../dynamodb');
+const { deepEncryptFields } = require('../utils/piiCrypto');
 const { PutCommand, GetCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
@@ -87,9 +88,9 @@ class CrmPaisaResponseLog {
       logId: uuidv4(),
       leadId: logData.leadId,
       source: logData.source,
-      requestPayload: logData.requestPayload || null,
+      requestPayload: deepEncryptFields(logData.requestPayload) || null,
       responseStatus: logData.responseStatus || null,
-      responseBody: logData.responseBody || null,
+      responseBody: deepEncryptFields(logData.responseBody) || null,
       createdAt: new Date().toISOString()
     };
 

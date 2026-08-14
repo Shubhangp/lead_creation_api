@@ -7,6 +7,7 @@ const {
   DeleteCommand
 } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
+const { encryptPII, maskPhone, maskPan } = require('../utils/piiCrypto');
 
 const TABLE_NAME = 'lead_success';
 
@@ -21,9 +22,9 @@ class LeadSuccess {
       successId: uuidv4(),
       leadId: successData.leadId || null,
       source: successData.source || null,
-      phone: successData.phone || null,
+      phone: encryptPII(successData.phone || null),
       email: successData.email || null,
-      panNumber: successData.panNumber || null,
+      panNumber: encryptPII(successData.panNumber || null),
       fullName: successData.fullName || null,
       OVLY: successData.OVLY || false,
       FREO: successData.FREO || false,
@@ -76,7 +77,7 @@ class LeadSuccess {
       TableName: TABLE_NAME,
       IndexName: 'phone-index',
       KeyConditionExpression: 'phone = :phone',
-      ExpressionAttributeValues: { ':phone': phone }
+      ExpressionAttributeValues: { ':phone': encryptPII(phone) }
     }));
     return result.Items || [];
   }
@@ -86,7 +87,7 @@ class LeadSuccess {
       TableName: TABLE_NAME,
       IndexName: 'panNumber-index',
       KeyConditionExpression: 'panNumber = :panNumber',
-      ExpressionAttributeValues: { ':panNumber': panNumber }
+      ExpressionAttributeValues: { ':panNumber': encryptPII(panNumber) }
     }));
     return result.Items || [];
   }
@@ -109,6 +110,10 @@ class LeadSuccess {
   static async updateByLeadId(leadId, updates) {
     const existing = await this.findByLeadId(leadId);
     if (!existing) throw new Error('Lead success record not found');
+
+    updates = { ...updates };
+    if (updates.phone !== undefined) updates.phone = encryptPII(updates.phone);
+    if (updates.panNumber !== undefined) updates.panNumber = encryptPII(updates.panNumber);
 
     const updateExpression = [];
     const expressionAttributeNames = {};
@@ -360,8 +365,8 @@ class LeadSuccess {
       return {
         id: `${item.phone}_${item.fullName}`.replace(/\s+/g, '_'),
         name: item.fullName || 'N/A',
-        mobile: item.phone || 'N/A',
-        pan: item.panNumber || 'N/A',
+        mobile: item.phone ? maskPhone(item.phone) : 'N/A',
+        pan: item.panNumber ? maskPan(item.panNumber) : 'N/A',
         accepted: acceptedCount,
         dateSent: item.createdAt,
         source: item.source || 'unknown'
@@ -404,8 +409,8 @@ class LeadSuccess {
         return {
           id: `${item.phone}_${item.fullName}`.replace(/\s+/g, '_'),
           name: item.fullName || 'N/A',
-          mobile: item.phone || 'N/A',
-          pan: item.panNumber || 'N/A',
+          mobile: item.phone ? maskPhone(item.phone) : 'N/A',
+          pan: item.panNumber ? maskPan(item.panNumber) : 'N/A',
           accepted: acceptedCount,
           dateSent: item.createdAt
         };
@@ -460,6 +465,11 @@ class LeadSuccess {
   static async upsertByLeadId(leadId, updates) {
     // Try to find existing record first
     const existing = await this.findByLeadId(leadId);
+
+    // Encrypt PII on both the update and create paths.
+    updates = { ...updates };
+    if (updates.phone !== undefined) updates.phone = encryptPII(updates.phone);
+    if (updates.panNumber !== undefined) updates.panNumber = encryptPII(updates.panNumber);
 
     if (existing) {
       // Record exists — build a SET expression from updates

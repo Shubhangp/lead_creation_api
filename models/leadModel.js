@@ -9,6 +9,7 @@ const {
 } = require('@aws-sdk/lib-dynamodb');
 const { ConditionalCheckFailedException } = require('@aws-sdk/client-dynamodb');
 const { v4: uuidv4 } = require('uuid');
+const { encryptPII, decryptPII } = require('../utils/piiCrypto');
 
 const TABLE_NAME = 'leads';
 
@@ -322,12 +323,13 @@ class Lead {
       fullName: leadData.fullName,
       firstName: leadData.firstName || null,
       lastName: leadData.lastName || null,
-      phone: leadData.phone,
+      // PII stored encrypted-at-rest (deterministic so GSI/dedup still work).
+      phone: encryptPII(leadData.phone),
       email: leadData.email,
       age: leadData.age || null,
       dateOfBirth: leadData.dateOfBirth ? new Date(leadData.dateOfBirth).toISOString() : null,
       gender: leadData.gender || null,
-      panNumber: leadData.panNumber,
+      panNumber: encryptPII(leadData.panNumber),
       jobType: leadData.jobType || null,
       businessType: leadData.businessType || null,
       salary: leadData.salary || null,
@@ -336,6 +338,10 @@ class Lead {
       address: leadData.address || null,
       pincode: leadData.pincode || null,
       consent: leadData.consent,
+      // Timestamp the user accepted consent on the website loan-form. Only
+      // loan-form-originated creates pass this through; bulk/other creates leave
+      // it null.
+      websiteConsentTime: leadData.websiteConsentTime || null,
       // utm_medium that triggered the most recent visit (landing campaign).
       campaign_identifier: leadData.campaign_identifier || null,
       visited: false,
@@ -364,10 +370,11 @@ class Lead {
     const existing = await this.findByPhone(phone);
 
     if (existing) {
+      // User re-entered their mobile on the loan-form — refresh website consent time.
       const updated = await docClient.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { leadId: existing.leadId },
-        UpdateExpression: 'SET campaign_identifier = :ci, updatedAt = :now',
+        UpdateExpression: 'SET campaign_identifier = :ci, websiteConsentTime = :now, updatedAt = :now',
         ExpressionAttributeValues: {
           ':ci': campaign_identifier || existing.campaign_identifier || null,
           ':now': new Date().toISOString(),
@@ -381,8 +388,10 @@ class Lead {
     const item = {
       leadId: uuidv4(),
       source: source || null,
-      phone,
+      phone: encryptPII(phone),
       campaign_identifier: campaign_identifier || null,
+      // Mobile entered on the website loan-form → record website consent time.
+      websiteConsentTime: now,
       // Minimal placeholder fields so downstream readers don't choke on missing keys.
       fullName: null,
       email: null,
@@ -426,7 +435,7 @@ class Lead {
       KeyConditionExpression: 'phone = :phone',
       FilterExpression: 'createdAt >= :cutoff',
       ExpressionAttributeValues: {
-        ':phone': phone,
+        ':phone': encryptPII(phone),
         ':cutoff': this._lookbackCutoffISO(),
       },
     }));
@@ -440,7 +449,7 @@ class Lead {
       KeyConditionExpression: 'panNumber = :panNumber',
       FilterExpression: 'createdAt >= :cutoff',
       ExpressionAttributeValues: {
-        ':panNumber': panNumber,
+        ':panNumber': encryptPII(panNumber),
         ':cutoff': this._lookbackCutoffISO(),
       },
     }));
@@ -468,7 +477,7 @@ class Lead {
       KeyConditionExpression: 'phone = :phone',
       FilterExpression: 'createdAt >= :cutoff',
       ExpressionAttributeValues: {
-        ':phone': String(phone),
+        ':phone': encryptPII(String(phone)),
         ':cutoff': this._cutoffISOForDays(lookbackDays),
       },
       Select: 'COUNT',
@@ -489,7 +498,7 @@ class Lead {
       KeyConditionExpression: 'panNumber = :panNumber',
       FilterExpression: 'createdAt >= :cutoff',
       ExpressionAttributeValues: {
-        ':panNumber': String(panNumber),
+        ':panNumber': encryptPII(String(panNumber)),
         ':cutoff': this._cutoffISOForDays(lookbackDays),
       },
       Select: 'COUNT',
@@ -596,10 +605,17 @@ class Lead {
       datePartition: this.getDatePartition(now),
     };
 
-    const mergedData = { ...existingLead, ...finalUpdates };
+    // Stored PII is encrypted; decrypt it so validation (PAN regex etc.) and the
+    // change-detection comparisons below run against plaintext.
+    const existingPlain = {
+      ...existingLead,
+      phone: decryptPII(existingLead.phone),
+      panNumber: decryptPII(existingLead.panNumber),
+    };
+    const mergedData = { ...existingPlain, ...finalUpdates };
     this.validate(mergedData);
 
-    if (updates.phone && updates.phone !== existingLead.phone) {
+    if (updates.phone && updates.phone !== existingPlain.phone) {
       const existingPhone = await this.findByPhone(updates.phone);
       if (existingPhone && existingPhone.leadId !== leadId) {
         const error = new Error('Phone number already exists');
@@ -608,7 +624,7 @@ class Lead {
       }
     }
 
-    if (updates.panNumber && updates.panNumber !== existingLead.panNumber) {
+    if (updates.panNumber && updates.panNumber !== existingPlain.panNumber) {
       const existingPan = await this.findByPanNumber(updates.panNumber);
       if (existingPan && existingPan.leadId !== leadId) {
         const error = new Error('PAN number already exists');
@@ -616,6 +632,10 @@ class Lead {
         throw error;
       }
     }
+
+    // Encrypt PII fields for storage (only those actually being written).
+    if (finalUpdates.phone !== undefined) finalUpdates.phone = encryptPII(finalUpdates.phone);
+    if (finalUpdates.panNumber !== undefined) finalUpdates.panNumber = encryptPII(finalUpdates.panNumber);
 
     const updateExpression = [];
     const expressionAttributeNames = {};
@@ -640,6 +660,11 @@ class Lead {
   }
 
   static async updateByIdNoValidation(leadId, updates) {
+    // Keep PII encrypted-at-rest even on this unvalidated path.
+    updates = { ...updates };
+    if (updates.phone !== undefined) updates.phone = encryptPII(updates.phone);
+    if (updates.panNumber !== undefined) updates.panNumber = encryptPII(updates.panNumber);
+
     const updateExpression = [];
     const expressionAttributeNames = {};
     const expressionAttributeValues = {};

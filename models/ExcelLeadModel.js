@@ -9,6 +9,7 @@ const {
   TransactWriteCommand,
 } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
+const { encryptPII, decryptPII } = require('../utils/piiCrypto');
 
 const TABLE_NAME = 'excel_leads';
 const CONSTRAINTS_TABLE = 'excel_leads_unique_constraints';
@@ -63,12 +64,14 @@ class ExcelLead {
       fullName:     leadData.fullName,
       firstName:    leadData.firstName    || null,
       lastName:     leadData.lastName     || null,
-      phone:        leadData.phone,
+      // PII stored encrypted-at-rest (deterministic; sentinel constraints below
+      // derive from these encrypted values so uniqueness still holds).
+      phone:        encryptPII(leadData.phone),
       email:        leadData.email,
       age:          leadData.age          || null,
       dateOfBirth:  leadData.dateOfBirth  ? new Date(leadData.dateOfBirth).toISOString() : null,
       gender:       leadData.gender       || null,
-      panNumber:    leadData.panNumber,
+      panNumber:    encryptPII(leadData.panNumber),
       jobType:      leadData.jobType      || null,
       businessType: leadData.businessType || null,
       salary:       leadData.salary       || null,
@@ -255,7 +258,7 @@ class ExcelLead {
       TableName: TABLE_NAME,
       IndexName: 'phone-index',
       KeyConditionExpression: 'phone = :phone',
-      ExpressionAttributeValues: { ':phone': phone },
+      ExpressionAttributeValues: { ':phone': encryptPII(phone) },
       Limit: 1
     }));
     const key = result.Items?.[0];
@@ -271,7 +274,7 @@ class ExcelLead {
       TableName: TABLE_NAME,
       IndexName: 'panNumber-index',
       KeyConditionExpression: 'panNumber = :panNumber',
-      ExpressionAttributeValues: { ':panNumber': panNumber },
+      ExpressionAttributeValues: { ':panNumber': encryptPII(panNumber) },
       Limit: 1
     }));
     const key = result.Items?.[0];
@@ -342,11 +345,20 @@ class ExcelLead {
     const existingLead = await this.findById(excelLeadId);
     if (!existingLead) throw new Error('Excel lead not found');
 
-    const mergedData = { ...existingLead, ...updates };
+    // Stored PII is encrypted; decrypt for validation (PAN regex) and change
+    // detection. existingLead.phone/panNumber are ciphertext, matching the
+    // (encrypted) sentinel keys already stored.
+    const existingPlain = {
+      ...existingLead,
+      phone: decryptPII(existingLead.phone),
+      panNumber: decryptPII(existingLead.panNumber),
+    };
+    const mergedData = { ...existingPlain, ...updates };
     this.validate(mergedData);
 
-    if (updates.phone && updates.phone !== existingLead.phone) {
-      const existing = await this._constraintExists(`phone#${updates.phone}`);
+    if (updates.phone && updates.phone !== existingPlain.phone) {
+      const encNewPhone = encryptPII(updates.phone);
+      const existing = await this._constraintExists(`phone#${encNewPhone}`);
       if (existing && existing.excelLeadId !== excelLeadId)
         throw Object.assign(new Error('Phone number already exists'), { code: 'DUPLICATE_PHONE' });
 
@@ -356,7 +368,7 @@ class ExcelLead {
           {
             Put: {
               TableName: CONSTRAINTS_TABLE,
-              Item: { constraintKey: `phone#${updates.phone}`, excelLeadId, createdAt: new Date().toISOString() },
+              Item: { constraintKey: `phone#${encNewPhone}`, excelLeadId, createdAt: new Date().toISOString() },
               ConditionExpression: 'attribute_not_exists(constraintKey)'
             }
           }
@@ -364,8 +376,9 @@ class ExcelLead {
       }));
     }
 
-    if (updates.panNumber && updates.panNumber !== existingLead.panNumber) {
-      const existing = await this._constraintExists(`pan#${updates.panNumber}`);
+    if (updates.panNumber && updates.panNumber !== existingPlain.panNumber) {
+      const encNewPan = encryptPII(updates.panNumber);
+      const existing = await this._constraintExists(`pan#${encNewPan}`);
       if (existing && existing.excelLeadId !== excelLeadId)
         throw Object.assign(new Error('PAN number already exists'), { code: 'DUPLICATE_PAN' });
 
@@ -375,7 +388,7 @@ class ExcelLead {
           {
             Put: {
               TableName: CONSTRAINTS_TABLE,
-              Item: { constraintKey: `pan#${updates.panNumber}`, excelLeadId, createdAt: new Date().toISOString() },
+              Item: { constraintKey: `pan#${encNewPan}`, excelLeadId, createdAt: new Date().toISOString() },
               ConditionExpression: 'attribute_not_exists(constraintKey)'
             }
           }
@@ -383,14 +396,19 @@ class ExcelLead {
       }));
     }
 
+    // Encrypt PII before persisting the row itself.
+    const storedUpdates = { ...updates };
+    if (storedUpdates.phone !== undefined) storedUpdates.phone = encryptPII(storedUpdates.phone);
+    if (storedUpdates.panNumber !== undefined) storedUpdates.panNumber = encryptPII(storedUpdates.panNumber);
+
     const updateExpression = [];
     const expressionAttributeNames = {};
     const expressionAttributeValues = {};
 
-    Object.keys(updates).forEach((key, index) => {
+    Object.keys(storedUpdates).forEach((key, index) => {
       updateExpression.push(`#field${index} = :value${index}`);
       expressionAttributeNames[`#field${index}`] = key;
-      expressionAttributeValues[`:value${index}`] = updates[key];
+      expressionAttributeValues[`:value${index}`] = storedUpdates[key];
     });
 
     const result = await docClient.send(new UpdateCommand({

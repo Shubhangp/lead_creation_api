@@ -60,10 +60,14 @@ exports.createLead = async (req, res) => {
       return res.status(404).json({ error: 'Invalid source' });
     }
 
+    // Record the moment the user submitted consent on the website loan-form.
+    // Scoped to this loan-form proxy so direct API-partner posts stay unstamped.
+    formData.websiteConsentTime = new Date().toISOString();
+
     // Submit to external API
     const response = await axios.post(
-      'https://lead.ratecut.in/api/v1/leads', 
-      formData, 
+      'https://lead.ratecut.in/api/v1/leads',
+      formData,
       {
         headers: {
           'x-api-key': storedApiKey.apiKey,

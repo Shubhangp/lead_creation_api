@@ -1,5 +1,6 @@
 // models/indiaLendsResponseLog.js
 const { docClient } = require('../dynamodb');
+const { deepEncryptFields } = require('../utils/piiCrypto');
 const { PutCommand, GetCommand, QueryCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
@@ -94,9 +95,9 @@ class IndiaLendsResponseLog {
       dedupCheck: logData.dedupCheck || null,
       isDuplicate: String(logData.isDuplicate || false),
       duplicateStatus: logData.duplicateStatus || '0',
-      requestPayload: logData.requestPayload,
+      requestPayload: deepEncryptFields(logData.requestPayload),
       responseStatus,
-      responseBody: logData.responseBody,
+      responseBody: deepEncryptFields(logData.responseBody),
       errorDetails: logData.errorDetails || null,
       retryCount: logData.retryCount || 0,
       isSuccess: String(isSuccess),

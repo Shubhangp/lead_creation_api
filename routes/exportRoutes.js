@@ -1,6 +1,7 @@
 const express = require('express');
 const { docClient } = require('../dynamodb');
 const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
+const { encryptPII, deepDecryptFields } = require('../utils/piiCrypto');
 
 const router = express.Router();
 
@@ -322,7 +323,8 @@ function buildPhoneParams(tableName, filters, MAX_LIMIT) {
     IndexName: 'phone-index',
     KeyConditionExpression: '#ph = :ph',
     ExpressionAttributeNames: { '#ph': 'phone' },
-    ExpressionAttributeValues: { ':ph': filters.phone }
+    // Stored phone is encrypted; encrypt the lookup value to match the GSI key.
+    ExpressionAttributeValues: { ':ph': encryptPII(filters.phone) }
   };
 
   addExtraFilters(params, filters, ['phone']);
@@ -337,7 +339,8 @@ function buildPanParams(tableName, filters, MAX_LIMIT) {
     IndexName: 'panNumber-index',
     KeyConditionExpression: '#pan = :pan',
     ExpressionAttributeNames: { '#pan': 'panNumber' },
-    ExpressionAttributeValues: { ':pan': filters.panNumber }
+    // Stored panNumber is encrypted; encrypt the lookup value to match the GSI key.
+    ExpressionAttributeValues: { ':pan': encryptPII(filters.panNumber) }
   };
 
   addExtraFilters(params, filters, ['panNumber']);
@@ -513,7 +516,9 @@ router.post('/preview', async (req, res) => {
       items = result.Items || [];
     }
 
-    const flattenedData = items.map(item => flattenObject(item));
+    // Exports/previews are a "real form" surface — decrypt PII (top-level phone/
+    // panNumber on leads, and nested phone/PAN inside response-log payloads).
+    const flattenedData = items.map(item => flattenObject(deepDecryptFields(item)));
 
     res.json({
       preview: flattenedData,
@@ -646,7 +651,8 @@ router.post('/export', async (req, res) => {
 
     // ─── Helper: process a page of items ─────────────────────────────────────
     const processItems = (items) => {
-      const flat = items.map(item => flattenObject(item));
+      // Decrypt PII so the exported CSV carries real phone/PAN values.
+      const flat = items.map(item => flattenObject(deepDecryptFields(item)));
       flat.forEach(item => Object.keys(item).forEach(k => allFields.add(k)));
       rowBuffer = rowBuffer.concat(flat);
       totalProcessed += items.length;

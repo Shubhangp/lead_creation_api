@@ -7,6 +7,21 @@ const { parseFileInChunks, deleteFile } = require('../utils/readFile');
 const DistributionRule = require('../models/distributionRuleModel');
 // const timeUtils = require('../utils/timeutils');
 const rcsService = require('../services/rcsService');
+const { maskPhone, maskPan } = require('../utils/piiCrypto');
+
+// Mask PII (phone/PAN) on a lead object before returning it to the portal/API.
+// Values are stored encrypted; maskPhone/maskPan decrypt then mask, so callers
+// see e.g. "98••••210" / "ABC••••34F" without exposing full plaintext.
+function maskLead(lead) {
+  if (!lead || typeof lead !== 'object') return lead;
+  const out = { ...lead };
+  if (out.phone !== undefined && out.phone !== null) out.phone = maskPhone(out.phone);
+  if (out.panNumber !== undefined && out.panNumber !== null) out.panNumber = maskPan(out.panNumber);
+  return out;
+}
+function maskLeads(leads) {
+  return Array.isArray(leads) ? leads.map(maskLead) : leads;
+}
 
 // Import lender services
 const {
@@ -51,7 +66,8 @@ exports.createLead = async (req, res) => {
   const {
     source, fullName, firstName, lastName, phone, email,
     age, dateOfBirth, gender, panNumber, jobType, businessType,
-    salary, creditScore, cibilScore, address, pincode, consent
+    salary, creditScore, cibilScore, address, pincode, consent,
+    websiteConsentTime
   } = req.body;
 
   if (!source || !fullName || !phone || !email || !panNumber || consent === undefined) {
@@ -125,7 +141,9 @@ exports.createLead = async (req, res) => {
       cibilScore,
       address,
       pincode,
-      consent
+      consent,
+      // Present only for website loan-form submissions (injected by formController).
+      websiteConsentTime: websiteConsentTime || null
     };
 
     // Create lead using DynamoDB model
@@ -923,7 +941,7 @@ exports.getLead = async (req, res) => {
 
     res.status(200).json({
       status: 'success',
-      data: { lead }
+      data: { lead: maskLead(lead) }
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -951,7 +969,7 @@ exports.mobileCapture = async (req, res) => {
     return res.status(result.created ? 201 : 200).json({
       status: 'success',
       created: result.created,
-      data: { lead: result.lead },
+      data: { lead: maskLead(result.lead) },
     });
   } catch (error) {
     if (error.errors) {
@@ -964,14 +982,14 @@ exports.mobileCapture = async (req, res) => {
 exports.getLeadByPhone = async (req, res) => {
   try {
     const lead = await Lead.findByPhone(req.params.phone);
-    
+
     if (!lead) {
       return res.status(404).json({ message: 'Lead not found' });
     }
 
     res.status(200).json({
       status: 'success',
-      data: { lead }
+      data: { lead: maskLead(lead) }
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -982,14 +1000,14 @@ exports.getLeadByPhone = async (req, res) => {
 exports.getLeadByPan = async (req, res) => {
   try {
     const lead = await Lead.findByPanNumber(req.params.panNumber);
-    
+
     if (!lead) {
       return res.status(404).json({ message: 'Lead not found' });
     }
 
     res.status(200).json({
       status: 'success',
-      data: { lead }
+      data: { lead: maskLead(lead) }
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -1012,7 +1030,7 @@ exports.getLeadsBySource = async (req, res) => {
     res.status(200).json({
       status: 'success',
       results: leads.length,
-      data: { leads }
+      data: { leads: maskLeads(leads) }
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -1032,9 +1050,9 @@ exports.getAllLeads = async (req, res) => {
     res.status(200).json({
       status: 'success',
       results: result.items.length,
-      data: { 
-        leads: result.items,
-        lastEvaluatedKey: result.lastEvaluatedKey 
+      data: {
+        leads: maskLeads(result.items),
+        lastEvaluatedKey: result.lastEvaluatedKey
       }
     });
   } catch (error) {
@@ -1055,7 +1073,7 @@ exports.updateLead = async (req, res) => {
 
     res.status(200).json({
       status: 'success',
-      data: { lead: updatedLead }
+      data: { lead: maskLead(updatedLead) }
     });
   } catch (error) {
     if (error.message === 'Lead not found') {
@@ -1108,7 +1126,7 @@ exports.searchLeads = async (req, res) => {
     res.status(200).json({
       status: 'success',
       results: leads.length,
-      data: { leads }
+      data: { leads: maskLeads(leads) }
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -1166,6 +1184,11 @@ exports.updateLeadById = async (req, res) => {
         message: 'No valid fields provided for update'
       });
     }
+
+    // This endpoint is used exclusively by the website loan-form (the admin
+    // dashboard edits leads via /lender/leads/*), so any update here means the
+    // user re-submitted consent on the website — record the time.
+    updates.websiteConsentTime = new Date().toISOString();
 
     const lead = await Lead.updateById(leadId, updates);
 

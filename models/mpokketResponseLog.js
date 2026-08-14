@@ -1,5 +1,6 @@
 // models/mpokketResponseLog.js
 const { docClient } = require('../dynamodb');
+const { deepEncryptFields } = require('../utils/piiCrypto');
 const { PutCommand, GetCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
@@ -88,9 +89,9 @@ class MpokketResponseLog {
       leadId: logData.leadId,
       source: logData.source,
       correlationId: logData.correlationId || null,
-      requestPayload: logData.requestPayload || null,
+      requestPayload: deepEncryptFields(logData.requestPayload) || null,
       responseStatus: logData.responseStatus || null,
-      responseBody: logData.responseBody || null,
+      responseBody: deepEncryptFields(logData.responseBody) || null,
       errorDetails: logData.errorDetails || null,
       step: logData.step || null,
       status: logData.status || null,

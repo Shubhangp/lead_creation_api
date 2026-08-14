@@ -1,5 +1,18 @@
 const Lead         = require('../models/leadModel');
 const Disbursement = require('../models/disbursementModel');
+const { decryptPII, maskPhone, maskPan } = require('../utils/piiCrypto');
+
+// Mask PII on an outgoing page of leads. The list endpoints carry DECRYPTED
+// mobile/pan internally (so search/filter works on real values); this masks them
+// right before the response leaves the server so the portal only ever shows
+// e.g. "98•••••210" / "ABC••••34F".
+function maskLeadPage(leads) {
+  return leads.map(l => ({
+    ...l,
+    mobile: l.mobile ? maskPhone(l.mobile) : l.mobile,
+    pan:    l.pan    ? maskPan(l.pan)       : l.pan,
+  }));
+}
 
 // All lenders — immediate API push + MIS-synced
 const ALL_LENDERS = [
@@ -174,8 +187,8 @@ async function getAcceptedLeads(req, res) {
         return {
           leadId:           l.leadId,
           name:             l.fullName  || null,
-          mobile:           l.phone     || null,
-          pan:              l.panNumber || null,
+          mobile:           l.phone ? decryptPII(l.phone) : null,
+          pan:              l.panNumber ? decryptPII(l.panNumber) : null,
           email:            l.email     || null,
           accepted:         successfulLenders.length,
           successfulLenders,
@@ -205,7 +218,7 @@ async function getAcceptedLeads(req, res) {
       source,
       dateRange: { startDate, endDate },
       pagination: { page, limit, total, totalPages },
-      leads: data,
+      leads: maskLeadPage(data),
     });
   } catch (err) {
     console.error('[getAcceptedLeads]', err);
@@ -231,8 +244,8 @@ async function getSentLeads(req, res) {
       .map(l => ({
         leadId:   l.leadId,
         name:     l.fullName  || null,
-        mobile:   l.phone     || null,
-        pan:      l.panNumber || null,
+        mobile:   l.phone ? decryptPII(l.phone) : null,
+        pan:      l.panNumber ? decryptPII(l.panNumber) : null,
         email:    l.email     || null,
         accepted: 0,
         dateSent: l.createdAt,
@@ -260,7 +273,7 @@ async function getSentLeads(req, res) {
       source,
       dateRange: { startDate, endDate },
       pagination: { page, limit, total, totalPages },
-      leads: data,
+      leads: maskLeadPage(data),
     });
   } catch (err) {
     console.error('[getSentLeads]', err);
@@ -288,8 +301,8 @@ async function getAllLeads(req, res) {
       return {
         leadId:           l.leadId,
         name:             l.fullName  || null,
-        mobile:           l.phone     || null,
-        pan:              l.panNumber || null,
+        mobile:           l.phone ? decryptPII(l.phone) : null,
+        pan:              l.panNumber ? decryptPII(l.panNumber) : null,
         email:            l.email     || null,
         accepted:         successfulLenders.length,
         successfulLenders,
@@ -322,7 +335,7 @@ async function getAllLeads(req, res) {
       source,
       dateRange: { startDate, endDate },
       pagination: { page, limit, total, totalPages },
-      leads:     data,
+      leads:     maskLeadPage(data),
     });
   } catch (err) {
     console.error('[getAllLeads]', err);
@@ -355,8 +368,8 @@ async function getLeadById(req, res) {
       lead: {
         leadId,
         name:             lead.fullName   || null,
-        mobile:           lead.phone      || null,
-        pan:              lead.panNumber  || null,
+        mobile:           lead.phone ? maskPhone(lead.phone) : null,
+        pan:              lead.panNumber ? maskPan(lead.panNumber) : null,
         email:            lead.email      || null,
         dob:              lead.dateOfBirth || null,
         salary:           lead.salary     || null,

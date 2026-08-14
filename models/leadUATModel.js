@@ -8,6 +8,7 @@ const {
   ScanCommand 
 } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
+const { encryptPII, decryptPII } = require('../utils/piiCrypto');
 
 const TABLE_NAME = 'leads_uat';
 
@@ -92,12 +93,12 @@ class LeadUAT {
       fullName: leadData.fullName,
       firstName: leadData.firstName || null,
       lastName: leadData.lastName || null,
-      phone: leadData.phone,
+      phone: encryptPII(leadData.phone),
       email: leadData.email,
       age: leadData.age || null,
       dateOfBirth: leadData.dateOfBirth ? new Date(leadData.dateOfBirth).toISOString() : null,
       gender: leadData.gender || null,
-      panNumber: leadData.panNumber,
+      panNumber: encryptPII(leadData.panNumber),
       jobType: leadData.jobType || null,
       businessType: leadData.businessType || null,
       salary: leadData.salary || null,
@@ -132,7 +133,7 @@ class LeadUAT {
       TableName: TABLE_NAME,
       IndexName: 'panNumber-index',
       KeyConditionExpression: 'panNumber = :panNumber',
-      ExpressionAttributeValues: { ':panNumber': panNumber },
+      ExpressionAttributeValues: { ':panNumber': encryptPII(panNumber) },
       Limit: 1
     }));
 
@@ -168,11 +169,18 @@ class LeadUAT {
         throw new Error('UAT lead not found');
       }
 
-      const mergedData = { ...existingLead, ...updates };
+      // Decrypt stored PII so validation (PAN regex) and change-detection run on plaintext.
+      const existingPlain = {
+        ...existingLead,
+        phone: decryptPII(existingLead.phone),
+        panNumber: decryptPII(existingLead.panNumber),
+      };
+
+      const mergedData = { ...existingPlain, ...updates };
       this.validate(mergedData);
 
       // Check uniqueness if PAN is being updated
-      if (updates.panNumber && updates.panNumber !== existingLead.panNumber) {
+      if (updates.panNumber && updates.panNumber !== existingPlain.panNumber) {
         const existingPan = await this.findByPanNumber(updates.panNumber);
         if (existingPan && existingPan.leadUATId !== leadUATId) {
           const error = new Error('PAN number already exists');
@@ -181,6 +189,11 @@ class LeadUAT {
         }
       }
     }
+
+    // Encrypt PII at the storage boundary.
+    updates = { ...updates };
+    if (updates.phone !== undefined) updates.phone = encryptPII(updates.phone);
+    if (updates.panNumber !== undefined) updates.panNumber = encryptPII(updates.panNumber);
 
     const updateExpression = [];
     const expressionAttributeNames = {};

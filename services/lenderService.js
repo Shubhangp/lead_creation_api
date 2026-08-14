@@ -21,6 +21,27 @@ const CreditPulseResponseLog = require('../models/creditPulseResponseLog');
 const CreditSeaResponseLog = require('../models/creditSeaResponseLog');
 const CreditHaatResponseLog = require('../models/creditHaatResponseLog');
 const CreditLinksResponseLog = require('../models/creditLinksResponseLog');
+const { decryptPII } = require('../utils/piiCrypto');
+
+// Leads are stored with phone/panNumber encrypted at rest. Every outbound lender
+// payload needs the REAL values, so we decrypt them on a shallow copy right
+// before the lead enters a send function. decryptPII is plaintext-tolerant, so
+// this is a no-op for any lead whose PII isn't (yet) encrypted.
+function decryptLeadPII(lead) {
+  if (!lead || typeof lead !== 'object') return lead;
+  const out = { ...lead };
+  if (out.phone !== undefined && out.phone !== null) out.phone = decryptPII(out.phone);
+  if (out.panNumber !== undefined && out.panNumber !== null) out.panNumber = decryptPII(out.panNumber);
+  return out;
+}
+
+// Wrap a sendTo* function so its first argument (the lead) always arrives with
+// decrypted PII. Extra args (if any) are passed through untouched.
+function withDecryptedPII(sendFn) {
+  return function (lead, ...rest) {
+    return sendFn(decryptLeadPII(lead), ...rest);
+  };
+}
 
 // ---- Default field handling for lenders ----
 // If any required field is missing (except phone) fall back to a default value.
@@ -2012,21 +2033,21 @@ async function sendToCreditLinks(lead) {
 }
 
 module.exports = {
-  sendToSML,
-  sendToFreo,
-  sendToZYPE,
-  sendToLendingPlate,
-  sendToFINTIFI,
-  sendToFATAKPAY,
-  sendToFATAKPAYPL,
-  sendToOVLY,
-  sendToRAMFINCROP,
-  sendToMyMoneyMantra,
-  sendToMpokket,
-  sendToIndiaLends,
-  sendToCrmPaisa,
-  sendToCreditPulse,
-  sendToCreditSea,
-  sendToCreditHaat,
-  sendToCreditLinks,
+  sendToSML:            withDecryptedPII(sendToSML),
+  sendToFreo:           withDecryptedPII(sendToFreo),
+  sendToZYPE:           withDecryptedPII(sendToZYPE),
+  sendToLendingPlate:   withDecryptedPII(sendToLendingPlate),
+  sendToFINTIFI:        withDecryptedPII(sendToFINTIFI),
+  sendToFATAKPAY:       withDecryptedPII(sendToFATAKPAY),
+  sendToFATAKPAYPL:     withDecryptedPII(sendToFATAKPAYPL),
+  sendToOVLY:           withDecryptedPII(sendToOVLY),
+  sendToRAMFINCROP:     withDecryptedPII(sendToRAMFINCROP),
+  sendToMyMoneyMantra:  withDecryptedPII(sendToMyMoneyMantra),
+  sendToMpokket:        withDecryptedPII(sendToMpokket),
+  sendToIndiaLends:     withDecryptedPII(sendToIndiaLends),
+  sendToCrmPaisa:       withDecryptedPII(sendToCrmPaisa),
+  sendToCreditPulse:    withDecryptedPII(sendToCreditPulse),
+  sendToCreditSea:      withDecryptedPII(sendToCreditSea),
+  sendToCreditHaat:     withDecryptedPII(sendToCreditHaat),
+  sendToCreditLinks:    withDecryptedPII(sendToCreditLinks),
 };

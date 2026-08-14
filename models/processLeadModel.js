@@ -7,6 +7,7 @@ const {
     BatchWriteCommand,
 } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
+const { encryptPII } = require('../utils/piiCrypto');
 
 const TABLE_NAME = process.env.PROCESS_LEADS_TABLE || 'process_leads';
 const DYNAMO_BATCH_LIMIT = 25;
@@ -102,13 +103,14 @@ class ProcessLead {
             fullName: data.fullName || '',
             firstName: data.firstName || null,
             lastName: data.lastName || null,
-            phone: (data.phone || '').trim(),
+            // Normalize first, then encrypt-at-rest (deterministic → GSI/dedup safe).
+            phone: encryptPII((data.phone || '').trim()),
             email: (data.email || '').trim(),
             dateOfBirth: data.dateOfBirth
                 ? new Date(data.dateOfBirth).toISOString()
                 : null,
             gender: data.gender || null,
-            panNumber: (data.panNumber || '').trim().toUpperCase(),
+            panNumber: encryptPII((data.panNumber || '').trim().toUpperCase()),
             jobType: data.jobType || null,
             businessType: data.businessType || null,
             salary: data.salary || null,
@@ -247,7 +249,8 @@ class ProcessLead {
                 TableName: TABLE_NAME,
                 IndexName: 'phone-index',
                 KeyConditionExpression: 'phone = :phone',
-                ExpressionAttributeValues: { ':phone': phone },
+                // Match the same normalization used at write time before encrypting.
+                ExpressionAttributeValues: { ':phone': encryptPII((phone || '').trim()) },
                 Limit: 1,
             })
         );
@@ -261,7 +264,7 @@ class ProcessLead {
                 TableName: TABLE_NAME,
                 IndexName: 'pan-index',
                 KeyConditionExpression: 'panNumber = :pan',
-                ExpressionAttributeValues: { ':pan': panNumber },
+                ExpressionAttributeValues: { ':pan': encryptPII((panNumber || '').trim().toUpperCase()) },
                 Limit: 1,
             })
         );

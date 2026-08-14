@@ -5,6 +5,7 @@
 // getQuickStats / getStats / getStatsByDate surface the unified stats
 // controller (statsType: 'status') expects.
 const { docClient } = require('../dynamodb');
+const { deepEncryptFields } = require('../utils/piiCrypto');
 const { PutCommand, GetCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
@@ -95,9 +96,9 @@ class CreditLinksResponseLog {
       // CreditLinks-specific extras (all optional / nullable)
       creditLinksLeadId: logData.creditLinksLeadId || null,
       offersCount: typeof logData.offersCount === 'number' ? logData.offersCount : null,
-      requestPayload: logData.requestPayload || null,
+      requestPayload: deepEncryptFields(logData.requestPayload) || null,
       responseStatus: logData.responseStatus || null,
-      responseBody: logData.responseBody || null,
+      responseBody: deepEncryptFields(logData.responseBody) || null,
       createdAt: new Date().toISOString()
     };
 

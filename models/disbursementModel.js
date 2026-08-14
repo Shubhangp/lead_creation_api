@@ -7,6 +7,7 @@ const {
   QueryCommand,
   ScanCommand,
 } = require('@aws-sdk/lib-dynamodb');
+const { encryptPII } = require('../utils/piiCrypto');
 
 const TABLE_NAME = 'disbursements';
 
@@ -74,7 +75,7 @@ class Disbursement {
       disbursalDate:   data.disbursalDate   || null,
       disbursalAmount: data.disbursalAmount  ? String(data.disbursalAmount) : null,
       name:            data.name         || null,
-      phone:           data.phone        || null,
+      phone:           data.phone ? encryptPII(String(data.phone)) : null,
       utmCampaign:     data.utmCampaign  || null,
       utmMedium:       data.utmMedium    || null,
       utmSource:       data.utmSource    || null,
