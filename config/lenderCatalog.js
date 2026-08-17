@@ -339,13 +339,24 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+  mudraboxx: {
+    code: 'mudraboxx', 
+    name: 'Mudraboxx', logo: '/mudraboxx-logo.png',
+    maxAmount: 50000, minInterest: 35,
+    processingTime: '0-1 Day', approval: 'EXCELLENT',
+    website: 'https://mudraboxx.com/short-term-loan/?utm_source=ratecut&utm_medium=cpc&utm_campaign=ratecut',
+    apr: 24, tag: 'Salaried Only', type: 'Fintech · Quick',
+    rateRange: '25% – 35% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 }; 
 
 const DEFAULT_LENDER_ORDER = [
   'RAMFINCROP', 'MPOKKET', 'PoonawallaFincorp', 'MPOKKETSE', 'CreditSea',
   'AdityaBirla', 'AdityaBirlaPL', 'INDIALENDS', 'Prefr', 'HERO', 'FATAKPAY',
   'SPEEDO', 'TrueFund', 'TAP4CREDIT', 'RupeeDhan', 'PaisaBoxx', 'DigiCredit',
-  'Cashvia', 'SabkaLoan', 'CRMPaisa', 'AryseFin', 'Mudrasewa'
+  'Cashvia', 'SabkaLoan', 'CRMPaisa', 'AryseFin', 'Mudrasewa', 'Mudraboxx'
 ];
 
 function buildLenderList(codes) {
