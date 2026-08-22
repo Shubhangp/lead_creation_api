@@ -343,22 +343,35 @@ class LeadDistributionStats {
    * Get all batches (paginated)
    */
   static async findAll(options = {}) {
-    const { limit = 50, lastEvaluatedKey } = options;
+    const { limit = 50, maxScanPages = 20 } = options;
 
-    const params = {
-      TableName: TABLE_NAME,
-      Limit: limit
-    };
+    // DynamoDB Scan returns items in arbitrary order, so a single limited page
+    // would give a random subset. Scan across pages (capped), then sort
+    // newest-first by createdAt and return the requested number of items.
+    const items = [];
+    let exclusiveStartKey;
+    let pages = 0;
 
-    if (lastEvaluatedKey) {
-      params.ExclusiveStartKey = lastEvaluatedKey;
-    }
+    do {
+      const result = await docClient.send(new ScanCommand({
+        TableName: TABLE_NAME,
+        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {})
+      }));
 
-    const result = await docClient.send(new ScanCommand(params));
+      items.push(...(result.Items || []));
+      exclusiveStartKey = result.LastEvaluatedKey;
+      pages += 1;
+    } while (exclusiveStartKey && pages < maxScanPages);
+
+    items.sort((a, b) => {
+      const ta = new Date(a.createdAt || a.startedAt || 0).getTime() || 0;
+      const tb = new Date(b.createdAt || b.startedAt || 0).getTime() || 0;
+      return tb - ta;
+    });
 
     return {
-      items: result.Items || [],
-      lastEvaluatedKey: result.LastEvaluatedKey
+      items: items.slice(0, limit),
+      lastEvaluatedKey: undefined
     };
   }
 
@@ -379,11 +392,12 @@ class LeadDistributionStats {
       TableName: TABLE_NAME,
       IndexName: 'lender-createdAt-index',
       KeyConditionExpression: keyConditionExpression,
-      ExpressionAttributeValues: expressionAttributeValues
+      ExpressionAttributeValues: expressionAttributeValues,
+      ScanIndexForward: false // newest first
     }));
 
     const batches = result.Items || [];
-    
+
     return {
       lender,
       totalBatches: batches.length,
