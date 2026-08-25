@@ -6,8 +6,13 @@ const SOURCE_ALIASES = {
   ck: 'CashKuber',
   cashkuber: 'CashKuber',
 
+  ck2: 'CK2',
+
   fr: 'FREO',
   freo: 'FREO',
+
+  fr2: 'FREO2',
+  freo2: 'FREO2',
 
   wc: 'WeCredit',
   WeCredit: 'WeCredit',
