@@ -88,6 +88,11 @@ const HEADER_MAP = {
     createdat: 'createdAt', created_at: 'createdAt', 'created at': 'createdAt',
     'created date': 'createdAt', createddate: 'createdAt', date: 'createdAt',
     timestamp: 'createdAt', 'entry date': 'createdAt', entrydate: 'createdAt',
+    // Written by admin/lead_upload step 1 when the row matched a lead we
+    // already hold. Carries that lead's id so the push step reuses it instead
+    // of creating a duplicate row in the leads table.
+    existingleadid: 'existingLeadId', existing_lead_id: 'existingLeadId',
+    'existing lead id': 'existingLeadId',
 };
 
 // ============================================================================
@@ -330,6 +335,12 @@ async function dispatchToLender(lender, leads, limiter) {
 
 // ============================================================================
 // SAVE ONE PAGE OF LEADS TO leads TABLE
+//
+// Rows carrying `existingLeadId` were matched to an existing lead by the
+// admin/lead_upload dedup step. Their source2/updatedAt were already stamped
+// there, so here they are only resolved to a dispatchable lead object — no new
+// row is written and no counter is bumped. They are still handed to every
+// selected lender alongside the freshly created ones.
 // ============================================================================
 
 const SAVE_CONCURRENCY = 20;
@@ -358,6 +369,14 @@ async function savePageToLeadsTable(leads) {
                     pincode: pl.pincode || null,
                     consent: pl.consent ?? true,
                 };
+                if (pl.existingLeadId) {
+                    return {
+                        ok: true,
+                        reused: true,
+                        lead: Lead.buildExistingLeadForDispatch(leadData, pl.existingLeadId),
+                    };
+                }
+
                 const created = await Lead.createFast(leadData);
                 return { ok: true, lead: created };
             } catch (err) {
@@ -378,7 +397,10 @@ async function savePageToLeadsTable(leads) {
         SAVE_CONCURRENCY
     );
 
-    const saved = results.filter((r) => r.ok).map((r) => r.lead);
+    // `saved` = rows newly written to the leads table (counters apply).
+    // `reused` = rows that resolved to an existing lead (dispatch only).
+    const saved = results.filter((r) => r.ok && !r.reused).map((r) => r.lead);
+    const reused = results.filter((r) => r.ok && r.reused).map((r) => r.lead);
 
     // ── Keep counters in sync (createFast does not touch them) ──────────────
     // All-time per-source counter + daily counters, bucketed to minimize writes.
@@ -409,6 +431,7 @@ async function savePageToLeadsTable(leads) {
 
     return {
         saved,
+        reused,
         failed: results.filter((r) => !r.ok),
     };
 }
@@ -457,6 +480,9 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
         let lastKey = job.lastKey ? JSON.parse(job.lastKey) : null;
         let totalSaved = job.savedToLeads || 0;
         let totalFailed = job.failedToSave || 0;
+        // Rows that matched an existing lead — dispatched, but not re-inserted.
+        // Tracked separately from savedToLeads so the lender totals still add up.
+        let totalReused = job.reusedLeads || 0;
         let allSavedLeads = [];   // accumulates per-page for lender dispatch
 
         const lenderAccumulators = {};
@@ -498,17 +524,22 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             }
 
             // Save this page to the leads table
-            const { saved, failed } = await savePageToLeadsTable(page);
+            const { saved, reused, failed } = await savePageToLeadsTable(page);
 
             totalSaved += saved.length;
+            totalReused += reused.length;
             totalFailed += failed.length;
 
-            console.log(`[Push ${jobId}] Page ${pageNumber}: saved=${saved.length} failed=${failed.length} | running total saved=${totalSaved}`);
+            // Both new and reused leads go to the lenders — a lead matched to an
+            // existing row is dispatched under that row's leadId.
+            const toDispatch = saved.concat(reused);
+
+            console.log(`[Push ${jobId}] Page ${pageNumber}: saved=${saved.length} reused=${reused.length} failed=${failed.length} | running total saved=${totalSaved} reused=${totalReused}`);
 
             // Dispatch this page to every selected lender
-            if (saved.length > 0) {
+            if (toDispatch.length > 0) {
                 const lenderResults = await Promise.allSettled(
-                    lenders.map((lender) => dispatchToLender(lender, saved, lenderLimiters[lender]))
+                    lenders.map((lender) => dispatchToLender(lender, toDispatch, lenderLimiters[lender]))
                 );
                 lenders.forEach((lender, i) => {
                     const r = lenderResults[i];
@@ -517,7 +548,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
                         lenderAccumulators[lender].successCount += r.value.successCount || 0;
                         lenderAccumulators[lender].failCount += r.value.failCount || 0;
                     } else {
-                        lenderAccumulators[lender].failCount += saved.length;
+                        lenderAccumulators[lender].failCount += toDispatch.length;
                         console.error(`[Push ${jobId}] Lender ${lender} error on page ${pageNumber}:`, r.reason?.message);
                     }
                 });
@@ -534,6 +565,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             );
             // Also persist rolling lender totals so poll response is always fresh
             await PushJob.update(jobId, {
+                reusedLeads: totalReused,
                 lenderResults: Object.fromEntries(
                     Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: 'running' }])
                 ),
@@ -550,7 +582,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
 
         await PushJob.markCompleted(jobId, finalLenderResults);
 
-        console.log(`[Push ${jobId}] Done. Saved=${totalSaved} Failed=${totalFailed}`);
+        console.log(`[Push ${jobId}] Done. Saved=${totalSaved} Reused=${totalReused} Failed=${totalFailed}`);
 
     } catch (err) {
         console.error(`[Push ${jobId}] Fatal:`, err);
@@ -916,23 +948,37 @@ exports.getLeadCount = async (req, res) => {
 /**
  * POST /api/v1/process-leads/dedup-check
  *
- * Body (JSON): { phones: string[], pans: string[], lookbackDays?: number }
+ * Body (JSON): { phones: string[], pans: string[], source: string,
+ *                lookbackDays?: number }
  *
- * READ-ONLY. Checks which of the supplied phones / PANs already exist in the
- * `leads` table within the lookback window (default 90 days). Does NOT insert
- * anything. Returns the subset that already exist so the caller can drop those
- * rows before uploading.
+ * NOTHING IS REJECTED HERE. A phone/PAN we already hold no longer removes the
+ * row from the upload — the row still goes to process_leads and is still pushed
+ * to the selected lenders. What a match does is stamp the EXISTING lead row:
  *
- * Used by the combined restructure+upload page: step 1 sends the real phones
- * and real PANs from the file (before any PAN auto-generation) and removes
- * every row whose phone OR PAN comes back as existing.
+ *   existing lead has no source2                        → set source2 = source,
+ *                                                          updatedAt = now
+ *   existing lead has source2, updatedAt older than
+ *   `lookbackDays` (default 30)                         → same re-stamp
+ *   existing lead has source2, updatedAt inside the
+ *   window                                              → left untouched
+ *
+ * The match itself ignores createdAt — the 30-day window applies to updatedAt
+ * only, so an old lead that has never been re-supplied still gets stamped.
+ *
+ * The response maps every matched phone/PAN to the leadId it matched. The
+ * caller writes that leadId onto the row (column `existingLeadId`) so the push
+ * step dispatches it to lenders under the existing lead instead of creating a
+ * second row in the leads table.
  */
 const DEDUP_CONCURRENCY = 25;
 
 exports.dedupCheckLeads = async (req, res) => {
     try {
         const body = req.body || {};
-        const lookbackDays = Number(body.lookbackDays) > 0 ? Number(body.lookbackDays) : 90;
+        const lookbackDays = Number(body.lookbackDays) > 0
+            ? Number(body.lookbackDays)
+            : Lead.SOURCE2_LOOKBACK_DAYS;
+        const source = body.source ? String(body.source).trim() : '';
 
         // Normalise + de-duplicate the input lists so we issue one query per
         // distinct value (phones as strings, PANs upper-cased).
@@ -954,35 +1000,67 @@ exports.dedupCheckLeads = async (req, res) => {
             });
         }
 
+        if (!source) {
+            return res.status(400).json({
+                success: false,
+                message: 'source is required — it is what gets written to source2',
+            });
+        }
+
+        // One lead can be hit by both its phone and its PAN in the same batch;
+        // stamp it once only.
+        const stamped = new Set();
+        const counts = { tagged: 0, skipped: 0, errors: 0 };
+
+        const resolve = async (lead) => {
+            if (!lead) return null;
+            if (stamped.has(lead.leadId)) return lead.leadId;
+            stamped.add(lead.leadId);
+            const outcome = await Lead.tagSource2(lead, source, lookbackDays);
+            if (outcome === 'tagged') counts.tagged++;
+            else if (outcome === 'error') counts.errors++;
+            else counts.skipped++;
+            return lead.leadId;
+        };
+
         const phoneResults = await runWithConcurrency(
             phones.map((phone) => async () => ({
                 phone,
-                exists: await Lead.phoneExists(phone, lookbackDays),
+                leadId: await resolve(await Lead.findAnyByPhone(phone)),
             })),
             DEDUP_CONCURRENCY
         );
         const panResults = await runWithConcurrency(
             pans.map((pan) => async () => ({
                 pan,
-                exists: await Lead.panExists(pan, lookbackDays),
+                leadId: await resolve(await Lead.findAnyByPanNumber(pan)),
             })),
             DEDUP_CONCURRENCY
         );
 
-        const existingPhones = phoneResults
-            .filter((r) => r && !r.error && r.exists)
-            .map((r) => r.phone);
-        const existingPans = panResults
-            .filter((r) => r && !r.error && r.exists)
-            .map((r) => r.pan);
+        // phone/PAN -> existing leadId, for the rows the caller must tag.
+        const phoneLeadIds = {};
+        phoneResults
+            .filter((r) => r && !r.error && r.leadId)
+            .forEach((r) => { phoneLeadIds[r.phone] = r.leadId; });
+        const panLeadIds = {};
+        panResults
+            .filter((r) => r && !r.error && r.leadId)
+            .forEach((r) => { panLeadIds[r.pan] = r.leadId; });
 
         return res.status(200).json({
             success: true,
             lookbackDays,
+            source,
             checkedPhones: phones.length,
             checkedPans: pans.length,
-            existingPhones,
-            existingPans,
+            matchedPhones: Object.keys(phoneLeadIds),
+            matchedPans: Object.keys(panLeadIds),
+            phoneLeadIds,
+            panLeadIds,
+            source2Tagged: counts.tagged,
+            source2Skipped: counts.skipped,
+            source2Errors: counts.errors,
         });
     } catch (err) {
         console.error('[ProcessLead] Dedup-check error:', err);

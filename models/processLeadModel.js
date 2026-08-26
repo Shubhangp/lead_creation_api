@@ -120,6 +120,10 @@ class ProcessLead {
             pincode: data.pincode || null,
             consent: data.consent !== undefined ? data.consent : true,
             uploadBatch: data.uploadBatch || null,   // track which upload this came from
+            // Set when admin/lead_upload matched this row to a lead we already
+            // hold. The push step dispatches under this leadId and skips the
+            // insert, so no second leads-table row is created.
+            existingLeadId: data.existingLeadId || null,
             createdAt,
             datePartition: this.getDatePartition(createdAt),
         };

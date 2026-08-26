@@ -338,6 +338,10 @@ class Lead {
       address: leadData.address || null,
       pincode: leadData.pincode || null,
       consent: leadData.consent,
+      // Second source that later re-supplied this same lead (phone/PAN match).
+      // Stamped by the admin/lead_upload dedup step via tagSource2(); a fresh
+      // lead starts with none.
+      source2: leadData.source2 || null,
       // Timestamp the user accepted consent on the website loan-form. Only
       // loan-form-originated creates pass this through; bulk/other creates leave
       // it null.
@@ -348,6 +352,20 @@ class Lead {
       createdAt,
       datePartition: this.getDatePartition(createdAt),
     };
+  }
+
+  /**
+   * Build a lead object in the exact same shape createFast() would produce, but
+   * bound to an ALREADY EXISTING leadId and WITHOUT writing anything.
+   *
+   * Used by the push flow for rows that the admin/lead_upload dedup step
+   * matched to an existing lead: the lead must still be dispatched to the
+   * selected lenders, but no second row may be created in the leads table.
+   */
+  static buildExistingLeadForDispatch(leadData, leadId) {
+    const item = this._buildItem(leadData, new Date().toISOString());
+    item.leadId = leadId;
+    return item;
   }
 
   /**
@@ -505,6 +523,102 @@ class Lead {
       Limit: 1,
     }));
     return (result.Count || 0) > 0;
+  }
+
+  // ==========================================================================
+  // BULK RE-UPLOAD TAGGING  (admin/lead_upload step 1)
+  // ==========================================================================
+  //
+  // A file re-uploaded through admin/lead_upload is NOT rejected when it
+  // contains phones/PANs we already hold. Instead the existing lead row is
+  // stamped with the new file's source in `source2` plus a fresh `updatedAt`,
+  // and the row is still pushed to the selected lenders.
+  //
+  // The match itself ignores createdAt entirely (a lead from any time counts as
+  // a match). Only the RE-STAMP is time-gated: a lead whose source2 was already
+  // set within SOURCE2_LOOKBACK_DAYS is left untouched.
+
+  static SOURCE2_LOOKBACK_DAYS = 30;
+
+  /**
+   * Resolve one leadId from a GSI without any createdAt window.
+   *
+   * Only `leadId` is projected — it is the base-table key, so it is present in
+   * every GSI projection type. When several rows share the value the newest by
+   * createdAt wins (createdAt is projected on both indexes; if a projection
+   * ever drops it the first row is used).
+   */
+  static async _findLeadIdByIndex(indexName, keyName, value) {
+    if (!value) return null;
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: indexName,
+      KeyConditionExpression: '#k = :v',
+      ExpressionAttributeNames: { '#k': keyName },
+      ExpressionAttributeValues: { ':v': encryptPII(String(value)) },
+      ProjectionExpression: 'leadId, createdAt',
+    }));
+    const items = result.Items || [];
+    if (items.length === 0) return null;
+    const newest = items.reduce((a, b) =>
+      String(b.createdAt || '') > String(a.createdAt || '') ? b : a
+    );
+    return newest.leadId || null;
+  }
+
+  /**
+   * Full existing-lead item for a phone, ignoring createdAt. Returns null when
+   * no lead holds this phone. The item is re-read from the base table (not the
+   * GSI) so newly added attributes like source2 are always present regardless
+   * of the index projection.
+   */
+  static async findAnyByPhone(phone) {
+    const leadId = await this._findLeadIdByIndex('phone-index', 'phone', phone);
+    return leadId ? this.findById(leadId) : null;
+  }
+
+  /** Same as findAnyByPhone but keyed on PAN. */
+  static async findAnyByPanNumber(panNumber) {
+    const leadId = await this._findLeadIdByIndex('panNumber-index', 'panNumber', panNumber);
+    return leadId ? this.findById(leadId) : null;
+  }
+
+  /**
+   * Stamp source2 + updatedAt on an existing lead.
+   *
+   *   source2 empty                                → stamp   ('tagged')
+   *   source2 set, updatedAt older than the window → re-stamp ('tagged')
+   *   source2 set, updatedAt inside the window     → no write ('skipped')
+   *
+   * A missing/blank updatedAt counts as stale, so such a lead gets stamped.
+   * Never throws — a failed stamp must not abort the upload.
+   */
+  static async tagSource2(lead, source, lookbackDays = this.SOURCE2_LOOKBACK_DAYS) {
+    if (!lead || !lead.leadId || !source) return 'skipped';
+
+    const current = lead.source2;
+    const hasSource2 =
+      current !== undefined && current !== null && String(current).trim() !== '';
+    const cutoff = this._cutoffISOForDays(lookbackDays);
+
+    if (hasSource2 && String(lead.updatedAt || '') >= cutoff) return 'skipped';
+
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { leadId: lead.leadId },
+        UpdateExpression: 'SET #source2 = :source2, updatedAt = :now',
+        ExpressionAttributeNames: { '#source2': 'source2' },
+        ExpressionAttributeValues: {
+          ':source2': String(source),
+          ':now': new Date().toISOString(),
+        },
+      }));
+      return 'tagged';
+    } catch (err) {
+      console.error(`[Dedup] source2 stamp failed for ${lead.leadId}:`, err.message);
+      return 'error';
+    }
   }
 
   static async findBySource(source, options = {}) {
