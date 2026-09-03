@@ -427,6 +427,17 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+  rulemudra: {
+    code: 'rulemudra', 
+    name: 'Rule Mudra', logo: '/rulemudra-logo.jpeg',
+    maxAmount: 100000, minInterest: 18,
+    processingTime: '0-1 Day', approval: 'EXCELLENT',
+    website: 'https://loan.rulemudra.com/?utm_source=Ratecut&utm_medium=={utm_medium}',
+    apr: 24, type: 'Fintech · Quick',
+    rateRange: '15% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 }; 
 
 const DEFAULT_LENDER_ORDER = [
