@@ -1,6 +1,7 @@
 const DistributionRule = require('../models/distributionRuleModel');
 const { buildDefaultWebConfig, normalizeWebConfig } = require('../config/webConfigDefaults');
 const { resolveSource } = require('../config/sourceAliases');
+const { resolveWebConfigForSource } = require('../services/webConfigService');
 
 // Get all distribution rules
 exports.getAllDistributionRules = async (req, res) => {
@@ -185,41 +186,11 @@ exports.getWebConfigBySource = async (req, res) => {
   try {
     const { source } = req.params;
 
-    // The landing link carries a short nick (e.g. `fr`), but the
-    // distribution_rules row is keyed by the canonical name (e.g. `FREO`).
-    // Resolve the nick first so we reach the SAME row that holds the S2S
-    // immediate/delayed lenders + RCS priority instead of a duplicate.
-    const canonical = resolveSource(source);
-
-    let webConfig = null;
-    let resolvedFrom = 'builtin-default';
-
-    // Try the raw source first, then the canonical name.
-    let rule = await DistributionRule.findBySource(source);
-    if ((!rule || !rule.webConfig) && canonical !== source) {
-      rule = await DistributionRule.findBySource(canonical);
-    }
-
-    if (rule && rule.webConfig) {
-      webConfig = rule.webConfig;
-      resolvedFrom = 'source';
-    } else {
-      const defaultRule = await DistributionRule.findBySource('default');
-      if (defaultRule && defaultRule.webConfig) {
-        webConfig = defaultRule.webConfig;
-        resolvedFrom = 'default-row';
-      }
-    }
-
-    if (!webConfig) {
-      webConfig = buildDefaultWebConfig();
-    }
-
-    // Expand on read: rows may have been stored with a compact `lenderCodes`
-    // shape (dashboard) instead of full `lenders`. normalizeWebConfig always
-    // returns full lender objects so the frontend can render without a catalog,
-    // and is idempotent for rows that already hold full `lenders`.
-    webConfig = normalizeWebConfig(webConfig);
+    // Resolution (including the nick -> canonical-name step and the expansion
+    // of a compact `lenderCodes` row into full lender objects) lives in
+    // webConfigService, shared with the partner-reference endpoint so the page
+    // and the reference gate can never read the flags differently.
+    const { webConfig, resolvedFrom } = await resolveWebConfigForSource(source);
 
     res.status(200).json({
       status: 'success',

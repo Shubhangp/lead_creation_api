@@ -3,6 +3,7 @@ const {
   PutCommand,
   GetCommand,
   QueryCommand,
+  ScanCommand,
   UpdateCommand,
   DeleteCommand,
   BatchGetCommand
@@ -10,6 +11,7 @@ const {
 const { ConditionalCheckFailedException } = require('@aws-sdk/client-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 const { encryptPII, decryptPII } = require('../utils/piiCrypto');
+const { generatePartnerReferenceID } = require('../utils/partnerReference');
 
 const TABLE_NAME = 'leads';
 
@@ -273,28 +275,6 @@ class Lead {
     return item;
   }
 
-  /**
-   * ✅ FAST PATH for bulk uploads.
-   *
-   * Differences from create():
-   *  - Skips the two pre-flight GSI queries (findByPhone / findByPanNumber).
-   *  - Uses a ConditionExpression on the primary key only (attribute_not_exists).
-   *    Duplicate phones/PANs across rows in the same file are caught in-memory
-   *    by the controller before this is called. Duplicates vs. existing DB rows
-   *    will surface as a ConditionalCheckFailedException on leadId collision
-   *    (UUID collision probability ≈ 0) — phone/PAN GSI uniqueness is NOT
-   *    enforced here at the DB level since DynamoDB doesn't support unique
-   *    constraints on non-key attributes natively.
-   *
-   *    If you need hard DB-level phone/PAN uniqueness even in fast mode, add a
-   *    TransactWrite that also puts sentinel items into a separate
-   *    "phone-index-lock" and "pan-index-lock" table — but that halves
-   *    throughput again. For most bulk-import scenarios the in-memory dedup +
-   *    post-import reconciliation is the right trade-off.
-   *
-   *  - Does NOT call _incrementCounter — the controller batches all increments
-   *    into one call per source via incrementCounterBy().
-   */
   static async createFast(leadData) {
     const now = new Date().toISOString();
     const item = this._buildItem(leadData, now);
@@ -302,20 +282,13 @@ class Lead {
     await docClient.send(new PutCommand({
       TableName: TABLE_NAME,
       Item: item,
-      // Prevents overwriting an existing item with the same leadId (UUID clash,
-      // effectively impossible but good practice).
       ConditionExpression: 'attribute_not_exists(leadId)',
     }));
 
     return item;
   }
 
-  /**
-   * Shared item builder.
-   */
   static _buildItem(leadData, now) {
-    // For bulk uploads, createdAt may come from the Excel row.
-    // Fall back to `now` (the caller's timestamp) if not supplied.
     const createdAt = leadData.createdAt || now;
     return {
       leadId: uuidv4(),
@@ -323,7 +296,6 @@ class Lead {
       fullName: leadData.fullName,
       firstName: leadData.firstName || null,
       lastName: leadData.lastName || null,
-      // PII stored encrypted-at-rest (deterministic so GSI/dedup still work).
       phone: encryptPII(leadData.phone),
       email: leadData.email,
       age: leadData.age || null,
@@ -338,46 +310,22 @@ class Lead {
       address: leadData.address || null,
       pincode: leadData.pincode || null,
       consent: leadData.consent,
-      // Second source that later re-supplied this same lead (phone/PAN match).
-      // Stamped by the admin/lead_upload dedup step via tagSource2(); a fresh
-      // lead starts with none.
       source2: leadData.source2 || null,
-      // Timestamp the user accepted consent on the website loan-form. Only
-      // loan-form-originated creates pass this through; bulk/other creates leave
-      // it null.
       websiteConsentTime: leadData.websiteConsentTime || null,
-      // utm_medium that triggered the most recent visit (landing campaign).
       campaign_identifier: leadData.campaign_identifier || null,
+      partner_referenceID: leadData.partner_referenceID || null,
       visited: false,
       createdAt,
       datePartition: this.getDatePartition(createdAt),
     };
   }
 
-  /**
-   * Build a lead object in the exact same shape createFast() would produce, but
-   * bound to an ALREADY EXISTING leadId and WITHOUT writing anything.
-   *
-   * Used by the push flow for rows that the admin/lead_upload dedup step
-   * matched to an existing lead: the lead must still be dispatched to the
-   * selected lenders, but no second row may be created in the leads table.
-   */
   static buildExistingLeadForDispatch(leadData, leadId) {
     const item = this._buildItem(leadData, new Date().toISOString());
     item.leadId = leadId;
     return item;
   }
 
-  /**
-   * Mobile-only capture (landing formMode = 'mobileOnly').
-   *
-   * Stores ONLY phone, source and campaign_identifier (utm_medium). Bypasses
-   * the full lead validation (no PAN/email yet).
-   *
-   * - If the phone already exists: update campaign_identifier ONLY and return
-   *   { created: false }.
-   * - Otherwise: insert a minimal lead row and return { created: true }.
-   */
   static async upsertMobileCapture({ phone, source, campaign_identifier }) {
     if (!phone) {
       const error = new Error('Phone is required');
@@ -388,7 +336,6 @@ class Lead {
     const existing = await this.findByPhone(phone);
 
     if (existing) {
-      // User re-entered their mobile on the loan-form — refresh website consent time.
       const updated = await docClient.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { leadId: existing.leadId },
@@ -583,16 +530,6 @@ class Lead {
     return leadId ? this.findById(leadId) : null;
   }
 
-  /**
-   * Stamp source2 + updatedAt on an existing lead.
-   *
-   *   source2 empty                                → stamp   ('tagged')
-   *   source2 set, updatedAt older than the window → re-stamp ('tagged')
-   *   source2 set, updatedAt inside the window     → no write ('skipped')
-   *
-   * A missing/blank updatedAt counts as stale, so such a lead gets stamped.
-   * Never throws — a failed stamp must not abort the upload.
-   */
   static async tagSource2(lead, source, lookbackDays = this.SOURCE2_LOOKBACK_DAYS) {
     if (!lead || !lead.leadId || !source) return 'skipped';
 
@@ -799,6 +736,95 @@ class Lead {
     }));
 
     return result.Attributes;
+  }
+
+  /**
+   * Issue (or return) the lead's partner reference — the value sent to lenders
+   * as UTM_Partner_ReferenceID and matched against their payout reports.
+   *
+   * Idempotent by design, and deliberately so: the success page calls this on
+   * every load, the user may click three lender cards, and a lead that has
+   * already been reported to a lender under one reference must keep it forever.
+   * The conditional write is what enforces that — two concurrent calls race,
+   * one wins, and the loser re-reads the winner's value rather than clobbering
+   * it. That matters because the same lead can be open in two tabs.
+   *
+   * ONE reference is shared across every lender card, so a single column on the
+   * lead stays queryable and exportable. Which lender a click went to is
+   * already tracked in GA4 (`lender_get_cash_click`).
+   */
+  static async ensurePartnerReferenceID(leadId) {
+    const lead = await this.findById(leadId);
+    if (!lead) {
+      const error = new Error('Lead not found');
+      error.code = 'LEAD_NOT_FOUND';
+      throw error;
+    }
+
+    if (lead.partner_referenceID) {
+      return { partner_referenceID: lead.partner_referenceID, issued: false };
+    }
+
+    const reference = generatePartnerReferenceID();
+
+    try {
+      const result = await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { leadId },
+        UpdateExpression: 'SET partner_referenceID = :ref, partnerReferenceIssuedAt = :now',
+        // Only write when the slot is genuinely empty. `attribute_not_exists`
+        // alone is not enough: _buildItem writes the key with an explicit null,
+        // so existing rows have the attribute present but unset.
+        ConditionExpression:
+          'attribute_not_exists(partner_referenceID) OR partner_referenceID = :empty',
+        ExpressionAttributeValues: {
+          ':ref': reference,
+          ':now': new Date().toISOString(),
+          ':empty': null,
+        },
+        ReturnValues: 'ALL_NEW',
+      }));
+
+      return { partner_referenceID: result.Attributes.partner_referenceID, issued: true };
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        // Another request issued one between our read and our write. Theirs is
+        // the reference of record.
+        const fresh = await this.findById(leadId);
+        return { partner_referenceID: fresh?.partner_referenceID || null, issued: false };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Resolve a reference a lender reported back to the lead that produced it.
+   *
+   * This is a full table scan with a filter, so it is built for occasional
+   * reconciliation runs, NOT for a per-row lookup over a large payout file. If
+   * that becomes the usual access pattern, add a `partner_referenceID-index`
+   * GSI on the leads table and swap the body for a QueryCommand against it —
+   * the signature here is already the one that call site would want.
+   */
+  static async findByPartnerReferenceID(reference) {
+    if (!reference) return null;
+
+    let lastKey = null;
+    do {
+      const params = {
+        TableName: TABLE_NAME,
+        FilterExpression: 'partner_referenceID = :ref',
+        ExpressionAttributeValues: { ':ref': reference },
+        Limit: 500,
+      };
+      if (lastKey) params.ExclusiveStartKey = lastKey;
+
+      const result = await docClient.send(new ScanCommand(params));
+      if (result.Items && result.Items.length) return result.Items[0];
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    return null;
   }
 
   static async deleteById(leadId) {

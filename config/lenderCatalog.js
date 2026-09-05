@@ -1,3 +1,27 @@
+/**
+ * Lender catalog.
+ *
+ * Adding a lender means adding ONE entry here (and its code to
+ * DEFAULT_LENDER_ORDER, or to a source's `lenderCodes`). No frontend change.
+ *
+ * Two tokens are recognised inside `website`; both are substituted by the
+ * frontend just before the outbound URL is opened:
+ *
+ *   {utm_medium}   → the traffic source/partner id. Always substituted.
+ *
+ *   {partner_ref}  → a per-lead reference the lender echoes back on their
+ *                    payout report (Poonawalla calls it UTM_Partner_ReferenceID;
+ *                    other lenders use click_id, sub_id, ref_id ...). Put the
+ *                    token wherever that lender's parameter goes:
+ *                       ...&UTM_Partner_ReferenceID={partner_ref}
+ *                    It is only filled in for sources whose webConfig has
+ *                    formMode 'full' AND redirectToSuccess off, since only then
+ *                    is there a real submitted lead behind the click. When it
+ *                    cannot be filled the frontend strips that whole parameter
+ *                    out of the URL, so the lender never receives an empty or
+ *                    literal value. Lenders that do not need a reference simply
+ *                    omit the token.
+ */
 const LENDER_CATALOG = {
   OVLY: {
     name: "Olyv Finance", logo: "/Olyv_Logo.webp",
@@ -81,6 +105,20 @@ const LENDER_CATALOG = {
     maxAmount: 500000, minInterest: 9.99,
     processingTime: '0-1 Day', approval: 'GOOD',
     website: 'https://instant-pocket-loan.poonawallafincorp.com/?redirectto=primepl&utm_DSA_Code=7857&UTM_Partner_AgentCode=Inderpreet@ratecut.in_DSA&UTM_Partner_Name=DSA_RAAJ_KHOSLA_&_COMPANY_PRIVATE_LIMITED&UTM_SM_Name=ashish.gupta33649@poonawallafincorp.com&utm_medium={utm_medium}&utm_campaign=ratecut_website',
+    apr: 18, type: 'NBFC · AAA rated',
+    rateRange: '9% – 18% p.a.', processingFee: 'Upto 3% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank statement', 'Salary slip'],
+  },
+  // Poonawalla under the CREDITHAAT DSA code. Kept as a separate entry from
+  // `PoonawallaFincorp` (Raaj Khosla DSA) because the two bill to different
+  // agent codes — pick one per source via `lenderCodes`, don't show both.
+  PoonawallaCH: {
+    code: 'PoonawallaCH',
+    name: 'Poonawalla Fincorp', logo: '/poonawalla.svg',
+    maxAmount: 500000, minInterest: 9.99,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://instant-pocket-loan.poonawallafincorp.com/?utm_DSA_Code=PMH00235&UTM_Partner_Name=CREDITHAAT&UTM_Partner_Medium=CHAFF-619898394&UTM_Partner_AgentCode=PFLCREDITHAAT&UTM_Partner_ReferenceID={partner_ref}',
     apr: 18, type: 'NBFC · AAA rated',
     rateRange: '9% – 18% p.a.', processingFee: 'Upto 3% of loan amount',
     prepayment: 'Nil', disbursal: 'Same day',

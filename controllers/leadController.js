@@ -5,6 +5,7 @@ const ExcelLead = require('../models/ExcelLeadModel');
 // const PendingLead = require('../models/pendingLeadModel');
 const { parseFileInChunks, deleteFile } = require('../utils/readFile');
 const DistributionRule = require('../models/distributionRuleModel');
+const { resolveWebConfigForSource, isPartnerReferenceEligible } = require('../services/webConfigService');
 // const timeUtils = require('../utils/timeutils');
 const rcsService = require('../services/rcsService');
 const { maskPhone, maskPan } = require('../utils/piiCrypto');
@@ -974,6 +975,63 @@ exports.mobileCapture = async (req, res) => {
   } catch (error) {
     if (error.errors) {
       return res.status(400).json({ message: 'Validation failed', errors: error.errors });
+    }
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+/**
+ * POST /leads/:leadId/partner-reference
+ *
+ * Issues the reference the success page appends to lender card URLs (Poonawalla's
+ * `UTM_Partner_ReferenceID`, and any future lender whose URL carries the
+ * `{partner_ref}` token). Idempotent — repeat calls return the reference already
+ * on the lead, so a reload or a second lender click reuses one value.
+ *
+ * The source's webConfig is the gate: a reference is only issued when the
+ * visitor actually filled the form (`formMode: 'full'`) and was not bounced
+ * straight to the offers page (`redirectToSuccess: false`). See
+ * webConfigService.isPartnerReferenceEligible for why.
+ *
+ * Ineligible requests are NOT an error. They answer 200 with a null reference,
+ * because the caller is the offers page: a 4xx here would either surface a
+ * console error on a perfectly healthy page or, worse, tempt the frontend into
+ * retrying. The frontend simply drops the parameter from the outbound URL.
+ */
+exports.issuePartnerReference = async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    const source = req.body?.source || req.query?.source || null;
+
+    if (!source) {
+      return res.status(400).json({ message: 'source is required' });
+    }
+
+    const { webConfig } = await resolveWebConfigForSource(source);
+
+    if (!isPartnerReferenceEligible(webConfig)) {
+      return res.status(200).json({
+        status: 'success',
+        eligible: false,
+        // Spelled out so this is debuggable from the network tab alone.
+        reason: webConfig.formMode !== 'full'
+          ? `formMode is '${webConfig.formMode}', expected 'full'`
+          : 'redirectToSuccess is on for this source',
+        data: { partner_referenceID: null },
+      });
+    }
+
+    const { partner_referenceID, issued } = await Lead.ensurePartnerReferenceID(leadId);
+
+    return res.status(200).json({
+      status: 'success',
+      eligible: true,
+      issued,
+      data: { partner_referenceID },
+    });
+  } catch (error) {
+    if (error.code === 'LEAD_NOT_FOUND') {
+      return res.status(404).json({ message: 'Lead not found' });
     }
     res.status(500).json({ message: 'Server error', error: error.message });
   }
