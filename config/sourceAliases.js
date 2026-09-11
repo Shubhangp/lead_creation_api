@@ -33,6 +33,8 @@ const SOURCE_ALIASES = {
   batterysmart: 'BatterySmart',
 
   vfc: 'VFC',
+
+  HSB: 'HSB'
 };
 
 function resolveSource(input) {
