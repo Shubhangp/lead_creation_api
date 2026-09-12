@@ -449,6 +449,28 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+  moneycontrol: {
+    code: 'moneycontrol', 
+    name: 'Money Control', logo: '/moneycontrol.svg',
+    maxAmount: 1000000, minInterest: 10,
+    processingTime: '0-1 Day', approval: 'EXCELLENT',
+    website: 'https://www.moneycontrolpay.com/?utm_source=bs005&utm_medium={partner_ref}',
+    apr: 24, tag: 'Self Employed Only', type: 'Fintech · Quick',
+    rateRange: '10% – 15% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
+  finnable: {
+    code: 'finnable', 
+    name: 'Finnable', logo: '/finnable_logo.svg',
+    maxAmount: 1000000, minInterest: 15,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://app.finnable.com/87KP/4wavhmzv?utm_source=Ratecut&utm_medium={partner_ref}',
+    apr: 24, type: 'Fintech · Quick',
+    rateRange: '15% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 }; 
 
 const DEFAULT_LENDER_ORDER = [
