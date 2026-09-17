@@ -1,5 +1,6 @@
 const LENDER_CATALOG = {
   OVLY: {
+    code: 'OVLY',
     name: "Olyv Finance", logo: "/Olyv_Logo.webp",
     maxAmount: 200000, minInterest: 18,
     processingTime: "3-5 Days", approval: "VERY GOOD",
@@ -81,17 +82,6 @@ const LENDER_CATALOG = {
     maxAmount: 500000, minInterest: 9.99,
     processingTime: '0-1 Day', approval: 'GOOD',
     website: 'https://instant-pocket-loan.poonawallafincorp.com/?utm_DSA_Code=PMH00235&UTM_Partner_Name=CREDITHAAT&UTM_Partner_Medium=CHAFF-619898394&UTM_Partner_AgentCode=PFLCREDITHAAT&UTM_Partner_ReferenceID={partner_ref}&utm_medium={utm_medium}&utm_campaign=ratecut_website',
-    apr: 18, type: 'NBFC · AAA rated',
-    rateRange: '9% – 18% p.a.', processingFee: 'Upto 3% of loan amount',
-    prepayment: 'Nil', disbursal: 'Same day',
-    docs: ['PAN', 'Aadhaar', 'Bank statement', 'Salary slip'],
-  },
-  PoonawallaCH: {
-    code: 'PoonawallaCH',
-    name: 'Poonawalla Fincorp', logo: '/poonawalla.svg',
-    maxAmount: 500000, minInterest: 9.99,
-    processingTime: '0-1 Day', approval: 'GOOD',
-    website: 'https://instant-pocket-loan.poonawallafincorp.com/?utm_DSA_Code=PMH00235&UTM_Partner_Name=CREDITHAAT&UTM_Partner_Medium=CHAFF-619898394&UTM_Partner_AgentCode=PFLCREDITHAAT&UTM_Partner_ReferenceID={partner_ref}',
     apr: 18, type: 'NBFC · AAA rated',
     rateRange: '9% – 18% p.a.', processingFee: 'Upto 3% of loan amount',
     prepayment: 'Nil', disbursal: 'Same day',
