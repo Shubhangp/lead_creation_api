@@ -1,15 +1,22 @@
 const crypto = require('crypto');
 
 const ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const RANDOM_LEN = 5;
 
-const PARTNER_REFERENCE_PATTERN = /^RC[0-9A-Z]{12,20}$/;
+const RANDOM_LEN = 8;
+
+// RC + base36 millis (8 chars until year 2059) + RANDOM_LEN.
+const PARTNER_REFERENCE_PATTERN = /^RC[0-9A-Z]{12,24}$/;
+
+const BIAS_LIMIT = 256 - (256 % ALPHABET.length);
 
 function randomChars(length) {
-  const bytes = crypto.randomBytes(length);
   let out = '';
-  for (let i = 0; i < length; i += 1) {
-    out += ALPHABET[bytes[i] % ALPHABET.length];
+  while (out.length < length) {
+    for (const byte of crypto.randomBytes(length * 2)) {
+      if (byte >= BIAS_LIMIT) continue;
+      out += ALPHABET[byte % ALPHABET.length];
+      if (out.length === length) break;
+    }
   }
   return out;
 }

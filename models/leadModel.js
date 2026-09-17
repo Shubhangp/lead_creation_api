@@ -797,15 +797,27 @@ class Lead {
     }
   }
 
-  /**
-   * Resolve a reference a lender reported back to the lead that produced it.
-   *
-   * This is a full table scan with a filter, so it is built for occasional
-   * reconciliation runs, NOT for a per-row lookup over a large payout file. If
-   * that becomes the usual access pattern, add a `partner_referenceID-index`
-   * GSI on the leads table and swap the body for a QueryCommand against it —
-   * the signature here is already the one that call site would want.
-   */
+  static async ensurePartnerReferenceIDByPhone(phone) {
+    if (!phone) {
+      const error = new Error('Phone is required');
+      error.code = 'PHONE_REQUIRED';
+      throw error;
+    }
+
+    const lead = await this.findAnyByPhone(String(phone));
+    if (!lead) {
+      return {
+        partner_referenceID: generatePartnerReferenceID(),
+        issued: true,
+        persisted: false,
+        leadId: null,
+      };
+    }
+
+    const result = await this.ensurePartnerReferenceID(lead.leadId);
+    return { ...result, persisted: true, leadId: lead.leadId };
+  }
+
   static async findByPartnerReferenceID(reference) {
     if (!reference) return null;
 

@@ -31,12 +31,4 @@ async function resolveWebConfigForSource(source) {
   return { webConfig: normalizeWebConfig(webConfig), resolvedFrom };
 }
 
-function isPartnerReferenceEligible(webConfig) {
-  return (
-    !!webConfig &&
-    webConfig.formMode === 'full' &&
-    webConfig.redirectToSuccess === false
-  );
-}
-
-module.exports = { resolveWebConfigForSource, isPartnerReferenceEligible };
+module.exports = { resolveWebConfigForSource };

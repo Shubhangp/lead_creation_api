@@ -15,13 +15,13 @@ router.get('/jobs/:jobId', getJobStatus);
 
 router.post('/mobile-capture', mobileCapture);
 
+router.post('/partner-reference', issuePartnerReference);
+
 router.get('/lead/:phone', getLeadByPhone);
 
 router.route('/rate_cut/get/request/for/all/data').get(getAllLeads);
 
 router.route('/rate_cut/get/by/id/request/:id').get(getLead);
-
-router.post('/:leadId/partner-reference', issuePartnerReference);
 
 router.route('/:leadId').patch(updateLeadById).put(updateLeadById);
 
