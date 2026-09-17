@@ -23,7 +23,7 @@ const LENDER_CATALOG = {
   CRMPaisa: {
     code: 'CRMPaisa',
     name: 'Emergency Paisa', logo: '/ep.png',
-    maxAmount: 100000, minInterest: 16,
+    maxAmount: 100000, minInterest: 16, 
     processingTime: '1-2 Days', approval: 'EXCELLENT',
     website: 'https://emergencypaisa.com/apply-now?utm_source=RCut&utm_medium={utm_medium}&UTM_Partner_ReferenceID={partner_ref}&utm_campaign=ratecut_website',
     apr: 36, type: 'Digital · Quick',
