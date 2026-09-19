@@ -6,15 +6,15 @@ const {
 
 // Default sources for the DynamoDB response-log models (per-source GSI scan).
 // Individual models may still override via their own *_SOURCES env var.
-const RESPONSELOG_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr', 'CreditHaat', 'BAL', 'WeCredit', 'BoostScore', 'CK2', 'FREO2', 'HSB'];
+const RESPONSELOG_SOURCES = ['CashKuber', 'FREO', 'BatterySmart', 'Ratecut', 'VFC', 'Apr', 'CreditHaat', 'BAL', 'WeCredit', 'BoostScore', 'CK2', 'FREO2', 'HSB', 'INDIALENDS'];
 
 // Default for models that read process.env.LEAD_SOURCES (creditLinks, leadModel).
-const LEAD_SOURCES_DEFAULT = ['BatterySmart', 'VFC', 'FREO', 'CashKuber', 'Ratecut', 'CreditHaat', 'BAL', 'Apr', 'WeCredit', 'BoostScore', 'CK2', 'FREO2', 'HSB'];
+const LEAD_SOURCES_DEFAULT = ['BatterySmart', 'VFC', 'FREO', 'CashKuber', 'Ratecut', 'CreditHaat', 'BAL', 'Apr', 'WeCredit', 'BoostScore', 'CK2', 'FREO2', 'HSB', 'INDIALENDS'];
 
 // Named source lists consumed by the frontends. Kept exact to current values.
 const SOURCE_LISTS = {
-  upload:       ['FREO', 'Ratecut', 'Apr', 'CashKuber', 'CreditHaat', 'BAL', 'BatterySmart', 'VFC', 'WeCredit', 'BoostScore', 'CK2', 'FREO2', 'HSB' ],  // xlsx_upload › lead_upload
-  distribution: ['FREO', 'CashKuber', 'Ratecut', 'Apr', 'CreditHaat', 'BAL', 'BatterySmart', 'VFC', 'WeCredit', 'BoostScore', 'CK2', 'FREO2', 'HSB' ],  // dashboard › lead_distribution
+  upload:       ['FREO', 'Ratecut', 'Apr', 'CashKuber', 'CreditHaat', 'BAL', 'BatterySmart', 'VFC', 'WeCredit', 'BoostScore', 'CK2', 'FREO2', 'HSB', 'INDIALENDS' ],  // xlsx_upload › lead_upload
+  distribution: ['FREO', 'CashKuber', 'Ratecut', 'Apr', 'CreditHaat', 'BAL', 'BatterySmart', 'VFC', 'WeCredit', 'BoostScore', 'CK2', 'FREO2', 'HSB', 'INDIALENDS' ],  // dashboard › lead_distribution
   responseLog:  RESPONSELOG_SOURCES,
 };
 
