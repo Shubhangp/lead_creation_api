@@ -358,9 +358,13 @@ class Lead {
       // Mobile entered on the website loan-form → record website consent time.
       websiteConsentTime: now,
       // Minimal placeholder fields so downstream readers don't choke on missing keys.
+      // NOTE: panNumber is intentionally omitted (not set to null) — it's the
+      // partition key of panNumber-index, and DynamoDB rejects writes where a
+      // GSI key attribute is present with a NULL type ("Type mismatch for
+      // Index Key panNumber Expected: S Actual: NULL"). Leaving the attribute
+      // out entirely keeps the item out of that sparse index, which is fine.
       fullName: null,
       email: null,
-      panNumber: null,
       consent: true,
       visited: false,
       mobileOnly: true,
@@ -394,6 +398,8 @@ class Lead {
   }
 
   static async findByPhone(phone) {
+    const cutoff = this._lookbackCutoffISO();
+
     const result = await docClient.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'phone-index',
@@ -401,10 +407,28 @@ class Lead {
       FilterExpression: 'createdAt >= :cutoff',
       ExpressionAttributeValues: {
         ':phone': encryptPII(phone),
-        ':cutoff': this._lookbackCutoffISO(),
+        ':cutoff': cutoff,
       },
     }));
-    return result.Items?.[0] || null;
+    if (result.Items?.[0]) return result.Items[0];
+
+    // Fallback for rows written before PII encryption was turned on: the
+    // phone-index partition key on those rows still holds the raw plaintext
+    // value, so an encrypted lookup can never match them. Retry once with the
+    // raw value so pre-migration leads are still findable.
+    const rawPhone = String(phone);
+    if (encryptPII(rawPhone) === rawPhone) return null; // nothing to fall back to
+    const legacyResult = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'phone-index',
+      KeyConditionExpression: 'phone = :phone',
+      FilterExpression: 'createdAt >= :cutoff',
+      ExpressionAttributeValues: {
+        ':phone': rawPhone,
+        ':cutoff': cutoff,
+      },
+    }));
+    return legacyResult.Items?.[0] || null;
   }
 
   static async findByPanNumber(panNumber) {
