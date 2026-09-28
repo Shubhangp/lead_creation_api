@@ -49,7 +49,7 @@ const LENDER_LISTS = {
   // frontend: loanform › DistributionRulesManagement
   distributionRules: [
     'SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'CreditSea',
-    'FATAKPAY', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'MPOKKET', 'CRMPaisa', 'CreditHaat', 'CreditLinks',
+    'FATAKPAY',, 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'MPOKKET', 'CRMPaisa', 'CreditHaat', 'CreditLinks',
   ],
   // frontend: xlsx_upload › Home.js (status dashboard columns)
   home: [

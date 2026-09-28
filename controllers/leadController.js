@@ -1091,6 +1091,36 @@ exports.getAllLeads = async (req, res) => {
   }
 };
 
+// Get leads by updatedAt date range (paginated)
+// Query params: startDate, endDate (ISO 8601, both required), limit, lastEvaluatedKey.
+// Scans the table (no updatedAt GSI exists) — page through with the returned
+// lastEvaluatedKey until it's null to be sure you have everything in range.
+exports.getLeadsByUpdatedAt = async (req, res) => {
+  try {
+    const { startDate, endDate, limit = 100, lastEvaluatedKey } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: 'startDate and endDate query params are required (ISO 8601).' });
+    }
+
+    const result = await Lead.findByUpdatedAtRange(startDate, endDate, {
+      limit: parseInt(limit),
+      lastEvaluatedKey: lastEvaluatedKey ? JSON.parse(lastEvaluatedKey) : undefined,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      results: result.items.length,
+      data: {
+        leads: maskLeads(result.items),
+        lastEvaluatedKey: result.lastEvaluatedKey,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
 // Update lead
 exports.updateLead = async (req, res) => {
   try {

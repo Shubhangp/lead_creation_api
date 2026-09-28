@@ -1,5 +1,5 @@
 const express = require('express');
-const { createLead, getAllLeads, processFile, getJobStatus, getLead, createUATLead, getLeadByPhone, updateLeadById, mobileCapture, issuePartnerReference } = require('../controllers/leadController');
+const { createLead, getAllLeads, processFile, getJobStatus, getLead, createUATLead, getLeadByPhone, updateLeadById, mobileCapture, issuePartnerReference, getLeadsByUpdatedAt } = require('../controllers/leadController');
 const apiKeyAuth = require('../middlewares/apiKeyAuth');
 const apiKeyUATAuth = require('../middlewares/apiKeyUATAuth');
 const upload = require('../middlewares/uploadMiddleware');
@@ -20,6 +20,8 @@ router.post('/partner-reference', issuePartnerReference);
 router.get('/lead/:phone', getLeadByPhone);
 
 router.route('/rate_cut/get/request/for/all/data').get(getAllLeads);
+
+router.route('/rate_cut/get/by/updatedAt').get(getLeadsByUpdatedAt);
 
 router.route('/rate_cut/get/by/id/request/:id').get(getLead);
 

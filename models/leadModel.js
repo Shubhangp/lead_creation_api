@@ -667,6 +667,38 @@ class Lead {
     return items;
   }
 
+  // Get leads whose `updatedAt` falls within [startDate, endDate] (ISO 8601
+  // strings). There is no GSI on updatedAt (it's only stamped on leads that
+  // get touched after creation — mobile-capture upserts, admin re-uploads,
+  // portal edits), so this scans the table with a FilterExpression rather
+  // than a Query. Paginate with `lastEvaluatedKey` like findAll(); note that
+  // because the filter runs after `Limit` is applied to the raw Scan page,
+  // a single page can legitimately come back with fewer (or zero) items than
+  // `limit` even though more matching rows exist further on — keep paging
+  // with the returned lastEvaluatedKey until it's null to get everything.
+  static async findByUpdatedAtRange(startDate, endDate, options = {}) {
+    const { limit = 100, lastEvaluatedKey } = options;
+
+    const params = {
+      TableName: TABLE_NAME,
+      FilterExpression: 'updatedAt BETWEEN :start AND :end',
+      ExpressionAttributeValues: {
+        ':start': startDate,
+        ':end': endDate,
+      },
+      Limit: limit,
+    };
+    if (lastEvaluatedKey) params.ExclusiveStartKey = lastEvaluatedKey;
+
+    const result = await docClient.send(new ScanCommand(params));
+
+    return {
+      items: result.Items || [],
+      lastEvaluatedKey: result.LastEvaluatedKey || null,
+      count: result.Count || 0,
+    };
+  }
+
   static async updateById(leadId, updates) {
     const existingLead = await this.findById(leadId);
     if (!existingLead) throw new Error('Lead not found');
