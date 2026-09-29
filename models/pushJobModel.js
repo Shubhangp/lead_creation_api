@@ -33,6 +33,7 @@ const {
     PutCommand,
     GetCommand,
     UpdateCommand,
+    ScanCommand,
 } = require('@aws-sdk/lib-dynamodb');
 
 const TABLE_NAME = 'process_leads';
@@ -138,6 +139,31 @@ class PushJob {
             savedToLeads,
             failedToSave,
         });
+    }
+
+    // Find every job still marked "processing" — used on server boot to
+    // auto-resume push jobs that were interrupted by a crash/restart.
+    // process_leads holds real lead rows too, so we must filter on
+    // type === 'PUSH_JOB' as well as status; paginated internally since it's
+    // a full-table scan (run once at startup, so cost is acceptable).
+    static async findActiveJobs() {
+        const items = [];
+        let exclusiveStartKey;
+
+        do {
+            const result = await docClient.send(new ScanCommand({
+                TableName: TABLE_NAME,
+                FilterExpression: '#type = :type AND #status = :status',
+                ExpressionAttributeNames: { '#type': 'type', '#status': 'status' },
+                ExpressionAttributeValues: { ':type': 'PUSH_JOB', ':status': 'processing' },
+                ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+            }));
+
+            items.push(...(result.Items || []));
+            exclusiveStartKey = result.LastEvaluatedKey;
+        } while (exclusiveStartKey);
+
+        return items;
     }
 }
 

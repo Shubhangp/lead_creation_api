@@ -167,6 +167,11 @@ class TokenBucket {
   }
 }
 
+// In-memory guard so the same batchId's background loop is never running
+// twice at once in this process — e.g. boot-resume racing a still-running
+// job, or resumeIncompleteDistributionBatches() being triggered twice.
+const activeDistributionBatchIds = new Set();
+
 /**
  * Background job processing function
  *
@@ -175,8 +180,20 @@ class TokenBucket {
  * on 2L+ datasets — we now process ONE DynamoDB page at a time: fetch → filter →
  * rate-limited send → discard. Peak memory stays bounded to a single page.
  * A per-lender TokenBucket enforces the lender's per-minute rate limit.
+ *
+ * CRASH-RESUMABLE: after every page, the current position (source index +
+ * DynamoDB lastEvaluatedKey) plus enough of the original request to relaunch
+ * (lender/filters/batchSize/delayMs) is checkpointed onto the batch record.
+ * `resumeState` lets a restart pick the loop back up from that checkpoint
+ * instead of starting the whole batch over.
  */
-const processLeadsInBackground = async (batchId, lender, filters, batchSize, delayMs, progressCallback) => {
+const processLeadsInBackground = async (batchId, lender, filters, batchSize, delayMs, progressCallback, resumeState = null) => {
+  if (activeDistributionBatchIds.has(batchId)) {
+    console.log(`[Batch ${batchId}] Already running in this process — skipping duplicate launch`);
+    return;
+  }
+  activeDistributionBatchIds.add(batchId);
+
   const sendFunction = getLenderSendFunction(lender);
 
   // Per-lender rate limiter (per minute). Sending is throttled to the lender's cap.
@@ -363,11 +380,34 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
       }
     }
 
+    // Persist a checkpoint carrying everything needed to relaunch this batch
+    // from wherever the loop currently is. Written after every page so a
+    // crash/restart never loses more than one in-flight page of progress.
+    const persistCheckpoint = async (sourceIndex, lastEvaluatedKey) => {
+      try {
+        await LeadDistributionStats.updateCheckpoint(batchId, {
+          lender,
+          filters,
+          batchSize,
+          delayMs,
+          sourceIndex,
+          lastEvaluatedKey
+        });
+      } catch (checkpointError) {
+        console.error(`[Batch ${batchId}] Failed to persist checkpoint:`, checkpointError.message);
+      }
+    };
+
+    const startSourceIndex = resumeState?.sourceIndex || 0;
+
     if (sourcesToStream) {
       // Stream page-by-page per source: fetch → filter → send → discard.
-      for (const source of sourcesToStream) {
+      for (let srcIdx = startSourceIndex; srcIdx < sourcesToStream.length; srcIdx++) {
+        const source = sourcesToStream[srcIdx];
         console.log(`[Batch ${batchId}] Streaming source: ${source}`);
-        let lastEvaluatedKey = null;
+        // Only the source we're resuming into picks up mid-page; every other
+        // source (or a fresh, non-resumed run) starts from the beginning.
+        let lastEvaluatedKey = (srcIdx === startSourceIndex && resumeState?.lastEvaluatedKey) || null;
         do {
           const queryOptions = {
             limit: 1000,
@@ -388,6 +428,14 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
           }
 
           await processPage(pageLeads);
+
+          // ── CHECKPOINT — if the process dies here, the next boot resumes
+          // this batch from exactly this source + page. Once lastEvaluatedKey
+          // comes back null the current source is fully done, so the
+          // checkpoint must point at the NEXT source (srcIdx + 1) — pointing
+          // it at srcIdx with a null key would make a resume re-stream this
+          // already-finished source from page 1 and resend every lead in it.
+          await persistCheckpoint(lastEvaluatedKey ? srcIdx : srcIdx + 1, lastEvaluatedKey);
           // pageLeads goes out of scope on next iteration → eligible for GC.
         } while (lastEvaluatedKey);
 
@@ -463,6 +511,8 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
     }
 
     throw error;
+  } finally {
+    activeDistributionBatchIds.delete(batchId);
   }
 };
 
@@ -498,6 +548,13 @@ const startBackgroundDistribution = async (req, res) => {
     const batch = await LeadDistributionStats.createBatch({
       lender,
       filters
+    });
+
+    // Checkpoint the raw inputs immediately, before any page has run, so a
+    // crash in the first few seconds still leaves enough on the batch record
+    // to auto-resume this job from the start on next boot.
+    await LeadDistributionStats.updateCheckpoint(batch.batchId, {
+      lender, filters, batchSize, delayMs, sourceIndex: 0, lastEvaluatedKey: null
     });
 
     // Start processing in background (don't await)
@@ -565,6 +622,14 @@ const streamLeadsToLender = async (req, res) => {
     const batch = await LeadDistributionStats.createBatch({
       lender,
       filters
+    });
+
+    // Checkpoint the raw inputs immediately, before any page has run, so a
+    // crash in the first few seconds still leaves enough on the batch record
+    // to auto-resume this job from the start on next boot. (The SSE stream
+    // itself doesn't survive a restart, but the underlying send/save work does.)
+    await LeadDistributionStats.updateCheckpoint(batch.batchId, {
+      lender, filters, batchSize, delayMs, sourceIndex: 0, lastEvaluatedKey: null
     });
 
     // Set up SSE
@@ -803,11 +868,60 @@ const getLeadsPreview = async (req, res) => {
   }
 };
 
+/**
+ * RESUME INCOMPLETE DISTRIBUTION BATCHES ON SERVER STARTUP
+ *
+ * Call this once from server.js after the DB connection is confirmed. It
+ * finds every batch still marked PROCESSING (interrupted by a crash/restart)
+ * and relaunches processLeadsInBackground from its last checkpoint — same
+ * shape as resumeIncompletePushJobs() in processLeadController.js.
+ */
+const resumeIncompleteDistributionBatches = async () => {
+  try {
+    const activeBatches = await LeadDistributionStats.findActiveBatches();
+
+    if (activeBatches.length === 0) {
+      console.log('[LeadDistribution] No interrupted distribution batches found on startup.');
+      return;
+    }
+
+    console.log(`[LeadDistribution] Found ${activeBatches.length} interrupted batch(es) — auto-resuming from checkpoint...`);
+
+    // Stagger relaunches so a crash that interrupted several batches at once
+    // doesn't slam DynamoDB/lender APIs the instant the server boots.
+    activeBatches.forEach((batch, i) => {
+      if (!batch.checkpoint) {
+        console.warn(`[LeadDistribution] Batch ${batch.batchId} has no checkpoint (pre-restore batch?) — skipping auto-resume.`);
+        return;
+      }
+
+      setTimeout(() => {
+        const { lender, filters, batchSize, delayMs, sourceIndex, lastEvaluatedKey } = batch.checkpoint;
+        console.log(`[LeadDistribution] Auto-resuming batch ${batch.batchId} (lender=${lender}, sourceIndex=${sourceIndex})`);
+        processLeadsInBackground(
+          batch.batchId,
+          lender,
+          filters,
+          batchSize,
+          delayMs,
+          null, // no SSE progress callback on an auto-resumed batch
+          { sourceIndex, lastEvaluatedKey }
+        ).catch(error => {
+          console.error(`[LeadDistribution] Auto-resume failed for batch ${batch.batchId}:`, error.message);
+        });
+      }, i * 2000);
+    });
+  } catch (err) {
+    console.error('[LeadDistribution] resumeIncompleteDistributionBatches failed:', err.message);
+  }
+};
+
 module.exports = {
   streamLeadsToLender,
   startBackgroundDistribution,
   getBatchStats,
   getAllBatches,
   getLenderStats,
-  getLeadsPreview
+  getLeadsPreview,
+  resumeIncompleteDistributionBatches
 };

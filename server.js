@@ -4,6 +4,8 @@ dotenv.config({ path: './config.env' });
 
 const app = require('./app');
 const { testConnection } = require('./dynamodb');
+const { resumeIncompletePushJobs } = require('./controllers/processLeadController');
+const { resumeIncompleteDistributionBatches } = require('./controllers/leadDistributionController');
 
 // Test DynamoDB connection
 testConnection()
@@ -12,6 +14,13 @@ testConnection()
 
     const server = app.listen(port, () => {
       console.log(`App running on port ${port}...`);
+
+      // Auto-resume any lender pushes (Lead Upload's PushJob flow and Lead
+      // Distribution's batch flow) that were mid-flight when the server last
+      // crashed or restarted, so a crash never requires manual intervention
+      // to continue sending the remaining leads.
+      resumeIncompletePushJobs();
+      resumeIncompleteDistributionBatches();
     });
 
     process.on('unhandledRejection', (err) => {

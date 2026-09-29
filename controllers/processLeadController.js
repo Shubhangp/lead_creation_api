@@ -459,23 +459,41 @@ async function savePageToLeadsTable(leads) {
 
 const PAGE_SIZE = 500; // leads fetched from process_leads per loop iteration
 
+// In-memory guard so the same jobId's background loop is never running twice
+// in this process at once — e.g. boot-resume and a manual /resume call
+// racing each other, or resumeIncompletePushJobs() being triggered twice.
+// This is per-process only; it doesn't protect against two server instances
+// racing, but this app runs as a single instance.
+const activeJobIds = new Set();
+
 async function runPushInBackground(jobId, { source, startDate, endDate, lenders }) {
-    console.log(`[Push ${jobId}] Starting | source=${source} | ${startDate} → ${endDate}`);
-
-    // Read existing job to check for a checkpoint (resume after restart)
-    let job = await PushJob.get(jobId);
-    if (!job) {
-        console.error(`[Push ${jobId}] Job record not found in DynamoDB — cannot run`);
+    if (activeJobIds.has(jobId)) {
+        console.log(`[Push ${jobId}] Already running in this process — skipping duplicate launch`);
         return;
     }
+    activeJobIds.add(jobId);
 
-    // If already completed or failed do not re-run
-    if (job.status === 'completed' || job.status === 'failed') {
-        console.log(`[Push ${jobId}] Already ${job.status} — skipping`);
-        return;
-    }
-
+    // Everything from here down — including the initial PushJob.get() lookup
+    // — is inside one try/finally so a thrown error anywhere (not just inside
+    // the page loop) still releases the in-memory guard. Without this, a
+    // transient DynamoDB error on the very first read would leave jobId stuck
+    // in activeJobIds forever, blocking any future resume attempt for it.
     try {
+        console.log(`[Push ${jobId}] Starting | source=${source} | ${startDate} → ${endDate}`);
+
+        // Read existing job to check for a checkpoint (resume after restart)
+        let job = await PushJob.get(jobId);
+        if (!job) {
+            console.error(`[Push ${jobId}] Job record not found in DynamoDB — cannot run`);
+            return;
+        }
+
+        // If already completed or failed do not re-run
+        if (job.status === 'completed' || job.status === 'failed') {
+            console.log(`[Push ${jobId}] Already ${job.status} — skipping`);
+            return;
+        }
+
         // Restore checkpoint if this is a resume after restart
         let lastKey = job.lastKey ? JSON.parse(job.lastKey) : null;
         let totalSaved = job.savedToLeads || 0;
@@ -586,7 +604,14 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
 
     } catch (err) {
         console.error(`[Push ${jobId}] Fatal:`, err);
-        await PushJob.markFailed(jobId, err.message);
+        // Best-effort — if this failed before the job record was even
+        // confirmed to exist (e.g. PushJob.get itself threw), don't let a
+        // second error here mask the original one or crash the process.
+        await PushJob.markFailed(jobId, err.message).catch((markErr) => {
+            console.error(`[Push ${jobId}] Also failed to mark job as failed:`, markErr.message);
+        });
+    } finally {
+        activeJobIds.delete(jobId);
     }
 }
 
@@ -601,12 +626,34 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
 // ============================================================================
 
 exports.resumeIncompletePushJobs = async () => {
-    // We can't scan (no Scan) so resume is triggered explicitly by a re-push
-    // from the frontend on the same jobId, OR you can store a list of active
-    // jobIds in a single known DynamoDB key like "JOB#ACTIVE_LIST" and read it here.
-    // For most use cases, the frontend polls and sees status=processing, then
-    // calls GET /push-jobs/:jobId/resume if the process restarted.
-    console.log('[ProcessLead] Server started. Call GET /api/v1/process-leads/push-jobs/:jobId/resume to resume any interrupted job.');
+    try {
+        const activeJobs = await PushJob.findActiveJobs();
+
+        if (activeJobs.length === 0) {
+            console.log('[ProcessLead] No interrupted push jobs found on startup.');
+            return;
+        }
+
+        console.log(`[ProcessLead] Found ${activeJobs.length} interrupted push job(s) — auto-resuming from checkpoint...`);
+
+        // Stagger the relaunches slightly so a crash that interrupted many jobs
+        // at once doesn't slam DynamoDB/lender APIs the instant the server boots.
+        activeJobs.forEach((job, i) => {
+            setTimeout(() => {
+                console.log(`[ProcessLead] Auto-resuming job ${job.jobId} (source=${job.source})`);
+                runPushInBackground(job.jobId, {
+                    source: job.source,
+                    startDate: job.startDate,
+                    endDate: job.endDate,
+                    lenders: job.lenders,
+                }).catch((err) => {
+                    console.error(`[ProcessLead] Auto-resume failed for job ${job.jobId}:`, err.message);
+                });
+            }, i * 2000);
+        });
+    } catch (err) {
+        console.error('[ProcessLead] resumeIncompletePushJobs failed:', err.message);
+    }
 };
 
 // ============================================================================

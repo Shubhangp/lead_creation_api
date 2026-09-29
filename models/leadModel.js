@@ -677,15 +677,26 @@ class Lead {
   // `limit` even though more matching rows exist further on — keep paging
   // with the returned lastEvaluatedKey until it's null to get everything.
   static async findByUpdatedAtRange(startDate, endDate, options = {}) {
-    const { limit = 100, lastEvaluatedKey } = options;
+    const { limit = 100, lastEvaluatedKey, requireCampaignIdentifier = false } = options;
+
+    let filterExpression = 'updatedAt BETWEEN :start AND :end';
+    const values = {
+      ':start': startDate,
+      ':end': endDate,
+    };
+    // Campaign-data admin view only wants rows that actually carry a
+    // campaign_identifier (mobile-capture leads, mainly). Filtering here
+    // avoids shipping every touched lead to the client just to throw most
+    // of them away.
+    if (requireCampaignIdentifier) {
+      filterExpression += ' AND attribute_exists(campaign_identifier) AND campaign_identifier <> :empty';
+      values[':empty'] = '';
+    }
 
     const params = {
       TableName: TABLE_NAME,
-      FilterExpression: 'updatedAt BETWEEN :start AND :end',
-      ExpressionAttributeValues: {
-        ':start': startDate,
-        ':end': endDate,
-      },
+      FilterExpression: filterExpression,
+      ExpressionAttributeValues: values,
       Limit: limit,
     };
     if (lastEvaluatedKey) params.ExclusiveStartKey = lastEvaluatedKey;

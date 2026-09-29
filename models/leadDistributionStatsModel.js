@@ -56,6 +56,9 @@ class LeadDistributionStats {
       // WITH the batch/history record so the dashboard reads it directly (no recompute).
       statusCategories: {},
       status: 'PROCESSING', // PROCESSING, COMPLETED, FAILED, PARTIAL
+      // Resume checkpoint (set/updated by processLeadsInBackground as it runs;
+      // read by resumeIncompleteDistributionBatches() on server boot).
+      checkpoint: null,
       startedAt: new Date().toISOString(),
       completedAt: null,
       lastUpdatedAt: new Date().toISOString(),
@@ -373,6 +376,59 @@ class LeadDistributionStats {
       items: items.slice(0, limit),
       lastEvaluatedKey: undefined
     };
+  }
+
+  /**
+   * Find every batch still marked PROCESSING — used on server boot to
+   * auto-resume distribution runs that were interrupted by a crash/restart.
+   * Full-table scan (small table, run once at startup), paginated internally.
+   */
+  static async findActiveBatches() {
+    const items = [];
+    let exclusiveStartKey;
+
+    do {
+      const result = await docClient.send(new ScanCommand({
+        TableName: TABLE_NAME,
+        FilterExpression: '#status = :processing',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':processing': 'PROCESSING' },
+        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {})
+      }));
+
+      items.push(...(result.Items || []));
+      exclusiveStartKey = result.LastEvaluatedKey;
+    } while (exclusiveStartKey);
+
+    return items;
+  }
+
+  /**
+   * Persist resume-checkpoint info on the batch record: enough of the
+   * original request (lender/filters/batchSize/delayMs) to relaunch the job,
+   * plus where the source-by-source page loop currently is
+   * (sourceIndex + lastEvaluatedKey). Called after every page so a
+   * crash/restart never loses more than one in-flight page of progress.
+   */
+  static async updateCheckpoint(batchId, checkpoint) {
+    try {
+      await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { batchId },
+        UpdateExpression: 'SET checkpoint = :checkpoint, lastUpdatedAt = :now',
+        ExpressionAttributeValues: {
+          ':checkpoint': checkpoint,
+          ':now': new Date().toISOString()
+        }
+      }));
+    } catch (error) {
+      if (error.name === 'ProvisionedThroughputExceededException') {
+        console.warn(`[${batchId}] Throughput exceeded on checkpoint update, retrying...`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return this.updateCheckpoint(batchId, checkpoint);
+      }
+      throw error;
+    }
   }
 
   /**
