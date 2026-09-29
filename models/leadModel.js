@@ -290,7 +290,7 @@ class Lead {
 
   static _buildItem(leadData, now) {
     const createdAt = leadData.createdAt || now;
-    return {
+    const item = {
       leadId: uuidv4(),
       source: leadData.source,
       fullName: leadData.fullName,
@@ -312,12 +312,22 @@ class Lead {
       consent: leadData.consent,
       source2: leadData.source2 || null,
       websiteConsentTime: leadData.websiteConsentTime || null,
-      campaign_identifier: leadData.campaign_identifier || null,
       partner_referenceID: leadData.partner_referenceID || null,
       visited: false,
       createdAt,
       datePartition: this.getDatePartition(createdAt),
     };
+    // campaign_identifier / campaignFlag back the sparse campaign-updatedAt-index
+    // (campaignFlag is the GSI partition key, updatedAt the sort key). DynamoDB
+    // rejects a GSI key attribute written as an explicit NULL ("Type mismatch
+    // ... Expected: S Actual: NULL"), same issue already worked around for
+    // panNumber/phone above — so when there's no campaign_identifier we omit
+    // both attributes entirely instead of writing null.
+    if (leadData.campaign_identifier) {
+      item.campaign_identifier = leadData.campaign_identifier;
+      item.campaignFlag = 'Y';
+    }
+    return item;
   }
 
   static buildExistingLeadForDispatch(leadData, leadId) {
@@ -336,14 +346,27 @@ class Lead {
     const existing = await this.findByPhone(phone);
 
     if (existing) {
+      const finalCampaignId = campaign_identifier || existing.campaign_identifier || null;
+      const now = new Date().toISOString();
+
+      // Same sparse-GSI constraint as elsewhere: campaign_identifier/campaignFlag
+      // back campaign-updatedAt-index, so clearing/leaving-unset must REMOVE the
+      // attributes rather than SET them to null.
+      let updateExpression = 'SET websiteConsentTime = :now, updatedAt = :now';
+      const expressionAttributeValues = { ':now': now };
+      if (finalCampaignId) {
+        updateExpression += ', campaign_identifier = :ci, campaignFlag = :flag';
+        expressionAttributeValues[':ci'] = finalCampaignId;
+        expressionAttributeValues[':flag'] = 'Y';
+      } else {
+        updateExpression += ' REMOVE campaign_identifier, campaignFlag';
+      }
+
       const updated = await docClient.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { leadId: existing.leadId },
-        UpdateExpression: 'SET campaign_identifier = :ci, websiteConsentTime = :now, updatedAt = :now',
-        ExpressionAttributeValues: {
-          ':ci': campaign_identifier || existing.campaign_identifier || null,
-          ':now': new Date().toISOString(),
-        },
+        UpdateExpression: updateExpression,
+        ExpressionAttributeValues: expressionAttributeValues,
         ReturnValues: 'ALL_NEW',
       }));
       return { created: false, lead: updated.Attributes };
@@ -354,7 +377,6 @@ class Lead {
       leadId: uuidv4(),
       source: source || null,
       phone: encryptPII(phone),
-      campaign_identifier: campaign_identifier || null,
       // Mobile entered on the website loan-form → record website consent time.
       websiteConsentTime: now,
       // Minimal placeholder fields so downstream readers don't choke on missing keys.
@@ -372,6 +394,11 @@ class Lead {
       updatedAt: now,
       datePartition: this.getDatePartition(now),
     };
+    // Same sparse-index treatment as panNumber above, for campaign-updatedAt-index.
+    if (campaign_identifier) {
+      item.campaign_identifier = campaign_identifier;
+      item.campaignFlag = 'Y';
+    }
 
     await docClient.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
     await this._incrementCounter(source);
@@ -671,11 +698,23 @@ class Lead {
   // strings). There is no GSI on updatedAt (it's only stamped on leads that
   // get touched after creation — mobile-capture upserts, admin re-uploads,
   // portal edits), so this scans the table with a FilterExpression rather
-  // than a Query. Paginate with `lastEvaluatedKey` like findAll(); note that
-  // because the filter runs after `Limit` is applied to the raw Scan page,
-  // a single page can legitimately come back with fewer (or zero) items than
-  // `limit` even though more matching rows exist further on — keep paging
-  // with the returned lastEvaluatedKey until it's null to get everything.
+  // than a Query.
+  //
+  // IMPORTANT: DynamoDB's `Limit` caps the RAW items examined per Scan page —
+  // it's applied BEFORE the FilterExpression. When matches are sparse (e.g.
+  // campaignOnly=true, since most leads never carry a campaign_identifier),
+  // a naive "one Scan page per API call" approach returns near-empty pages
+  // over and over, so a caller-side page cap (like the admin UI's 200-page
+  // safety limit) gets hit after scanning relatively few raw rows — well
+  // short of the actual date range — even though plenty of matches exist
+  // further into the table.
+  //
+  // Fix: loop over raw Scan pages INSIDE this single call (server-side, one
+  // HTTP round trip) until either `limit` matching items have been collected,
+  // the table/range is exhausted, or an internal safety cap on raw rows
+  // scanned is hit (keeps response time bounded). This turns each page the
+  // frontend fetches into a page of real matches instead of a page of raw
+  // rows, cutting the number of round trips needed by orders of magnitude.
   static async findByUpdatedAtRange(startDate, endDate, options = {}) {
     const { limit = 100, lastEvaluatedKey, requireCampaignIdentifier = false } = options;
 
@@ -693,20 +732,67 @@ class Lead {
       values[':empty'] = '';
     }
 
-    const params = {
-      TableName: TABLE_NAME,
-      FilterExpression: filterExpression,
-      ExpressionAttributeValues: values,
-      Limit: limit,
-    };
-    if (lastEvaluatedKey) params.ExclusiveStartKey = lastEvaluatedKey;
+    const RAW_PAGE_SIZE = 1000; // DynamoDB's practical sweet spot per Scan page
+    const MAX_RAW_SCANNED_PER_CALL = 50000; // safety cap so one HTTP call can't run away
 
-    const result = await docClient.send(new ScanCommand(params));
+    const items = [];
+    let exclusiveStartKey = lastEvaluatedKey || undefined;
+    let rawScanned = 0;
+
+    do {
+      const result = await docClient.send(new ScanCommand({
+        TableName: TABLE_NAME,
+        FilterExpression: filterExpression,
+        ExpressionAttributeValues: values,
+        Limit: RAW_PAGE_SIZE,
+        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+      }));
+
+      items.push(...(result.Items || []));
+      rawScanned += result.ScannedCount || 0;
+      exclusiveStartKey = result.LastEvaluatedKey || null;
+    } while (exclusiveStartKey && items.length < limit && rawScanned < MAX_RAW_SCANNED_PER_CALL);
+
+    return {
+      items,
+      lastEvaluatedKey: exclusiveStartKey || null,
+      count: items.length,
+      rawScanned,
+    };
+  }
+
+  // Fast path for the campaign_data admin view. campaignFlag is stamped 'Y'
+  // only on leads that carry a campaign_identifier (see _buildItem /
+  // upsertMobileCapture / updateById), backing the sparse campaign-updatedAt-index
+  // (partition key campaignFlag, sort key updatedAt). A single Query against
+  // that index returns exactly the rows findByUpdatedAtRange(...,
+  // {requireCampaignIdentifier:true}) has to page a full-table Scan to find.
+  //
+  // Only correct for leads whose campaignFlag has actually been stamped —
+  // that's every lead going forward, plus whatever scripts/backfillCampaignFlag.js
+  // has covered for older ones (last 15 days as of the backfill run). Callers
+  // should fall back to findByUpdatedAtRange for date ranges older than that
+  // backfill horizon.
+  static async findCampaignLeadsByUpdatedAtRangeViaIndex(startDate, endDate, options = {}) {
+    const { limit = 500, lastEvaluatedKey } = options;
+
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'campaign-updatedAt-index',
+      KeyConditionExpression: 'campaignFlag = :flag AND updatedAt BETWEEN :start AND :end',
+      ExpressionAttributeValues: {
+        ':flag': 'Y',
+        ':start': startDate,
+        ':end': endDate,
+      },
+      Limit: limit,
+      ...(lastEvaluatedKey ? { ExclusiveStartKey: lastEvaluatedKey } : {}),
+    }));
 
     return {
       items: result.Items || [],
       lastEvaluatedKey: result.LastEvaluatedKey || null,
-      count: result.Count || 0,
+      count: (result.Items || []).length,
     };
   }
 
@@ -720,8 +806,23 @@ class Lead {
       ...updates,
       visited: true,
       createdAt: now,
+      updatedAt: now,
       datePartition: this.getDatePartition(now),
     };
+
+    // Sparse campaign_identifier/campaignFlag back campaign-updatedAt-index
+    // (see _buildItem/upsertMobileCapture for the same constraint): a GSI key
+    // attribute can't be written as NULL, so clearing campaign_identifier here
+    // must REMOVE both attributes instead of setting them to an empty value.
+    const removeAttributes = [];
+    if ('campaign_identifier' in finalUpdates) {
+      if (finalUpdates.campaign_identifier) {
+        finalUpdates.campaignFlag = 'Y';
+      } else {
+        delete finalUpdates.campaign_identifier;
+        removeAttributes.push('campaign_identifier', 'campaignFlag');
+      }
+    }
 
     // Stored PII is encrypted; decrypt it so validation (PAN regex etc.) and the
     // change-detection comparisons below run against plaintext.
@@ -765,10 +866,20 @@ class Lead {
       expressionAttributeValues[`:value${index}`] = finalUpdates[key];
     });
 
+    let expression = `SET ${updateExpression.join(', ')}`;
+    if (removeAttributes.length > 0) {
+      const removeNames = removeAttributes.map((attr, i) => {
+        const placeholder = `#remove${i}`;
+        expressionAttributeNames[placeholder] = attr;
+        return placeholder;
+      });
+      expression += ` REMOVE ${removeNames.join(', ')}`;
+    }
+
     const result = await docClient.send(new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { leadId },
-      UpdateExpression: `SET ${updateExpression.join(', ')}`,
+      UpdateExpression: expression,
       ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: expressionAttributeValues,
       ReturnValues: 'ALL_NEW'

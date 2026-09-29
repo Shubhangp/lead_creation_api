@@ -1094,8 +1094,17 @@ exports.getAllLeads = async (req, res) => {
 // Get leads by updatedAt date range (paginated)
 // Query params: startDate, endDate (ISO 8601, both required), limit, lastEvaluatedKey,
 // campaignOnly ('true' to only return leads carrying a campaign_identifier).
-// Scans the table (no updatedAt GSI exists) — page through with the returned
-// lastEvaluatedKey until it's null to be sure you have everything in range.
+//
+// campaignOnly requests are served from the sparse campaign-updatedAt-index
+// (campaignFlag partition key, updatedAt sort key) when the requested range
+// starts within the last CAMPAIGN_INDEX_BACKFILL_DAYS days — that's the
+// window scripts/backfillCampaignFlag.js guarantees is fully stamped, on top
+// of every lead written going forward. Older/wider ranges fall back to the
+// original full-table Scan, since campaignFlag isn't guaranteed present that
+// far back. Either way, page through with the returned lastEvaluatedKey until
+// it's null to be sure you have everything in range.
+const CAMPAIGN_INDEX_BACKFILL_DAYS = 15;
+
 exports.getLeadsByUpdatedAt = async (req, res) => {
   try {
     const { startDate, endDate, limit = 100, lastEvaluatedKey, campaignOnly } = req.query;
@@ -1104,11 +1113,23 @@ exports.getLeadsByUpdatedAt = async (req, res) => {
       return res.status(400).json({ message: 'startDate and endDate query params are required (ISO 8601).' });
     }
 
-    const result = await Lead.findByUpdatedAtRange(startDate, endDate, {
-      limit: parseInt(limit),
-      lastEvaluatedKey: lastEvaluatedKey ? JSON.parse(lastEvaluatedKey) : undefined,
-      requireCampaignIdentifier: campaignOnly === 'true',
-    });
+    const wantsCampaignOnly = campaignOnly === 'true';
+    const backfillHorizon = new Date();
+    backfillHorizon.setDate(backfillHorizon.getDate() - CAMPAIGN_INDEX_BACKFILL_DAYS);
+    const withinBackfilledWindow = new Date(startDate) >= backfillHorizon;
+
+    const parsedLastEvaluatedKey = lastEvaluatedKey ? JSON.parse(lastEvaluatedKey) : undefined;
+
+    const result = wantsCampaignOnly && withinBackfilledWindow
+      ? await Lead.findCampaignLeadsByUpdatedAtRangeViaIndex(startDate, endDate, {
+          limit: parseInt(limit),
+          lastEvaluatedKey: parsedLastEvaluatedKey,
+        })
+      : await Lead.findByUpdatedAtRange(startDate, endDate, {
+          limit: parseInt(limit),
+          lastEvaluatedKey: parsedLastEvaluatedKey,
+          requireCampaignIdentifier: wantsCampaignOnly,
+        });
 
     res.status(200).json({
       status: 'success',
@@ -1127,10 +1148,13 @@ exports.getLeadsByUpdatedAt = async (req, res) => {
 exports.updateLead = async (req, res) => {
   try {
     const updates = req.body;
-    
+
     // Remove fields that shouldn't be updated
     delete updates.leadId;
     delete updates.createdAt;
+    // campaignFlag is derived server-side from campaign_identifier (see
+    // Lead.updateById) — never let a client set it directly.
+    delete updates.campaignFlag;
 
     const updatedLead = await Lead.updateById(req.params.id, updates);
 
@@ -1216,7 +1240,9 @@ const SERVER_MANAGED_FIELDS = new Set([
   'leadId',
   'visited',
   'createdAt',
-  'datePartition'
+  'datePartition',
+  // Derived server-side from campaign_identifier — see Lead.updateById.
+  'campaignFlag'
 ]);
 
 function sanitizeLeadUpdates(body = {}) {
