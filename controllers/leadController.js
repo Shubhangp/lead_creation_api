@@ -7,7 +7,7 @@ const { parseFileInChunks, deleteFile } = require('../utils/readFile');
 const DistributionRule = require('../models/distributionRuleModel');
 // const timeUtils = require('../utils/timeutils');
 const rcsService = require('../services/rcsService');
-const { maskPhone, maskPan } = require('../utils/piiCrypto');
+const { maskPhone, maskPan, decryptPII } = require('../utils/piiCrypto');
 
 // Mask PII (phone/PAN) on a lead object before returning it to the portal/API.
 // Values are stored encrypted; maskPhone/maskPan decrypt then mask, so callers
@@ -21,6 +21,21 @@ function maskLead(lead) {
 }
 function maskLeads(leads) {
   return Array.isArray(leads) ? leads.map(maskLead) : leads;
+}
+
+// Like maskLead, but returns the phone fully decrypted (unmasked) instead of
+// "98••••210". Used only for the admin campaign_data view (getLeadsByUpdatedAt
+// with campaignOnly=true), which is an internal admin tool that needs the real
+// number to call/export leads — PAN is still masked since that view never uses it.
+function unmaskPhoneLead(lead) {
+  if (!lead || typeof lead !== 'object') return lead;
+  const out = { ...lead };
+  if (out.phone !== undefined && out.phone !== null) out.phone = decryptPII(out.phone);
+  if (out.panNumber !== undefined && out.panNumber !== null) out.panNumber = maskPan(out.panNumber);
+  return out;
+}
+function unmaskPhoneLeads(leads) {
+  return Array.isArray(leads) ? leads.map(unmaskPhoneLead) : leads;
 }
 
 // Import lender services
@@ -1131,11 +1146,14 @@ exports.getLeadsByUpdatedAt = async (req, res) => {
           requireCampaignIdentifier: wantsCampaignOnly,
         });
 
+    // campaignOnly is only ever sent by the internal admin campaign_data page,
+    // which needs the real phone number (to call/export leads) — everything
+    // else through this endpoint stays masked as before.
     res.status(200).json({
       status: 'success',
       results: result.items.length,
       data: {
-        leads: maskLeads(result.items),
+        leads: wantsCampaignOnly ? unmaskPhoneLeads(result.items) : maskLeads(result.items),
         lastEvaluatedKey: result.lastEvaluatedKey,
       },
     });
