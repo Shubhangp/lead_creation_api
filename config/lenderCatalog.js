@@ -276,10 +276,10 @@ const LENDER_CATALOG = {
   }, 
   Bajaj: {
     code: 'Bajaj',
-    name: 'Bajaj Markets', logo: '/bajaj.png',
+    name: 'Bajaj Finserv PL', logo: '/bajaj.png',
     maxAmount: 200000, minInterest: 10,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
-    website: 'https://www.bajajfinservmarkets.in/apply-for-personal-loan-finservmarkets?utm_source=RateCut&utm_medium={utm_medium}&UTM_Partner_ReferenceID={partner_ref}&utm_campaign=ratecut_website',
+    website: 'https://spectrum.gotrackier.com/click?campaign_id=1832&pub_id=930&source=RateCut&utm_medium={utm_medium}&UTM_Partner_ReferenceID={partner_ref}&utm_campaign=ratecut_website',
     apr: 24, type: 'Fintech · Quick',
     rateRange: '15% – 30% p.a.', processingFee: 'Upto 5% of loan amount',
     prepayment: 'Nil', disbursal: 'Same day',
