@@ -472,6 +472,17 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+  cashmysalary: {
+    code: 'cashmysalary', 
+    name: 'Cash My Salary', logo: '/cashmysalary_logo.webp',
+    maxAmount: 100000, minInterest: 25,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://loanapply.cashmysalary.com/auth?partner_id=ratecut&utm_campaign=social&utm_medium={utm_medium}&UTM_Partner_ReferenceID={partner_ref}',
+    apr: 24, type: 'Fintech · Quick',
+    rateRange: '15% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 }; 
 
 const DEFAULT_LENDER_ORDER = [
