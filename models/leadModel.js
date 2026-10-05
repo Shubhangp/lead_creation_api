@@ -6,7 +6,8 @@ const {
   ScanCommand,
   UpdateCommand,
   DeleteCommand,
-  BatchGetCommand
+  BatchGetCommand,
+  BatchWriteCommand
 } = require('@aws-sdk/lib-dynamodb');
 const { ConditionalCheckFailedException } = require('@aws-sdk/client-dynamodb');
 const { v4: uuidv4 } = require('uuid');
@@ -595,8 +596,9 @@ class Lead {
     if (value === null || value === undefined || String(value).trim() === '') return false;
     const raw = String(value).trim();
     const candidates = [...new Set([encryptPII(raw), raw])];
-    for (const v of candidates) {
-      const result = await docClient.send(new QueryCommand({
+    // Encrypted and plaintext lookups run in parallel (one round trip, not two).
+    const counts = await Promise.all(candidates.map((v) =>
+      docClient.send(new QueryCommand({
         TableName: TABLE_NAME,
         IndexName: indexName,
         KeyConditionExpression: '#k = :v',
@@ -604,10 +606,9 @@ class Lead {
         ExpressionAttributeValues: { ':v': v },
         Select: 'COUNT',
         Limit: 1,
-      }));
-      if ((result.Count || 0) > 0) return true;
-    }
-    return false;
+      })).then((r) => r.Count || 0)
+    ));
+    return counts.some((c) => c > 0);
   }
 
   static phoneExistsAnyTime(phone) {
@@ -618,12 +619,8 @@ class Lead {
     return this.existsAnyTime('panNumber-index', 'panNumber', String(panNumber || '').toUpperCase());
   }
 
-  /**
-   * Insert an old lead exactly as it was, keeping the createdAt from the file
-   * (datePartition follows it). No lender dispatch, no counters — the caller
-   * bumps counters in bulk. Marked with legacyImport/importedAt for auditing.
-   */
-  static async createLegacy(leadData) {
+  /** Build the item for an old lead, keeping createdAt from the file. */
+  static buildLegacyItem(leadData) {
     if (!leadData.createdAt) {
       const error = new Error('createdAt is required for legacy import');
       error.code = 'MISSING_CREATED_AT';
@@ -632,13 +629,36 @@ class Lead {
     const item = this._buildItem(leadData, leadData.createdAt);
     item.legacyImport = true;
     item.importedAt = new Date().toISOString();
-
-    await docClient.send(new PutCommand({
-      TableName: TABLE_NAME,
-      Item: item,
-      ConditionExpression: 'attribute_not_exists(leadId)',
-    }));
     return item;
+  }
+
+  /**
+   * Write many legacy items with BatchWrite (25 per call), retrying any
+   * UnprocessedItems with backoff. Returns { written: [items], failed: [{item, error}] }.
+   * leadId is a fresh uuid, so no overwrite condition is needed.
+   */
+  static async batchPutLegacy(items) {
+    const written = [];
+    const failed = [];
+    for (let i = 0; i < items.length; i += 25) {
+      const chunk = items.slice(i, i + 25);
+      let pending = chunk.map((Item) => ({ PutRequest: { Item } }));
+      try {
+        for (let attempt = 0; pending.length && attempt < 6; attempt++) {
+          if (attempt) await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
+          const res = await docClient.send(new BatchWriteCommand({ RequestItems: { [TABLE_NAME]: pending } }));
+          pending = res.UnprocessedItems?.[TABLE_NAME] || [];
+        }
+      } catch (err) {
+        chunk.forEach((item) => failed.push({ item, error: err.message }));
+        continue;
+      }
+      const left = new Set(pending.map((p) => p.PutRequest.Item.leadId));
+      chunk.forEach((item) => (left.has(item.leadId)
+        ? failed.push({ item, error: 'Not written after retries (throttled)' })
+        : written.push(item)));
+    }
+    return { written, failed };
   }
 
   static async tagSource2(lead, source, lookbackDays = this.SOURCE2_LOOKBACK_DAYS) {

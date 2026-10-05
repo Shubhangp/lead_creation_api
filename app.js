@@ -26,7 +26,8 @@ const app = express();
 if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
 }
-app.use(express.json());
+// 1 MB (default is 100 KB) so the old-data import can send ~1,500 rows per request.
+app.use(express.json({ limit: '1mb' }));
 
 app.use(cors({
     origin: '*'

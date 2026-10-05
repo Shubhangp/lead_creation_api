@@ -372,8 +372,8 @@ const bulkUpload = async (req, res) => {
 //   • dryRun:true runs every check and reports what WOULD happen, writes nothing.
 // ============================================================================
 
-const LEGACY_MAX_ROWS = 1000;
-const LEGACY_CONCURRENCY = 25;
+const LEGACY_MAX_ROWS = 2000;
+const LEGACY_CONCURRENCY = 40; // rows checked at once per request (each row = up to 4 parallel queries)
 const LEGACY_PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const LEGACY_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -508,34 +508,58 @@ const importLegacyRows = async (req, res) => {
             candidates.push({ ref, lead });
         });
 
-        // 2) check leads table, then insert
+        // 2) check leads table — phone and PAN lookups for a row run in parallel
         const limiter = makeLimiter(LEGACY_CONCURRENCY);
+        const toWrite = [];
         await Promise.all(candidates.map(({ ref, lead }) => limiter(async () => {
             try {
-                if (await Lead.phoneExistsAnyTime(lead.phone)) {
+                const [phoneHit, panHit] = await Promise.all([
+                    Lead.phoneExistsAnyTime(lead.phone),
+                    Lead.panExistsAnyTime(lead.panNumber),
+                ]);
+                if (phoneHit) {
                     summary.existingPhone++;
                     results.push({ ref, status: 'exists_phone', reason: 'Phone already in leads' });
-                    return;
-                }
-                if (await Lead.panExistsAnyTime(lead.panNumber)) {
+                } else if (panHit) {
                     summary.existingPan++;
                     results.push({ ref, status: 'exists_pan', reason: 'PAN already in leads' });
-                    return;
+                } else {
+                    toWrite.push({ ref, lead });
                 }
-                if (dryRun) {
-                    summary.imported++;
-                    return;
-                }
-                const created = await Lead.createLegacy(lead);
-                summary.imported++;
-                sourceIncrements[lead.source] = (sourceIncrements[lead.source] || 0) + 1;
-                const dk = `${lead.source}|${String(created.createdAt).slice(0, 10)}`;
-                dailyIncrements[dk] = (dailyIncrements[dk] || 0) + 1;
             } catch (err) {
                 summary.failed++;
                 results.push({ ref, status: 'failed', reason: err.message });
             }
         })));
+
+        // insert — BatchWrite, 25 items per call
+        if (dryRun) {
+            summary.imported += toWrite.length;
+        } else if (toWrite.length) {
+            const refByLeadId = new Map();
+            const items = [];
+            for (const { ref, lead } of toWrite) {
+                const item = Lead.buildLegacyItem(lead);
+                refByLeadId.set(item.leadId, ref);
+                items.push(item);
+            }
+            const writeLimiter = makeLimiter(8); // 8 BatchWrite calls in flight
+            const chunks = [];
+            for (let i = 0; i < items.length; i += 25) chunks.push(items.slice(i, i + 25));
+            const outcomes = await Promise.all(chunks.map((c) => writeLimiter(() => Lead.batchPutLegacy(c))));
+            for (const { written, failed } of outcomes) {
+                for (const item of written) {
+                    summary.imported++;
+                    sourceIncrements[item.source] = (sourceIncrements[item.source] || 0) + 1;
+                    const dk = `${item.source}|${String(item.createdAt).slice(0, 10)}`;
+                    dailyIncrements[dk] = (dailyIncrements[dk] || 0) + 1;
+                }
+                for (const { item, error } of failed) {
+                    summary.failed++;
+                    results.push({ ref: refByLeadId.get(item.leadId), status: 'failed', reason: error });
+                }
+            }
+        }
 
         // 3) counters (one update per source / per source-day)
         if (!dryRun) {
