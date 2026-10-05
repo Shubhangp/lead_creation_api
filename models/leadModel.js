@@ -581,6 +581,66 @@ class Lead {
     return leadId ? this.findById(leadId) : null;
   }
 
+  // ==========================================================================
+  // LEGACY / OLD-DATA IMPORT  (admin/old_data_import)
+  // ==========================================================================
+
+  /**
+   * Does ANY lead (no createdAt window) hold this value on the given GSI?
+   * Checks the encrypted value first, then the raw plaintext value so rows
+   * written before PII encryption was turned on still count as existing.
+   * Uses Select:'COUNT' + Limit:1, so no items are read back.
+   */
+  static async existsAnyTime(indexName, keyName, value) {
+    if (value === null || value === undefined || String(value).trim() === '') return false;
+    const raw = String(value).trim();
+    const candidates = [...new Set([encryptPII(raw), raw])];
+    for (const v of candidates) {
+      const result = await docClient.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: indexName,
+        KeyConditionExpression: '#k = :v',
+        ExpressionAttributeNames: { '#k': keyName },
+        ExpressionAttributeValues: { ':v': v },
+        Select: 'COUNT',
+        Limit: 1,
+      }));
+      if ((result.Count || 0) > 0) return true;
+    }
+    return false;
+  }
+
+  static phoneExistsAnyTime(phone) {
+    return this.existsAnyTime('phone-index', 'phone', phone);
+  }
+
+  static panExistsAnyTime(panNumber) {
+    return this.existsAnyTime('panNumber-index', 'panNumber', String(panNumber || '').toUpperCase());
+  }
+
+  /**
+   * Insert an old lead exactly as it was, keeping the createdAt from the file
+   * (datePartition follows it). No lender dispatch, no counters — the caller
+   * bumps counters in bulk. Marked with legacyImport/importedAt for auditing.
+   */
+  static async createLegacy(leadData) {
+    if (!leadData.createdAt) {
+      const error = new Error('createdAt is required for legacy import');
+      error.code = 'MISSING_CREATED_AT';
+      throw error;
+    }
+    const item = this._buildItem(leadData, leadData.createdAt);
+    item.legacyImport = true;
+    item.importedAt = new Date().toISOString();
+
+    await docClient.send(new PutCommand({
+      TableName: TABLE_NAME,
+      Item: item,
+      ConditionExpression: 'attribute_not_exists(leadId)',
+    }));
+    return item;
+  }
+
   static async tagSource2(lead, source, lookbackDays = this.SOURCE2_LOOKBACK_DAYS) {
     if (!lead || !lead.leadId || !source) return 'skipped';
 

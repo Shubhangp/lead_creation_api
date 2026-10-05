@@ -4,6 +4,7 @@ const {
   upload,
   bulkUpload,
   downloadTemplate,
+  importLegacyRows,
 } = require('../controllers/leadbulkUploadController');
 
 function handleMulterError(err, req, res, next) {
@@ -14,6 +15,10 @@ function handleMulterError(err, req, res, next) {
 }
 
 router.get('/template', downloadTemplate);
+
+// Old-data import from the dashboard: JSON batches, keeps createdAt from the
+// file, skips rows whose phone or PAN already exists. No lender dispatch.
+router.post('/legacy', importLegacyRows);
 
 router.post(
   '/',

@@ -360,6 +360,201 @@ const bulkUpload = async (req, res) => {
 };
 
 // ============================================================================
+// LEGACY / OLD-DATA IMPORT  —  POST /api/v1/bulk-upload/legacy
+//
+// The dashboard (admin/old_data_import) parses CSV/XLSX files in the browser
+// and posts small JSON batches here (kept under the 100 KB express.json limit).
+//
+//   • createdAt is taken from the file (required) — never "now".
+//   • A row is SKIPPED when its phone OR PAN already exists in `leads`
+//     (any age, encrypted or legacy-plaintext), or repeats inside the batch.
+//   • Nothing is sent to lenders. Only the leads table + counters are written.
+//   • dryRun:true runs every check and reports what WOULD happen, writes nothing.
+// ============================================================================
+
+const LEGACY_MAX_ROWS = 1000;
+const LEGACY_CONCURRENCY = 25;
+const LEGACY_PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const LEGACY_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+function normalisePhone(v) {
+    if (v === null || v === undefined) return '';
+    let s = String(v).trim();
+    if (/e\+?\d+$/i.test(s) && !isNaN(Number(s))) s = Number(s).toFixed(0); // 9.87E+09
+    let d = s.replace(/\D/g, '');
+    if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+    if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+    return d;
+}
+
+function str(v) {
+    if (v === null || v === undefined) return undefined;
+    const s = String(v).trim();
+    return s === '' ? undefined : s;
+}
+
+function num(v) {
+    const s = str(v);
+    if (s === undefined) return undefined;
+    const n = Number(s.replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? undefined : n;
+}
+
+/** Build + validate one lead. Returns { lead } or { error }. */
+function legacyRowToLead(raw, defaultSource) {
+    const errors = [];
+    const source = str(raw.source) || str(defaultSource);
+    const phone = normalisePhone(raw.phone);
+    const panNumber = (str(raw.panNumber) || '').toUpperCase();
+    const firstName = str(raw.firstName);
+    const lastName = str(raw.lastName);
+    const fullName = str(raw.fullName) || [firstName, lastName].filter(Boolean).join(' ') || undefined;
+    const email = str(raw.email);
+
+    if (!source) errors.push('source missing');
+    if (!/^[6-9]\d{9}$/.test(phone)) errors.push('invalid phone');
+    if (!LEGACY_PAN_RE.test(panNumber)) errors.push('invalid PAN');
+    if (!fullName) errors.push('name missing');
+    else if (fullName.length > 100) errors.push('name longer than 100 chars');
+    if (email && !LEGACY_EMAIL_RE.test(email)) errors.push('invalid email');
+
+    let createdAt = null;
+    const c = str(raw.createdAt);
+    if (!c) errors.push('createdAt missing');
+    else {
+        const d = new Date(c);
+        if (isNaN(d)) errors.push('invalid createdAt');
+        else if (d.getTime() > Date.now() + 5 * 60 * 1000) errors.push('createdAt is in the future');
+        else createdAt = d.toISOString();
+    }
+
+    if (errors.length) return { error: errors.join(', ') };
+
+    let dateOfBirth;
+    const dob = str(raw.dateOfBirth);
+    if (dob && !isNaN(new Date(dob))) dateOfBirth = dob;
+
+    const consentRaw = raw.consent;
+    const consent = consentRaw === undefined || consentRaw === null || String(consentRaw).trim() === ''
+        ? true
+        : parseBoolean(consentRaw);
+
+    return {
+        lead: {
+            source,
+            fullName,
+            firstName,
+            lastName,
+            phone,
+            email,
+            panNumber,
+            dateOfBirth,
+            age: num(raw.age),
+            gender: str(raw.gender),
+            jobType: str(raw.jobType),
+            businessType: str(raw.businessType),
+            salary: num(raw.salary),
+            creditScore: num(raw.creditScore),
+            cibilScore: num(raw.cibilScore),
+            address: str(raw.address),
+            pincode: str(raw.pincode),
+            consent,
+            createdAt,
+        },
+    };
+}
+
+const importLegacyRows = async (req, res) => {
+    try {
+        const body = req.body || {};
+        const rows = Array.isArray(body.rows) ? body.rows : null;
+        const dryRun = body.dryRun === true;
+        const defaultSource = str(body.defaultSource);
+
+        if (!rows || rows.length === 0) {
+            return res.status(400).json({ success: false, message: 'rows[] is required' });
+        }
+        if (rows.length > LEGACY_MAX_ROWS) {
+            return res.status(400).json({ success: false, message: `Send at most ${LEGACY_MAX_ROWS} rows per request` });
+        }
+
+        const summary = {
+            total: rows.length, imported: 0, existingPhone: 0, existingPan: 0,
+            duplicateInBatch: 0, invalid: 0, failed: 0,
+        };
+        const results = []; // only non-imported rows, to keep the response small
+        const seenPhones = new Set();
+        const seenPans = new Set();
+        const sourceIncrements = {};
+        const dailyIncrements = {};
+
+        // 1) validate + in-batch dedup (sync)
+        const candidates = [];
+        rows.forEach((raw, i) => {
+            const ref = raw && raw._ref !== undefined ? raw._ref : i;
+            const { lead, error } = legacyRowToLead(raw || {}, defaultSource);
+            if (error) {
+                summary.invalid++;
+                results.push({ ref, status: 'invalid', reason: error });
+                return;
+            }
+            if (seenPhones.has(lead.phone) || seenPans.has(lead.panNumber)) {
+                summary.duplicateInBatch++;
+                results.push({ ref, status: 'duplicate_in_file', reason: 'Phone or PAN repeated in file' });
+                return;
+            }
+            seenPhones.add(lead.phone);
+            seenPans.add(lead.panNumber);
+            candidates.push({ ref, lead });
+        });
+
+        // 2) check leads table, then insert
+        const limiter = makeLimiter(LEGACY_CONCURRENCY);
+        await Promise.all(candidates.map(({ ref, lead }) => limiter(async () => {
+            try {
+                if (await Lead.phoneExistsAnyTime(lead.phone)) {
+                    summary.existingPhone++;
+                    results.push({ ref, status: 'exists_phone', reason: 'Phone already in leads' });
+                    return;
+                }
+                if (await Lead.panExistsAnyTime(lead.panNumber)) {
+                    summary.existingPan++;
+                    results.push({ ref, status: 'exists_pan', reason: 'PAN already in leads' });
+                    return;
+                }
+                if (dryRun) {
+                    summary.imported++;
+                    return;
+                }
+                const created = await Lead.createLegacy(lead);
+                summary.imported++;
+                sourceIncrements[lead.source] = (sourceIncrements[lead.source] || 0) + 1;
+                const dk = `${lead.source}|${String(created.createdAt).slice(0, 10)}`;
+                dailyIncrements[dk] = (dailyIncrements[dk] || 0) + 1;
+            } catch (err) {
+                summary.failed++;
+                results.push({ ref, status: 'failed', reason: err.message });
+            }
+        })));
+
+        // 3) counters (one update per source / per source-day)
+        if (!dryRun) {
+            await Promise.all(Object.entries(sourceIncrements).map(([src, delta]) =>
+                Lead.incrementCounterBy(src, delta).catch(err =>
+                    console.error(`[LegacyImport] counter "${src}" failed:`, err.message))
+            ));
+            await Lead.bumpDailyCountersBulk(dailyIncrements).catch(err =>
+                console.error('[LegacyImport] daily counters failed:', err.message));
+        }
+
+        return res.status(200).json({ success: true, dryRun, summary, results });
+    } catch (err) {
+        console.error('[LegacyImport] Unexpected error:', err);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
+    }
+};
+
+// ============================================================================
 // TEMPLATE DOWNLOAD  (small file — in-memory xlsx is fine here)
 // ============================================================================
 
@@ -393,4 +588,4 @@ const downloadTemplate = (_req, res) => {
     res.send(buffer);
 };
 
-module.exports = { upload, bulkUpload, downloadTemplate };
+module.exports = { upload, bulkUpload, downloadTemplate, importLegacyRows };
