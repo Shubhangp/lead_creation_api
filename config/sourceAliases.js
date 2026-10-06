@@ -34,7 +34,9 @@ const SOURCE_ALIASES = {
 
   vfc: 'VFC',
 
-  HSB: 'HSB'
+  HSB: 'HSB',
+
+  ANU: 'ANU'
 };
 
 function resolveSource(input) {

@@ -24,7 +24,7 @@ const LENDER_CATALOG = {
   CRMPaisa: {
     code: 'CRMPaisa',
     name: 'Emergency Paisa', logo: '/ep.png',
-    maxAmount: 100000, minInterest: 16, 
+    maxAmount: 100000, minInterest: 16,
     processingTime: '1-2 Days', approval: 'EXCELLENT',
     website: 'https://emergencypaisa.com/apply-now?utm_source=RCut&utm_medium={utm_medium}&UTM_Partner_ReferenceID={partner_ref}&utm_campaign=ratecut_website',
     apr: 36, type: 'Digital · Quick',
@@ -273,7 +273,7 @@ const LENDER_CATALOG = {
     rateRange: '15% – 30% p.a.', processingFee: 'Upto 5% of loan amount',
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
-  }, 
+  },
   Bajaj: {
     code: 'Bajaj',
     name: 'Bajaj Finserv PL', logo: '/bajaj.png',
@@ -341,7 +341,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   mudrasewa: {
-    code: 'mudrasewa', 
+    code: 'mudrasewa',
     name: 'Mudrasewa', logo: '/mudrasewa_logo.jpeg',
     maxAmount: 150000, minInterest: 35,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -352,7 +352,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   mudraboxx: {
-    code: 'mudraboxx', 
+    code: 'mudraboxx',
     name: 'Mudraboxx', logo: '/mudraboxx-logo.png',
     maxAmount: 50000, minInterest: 35,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -363,7 +363,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   mymoneybazaar: {
-    code: 'mymoneybazaar', 
+    code: 'mymoneybazaar',
     name: 'My Money Bazaar', logo: '/mymoneybazaar-logo.png',
     maxAmount: 30000, minInterest: 12,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -374,7 +374,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   zapcash: {
-    code: 'zapcash', 
+    code: 'zapcash',
     name: 'Zap Cash', logo: '/zapcash.webp',
     maxAmount: 50000, minInterest: 10.5,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -385,7 +385,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   branchinstantpl: {
-    code: 'branchinstantpl', 
+    code: 'branchinstantpl',
     name: 'Branch Instant PL', logo: '/branchinstant_logo.svg',
     maxAmount: 50000, minInterest: 10.5,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -396,7 +396,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   conexo: {
-    code: 'conexo', 
+    code: 'conexo',
     name: 'Conexo', logo: '/conexo-logo.svg',
     maxAmount: 1000000, minInterest: 9,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -407,7 +407,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   conexo: {
-    code: 'conexo', 
+    code: 'conexo',
     name: 'Conexo', logo: '/conexo-logo.svg',
     maxAmount: 1000000, minInterest: 9,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -418,7 +418,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   conexocc: {
-    code: 'conexocc', 
+    code: 'conexocc',
     name: 'Conexo Credit Card', logo: '/conexo-logo.svg',
     maxAmount: 1000000, minInterest: 9,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -429,7 +429,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   conexobl: {
-    code: 'conexobl', 
+    code: 'conexobl',
     name: 'Conexo Business Loan', logo: '/conexo-logo.svg',
     maxAmount: 1000000, minInterest: 9,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -440,7 +440,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   rulemudra: {
-    code: 'rulemudra', 
+    code: 'rulemudra',
     name: 'Rule Mudra', logo: '/rulemudra-logo.jpeg',
     maxAmount: 100000, minInterest: 18,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -451,7 +451,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   moneycontrol: {
-    code: 'moneycontrol', 
+    code: 'moneycontrol',
     name: 'Money Control', logo: '/moneycontrol.svg',
     maxAmount: 1000000, minInterest: 10,
     processingTime: '0-1 Day', approval: 'EXCELLENT',
@@ -462,7 +462,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   finnable: {
-    code: 'finnable', 
+    code: 'finnable',
     name: 'Finnable', logo: '/finnable_logo.svg',
     maxAmount: 1000000, minInterest: 15,
     processingTime: '0-1 Day', approval: 'GOOD',
@@ -473,7 +473,7 @@ const LENDER_CATALOG = {
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
   cashmysalary: {
-    code: 'cashmysalary', 
+    code: 'cashmysalary',
     name: 'Cash My Salary', logo: '/cashmysalary_logo.webp',
     maxAmount: 100000, minInterest: 25,
     processingTime: '0-1 Day', approval: 'GOOD',
@@ -483,7 +483,19 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
-}; 
+
+  kamakshimoney: {
+    code: 'kamakshimoney',
+    name: 'Kamakshi Money', logo: '/kamakshimoney-logo',
+    maxAmount: 50000, minInterest: 20,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://loan.kamakshimoney.com/auth/login?utm_source=ratecut&utm_medium={utm_medium}&utm_campaign=Ratecut&UTM_Partner_ReferenceID={partner_ref}',
+    apr: 24, type: 'Fintech · Quick',
+    rateRange: '15% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
+};
 
 const DEFAULT_LENDER_ORDER = [
   'RAMFINCROP', 'MPOKKET', 'PoonawallaFincorp', 'MPOKKETSE', 'CreditSea',
