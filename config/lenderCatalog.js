@@ -486,7 +486,7 @@ const LENDER_CATALOG = {
 
   kamakshimoney: {
     code: 'kamakshimoney',
-    name: 'Kamakshi Money', logo: '/kamakshimoney-logo',
+    name: 'Kamakshi Money', logo: '/kamakshimoney-logo.svg',
     maxAmount: 50000, minInterest: 20,
     processingTime: '0-1 Day', approval: 'GOOD',
     website: 'https://loan.kamakshimoney.com/auth/login?utm_source=ratecut&utm_medium={utm_medium}&utm_campaign=Ratecut&UTM_Partner_ReferenceID={partner_ref}',
