@@ -55,7 +55,7 @@ class LeadDistributionStats {
       // Kept as a DYNAMIC map — keys are added on the fly per lender — and stored
       // WITH the batch/history record so the dashboard reads it directly (no recompute).
       statusCategories: {},
-      status: 'PROCESSING', // PROCESSING, COMPLETED, FAILED, PARTIAL
+      status: 'PROCESSING', // PROCESSING, COMPLETED, FAILED, PARTIAL, CANCELLED
       // Resume checkpoint (set/updated by processLeadsInBackground as it runs;
       // read by resumeIncompleteDistributionBatches() on server boot).
       checkpoint: null,
@@ -401,6 +401,35 @@ class LeadDistributionStats {
     } while (exclusiveStartKey);
 
     return items;
+  }
+
+  /**
+   * Admin stop. Flips a PROCESSING batch to CANCELLED (conditional, so a batch
+   * that already finished is left alone). The background loop sees the new
+   * status and stops before sending the next lead. Returns the updated batch,
+   * or null if it was no longer PROCESSING.
+   */
+  static async markCancelled(batchId) {
+    const now = new Date().toISOString();
+    try {
+      const result = await docClient.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { batchId },
+        UpdateExpression: 'SET #status = :cancelled, cancelledAt = :now, completedAt = :now, lastUpdatedAt = :now',
+        ConditionExpression: '#status = :processing',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: {
+          ':cancelled': 'CANCELLED',
+          ':processing': 'PROCESSING',
+          ':now': now
+        },
+        ReturnValues: 'ALL_NEW'
+      }));
+      return result.Attributes;
+    } catch (error) {
+      if (error.name === 'ConditionalCheckFailedException') return null;
+      throw error;
+    }
   }
 
   /**

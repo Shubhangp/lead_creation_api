@@ -5,6 +5,8 @@ const {
   completeProcessLeadsUpload,
   pushProcessLeads,
   getPushJobStatus,
+  cancelPushJob,
+  listActivePushJobs,
   getAvailableLenders,
   getLeadCount,
   dedupCheckLeads,
@@ -25,8 +27,14 @@ router.post('/upload/complete', completeProcessLeadsUpload);
 // Trigger push: process_leads → leads table → lenders
 router.post('/push', pushProcessLeads);
 
+// List running push jobs (so a Stop button is available after a page reload)
+router.get('/push-jobs', listActivePushJobs);
+
 // Poll push job status
 router.get('/push-jobs/:jobId', getPushJobStatus);
+
+// Stop a running push — nothing further is sent to lenders
+router.post('/push-jobs/:jobId/cancel', cancelPushJob);
 
 // Preview count before pushing
 router.get('/count', getLeadCount);

@@ -280,9 +280,11 @@ class TokenBucket {
 
     // Consume n tokens, waiting as needed. Handles n larger than capacity by
     // draining across multiple refill windows.
-    async take(n) {
+    async take(n, shouldAbort = null) {
         let remaining = n;
         while (remaining > 0) {
+            // Bail out of a long rate-limit wait as soon as the job is cancelled.
+            if (shouldAbort && shouldAbort()) return false;
             this._refill();
             if (this.tokens >= 1) {
                 const consume = Math.min(remaining, Math.floor(this.tokens));
@@ -290,9 +292,10 @@ class TokenBucket {
                 remaining -= consume;
             } else {
                 const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
-                await sleep(Math.min(Math.max(waitMs, 50), 5000));
+                await sleep(Math.min(Math.max(waitMs, 50), 1000));
             }
         }
+        return true;
     }
 }
 
@@ -314,27 +317,34 @@ function buildLenderLimiters(lenders) {
 
 const LENDER_BATCH = 50;
 
-async function dispatchToLender(lender, leads, limiter) {
+async function dispatchToLender(lender, leads, limiter, shouldStop = () => false) {
     const sendFn = LENDER_MAP[lender];
     if (!sendFn) return { lender, status: 'skipped', message: 'Not configured', total: leads.length };
 
     let successCount = 0;
     let failCount = 0;
+    let sent = 0;
 
     // Send in batches, gating each batch on the lender's token bucket so we
     // never exceed its leads-per-minute limit.
     for (let i = 0; i < leads.length; i += LENDER_BATCH) {
+        // Admin pressed Stop — don't send anything more to this lender.
+        if (shouldStop()) break;
+
         const batch = leads.slice(i, i + LENDER_BATCH);
 
-        if (limiter) await limiter.take(batch.length); // throttle to rate limit
+        if (limiter) await limiter.take(batch.length, shouldStop); // throttle to rate limit
+        if (shouldStop()) break;
 
         const batchResult = await Promise.allSettled(
             batch.map((lead) => sendFn({ ...lead, leadId: lead.leadId }))
         );
         batchResult.forEach((r) => r.status === 'fulfilled' ? successCount++ : failCount++);
+        sent += batch.length;
     }
 
-    return { lender, status: 'done', total: leads.length, successCount, failCount };
+    // `total` counts only leads actually sent, so a stopped job's numbers stay honest.
+    return { lender, status: 'done', total: sent, successCount, failCount };
 }
 
 // ============================================================================
@@ -470,6 +480,12 @@ const PAGE_SIZE = 500; // leads fetched from process_leads per loop iteration
 // racing, but this app runs as a single instance.
 const activeJobIds = new Set();
 
+// Jobs an admin has asked to stop (POST /push-jobs/:jobId/cancel). Checked
+// before every lender batch so a stop takes effect within one batch, without
+// waiting for the next DynamoDB read. The DB status ('cancelled') is the
+// durable source of truth and is re-read once per page as a backstop.
+const cancelledJobIds = new Set();
+
 async function runPushInBackground(jobId, { source, startDate, endDate, lenders }) {
     if (activeJobIds.has(jobId)) {
         console.log(`[Push ${jobId}] Already running in this process — skipping duplicate launch`);
@@ -492,8 +508,8 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             return;
         }
 
-        // If already completed or failed do not re-run
-        if (job.status === 'completed' || job.status === 'failed') {
+        // If already completed, failed or cancelled do not re-run
+        if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
             console.log(`[Push ${jobId}] Already ${job.status} — skipping`);
             return;
         }
@@ -528,9 +544,19 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
         }
 
         let pageNumber = 0;
+        let cancelled = false;
+        const shouldStop = () => cancelled || cancelledJobIds.has(jobId);
 
         // ── Main pagination loop ───────────────────────────────────────────────
         do {
+            // Stop check before touching the next page (DB read covers a cancel
+            // that arrived while this process didn't have the job in memory).
+            if (!shouldStop()) {
+                const fresh = await PushJob.get(jobId);
+                if (fresh && fresh.status === 'cancelled') cancelled = true;
+            }
+            if (shouldStop()) { cancelled = true; break; }
+
             pageNumber++;
             console.log(`[Push ${jobId}] Page ${pageNumber} | lastKey=${lastKey ? 'set' : 'null'}`);
 
@@ -561,7 +587,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             // Dispatch this page to every selected lender
             if (toDispatch.length > 0) {
                 const lenderResults = await Promise.allSettled(
-                    lenders.map((lender) => dispatchToLender(lender, toDispatch, lenderLimiters[lender]))
+                    lenders.map((lender) => dispatchToLender(lender, toDispatch, lenderLimiters[lender], shouldStop))
                 );
                 lenders.forEach((lender, i) => {
                     const r = lenderResults[i];
@@ -595,7 +621,25 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
 
             await sleep(0); // yield event loop between pages
 
+            if (shouldStop()) { cancelled = true; break; }
+
         } while (lastKey); // lastKey null = no more pages
+
+        // ── Stopped by admin ──────────────────────────────────────────────────
+        // Status is already 'cancelled' in DynamoDB (set by the cancel endpoint);
+        // just record the final per-lender numbers for what was actually sent.
+        if (cancelled || shouldStop()) {
+            await PushJob.update(jobId, {
+                reusedLeads: totalReused,
+                savedToLeads: totalSaved,
+                failedToSave: totalFailed,
+                lenderResults: Object.fromEntries(
+                    Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: 'cancelled' }])
+                ),
+            });
+            console.log(`[Push ${jobId}] ⛔ Stopped by admin. Saved=${totalSaved} Reused=${totalReused} Failed=${totalFailed}`);
+            return;
+        }
 
         // ── Mark job complete ─────────────────────────────────────────────────
         const finalLenderResults = Object.fromEntries(
@@ -616,6 +660,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
         });
     } finally {
         activeJobIds.delete(jobId);
+        cancelledJobIds.delete(jobId);
     }
 }
 
@@ -949,6 +994,9 @@ exports.resumePushJob = async (req, res) => {
         if (job.status === 'failed') {
             return res.status(200).json({ success: true, message: 'Job previously failed — create a new push', data: job });
         }
+        if (job.status === 'cancelled') {
+            return res.status(200).json({ success: true, message: 'Job was stopped by an admin — create a new push', data: job });
+        }
 
         // status === 'processing' — re-launch from checkpoint
         res.status(202).json({
@@ -967,6 +1015,67 @@ exports.resumePushJob = async (req, res) => {
             })
         );
 
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Server error', error: err.message });
+    }
+};
+
+/**
+ * POST /api/v1/process-leads/push-jobs/:jobId/cancel
+ *
+ * Stop a running push. Lender batches already in flight finish (a request
+ * that has left the server can't be recalled), but nothing further is sent.
+ * Leads already saved/sent stay as they are.
+ */
+exports.cancelPushJob = async (req, res) => {
+    try {
+        const { jobId } = req.params;
+        const job = await PushJob.get(jobId);
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        if (job.status !== 'processing') {
+            return res.status(409).json({
+                success: false,
+                message: `Job is already ${job.status} — nothing to stop.`,
+                data: job,
+            });
+        }
+
+        // In-memory flag first so the running loop stops at its very next check.
+        if (activeJobIds.has(jobId)) cancelledJobIds.add(jobId);
+
+        const updated = await PushJob.markCancelled(jobId);
+        if (!updated) {
+            cancelledJobIds.delete(jobId);
+            const latest = await PushJob.get(jobId);
+            return res.status(409).json({
+                success: false,
+                message: `Job finished (${latest?.status}) before it could be stopped.`,
+                data: latest,
+            });
+        }
+
+        console.log(`[Push ${jobId}] Cancel requested by admin`);
+        res.status(200).json({
+            success: true,
+            message: 'Push stopped. Nothing more will be sent to lenders for this job.',
+            data: updated,
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Server error', error: err.message });
+    }
+};
+
+/**
+ * GET /api/v1/process-leads/push-jobs?status=processing
+ * Lists push jobs that are still running, so the dashboard can offer Stop
+ * even after the page was reloaded or opened on another machine.
+ */
+exports.listActivePushJobs = async (_req, res) => {
+    try {
+        const jobs = await PushJob.findActiveJobs();
+        jobs.sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')));
+        res.status(200).json({ success: true, data: jobs });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Server error', error: err.message });
     }

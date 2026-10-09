@@ -155,14 +155,16 @@ class TokenBucket {
     }
   }
 
-  async take(n = 1) {
+  async take(n = 1, shouldAbort = null) {
     // If the request is bigger than the whole bucket, cap the wait to one full refill.
     const need = Math.min(n, this.capacity);
     while (true) {
+      // Bail out of a long rate-limit wait as soon as the batch is cancelled.
+      if (shouldAbort && shouldAbort()) return false;
       this._refill();
       if (this.tokens >= need) {
         this.tokens -= need;
-        return;
+        return true;
       }
       const deficit = need - this.tokens;
       const waitMs = Math.ceil(deficit / this.refillPerMs);
@@ -175,6 +177,11 @@ class TokenBucket {
 // twice at once in this process — e.g. boot-resume racing a still-running
 // job, or resumeIncompleteDistributionBatches() being triggered twice.
 const activeDistributionBatchIds = new Set();
+
+// Batches an admin asked to stop (POST /batch/:batchId/cancel). Checked before
+// every sub-batch so a stop takes effect within one sub-batch. The DB status
+// (CANCELLED) is the durable truth and is re-read once per page as a backstop.
+const cancelledDistributionBatchIds = new Set();
 
 /**
  * Background job processing function
@@ -199,6 +206,19 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
   activeDistributionBatchIds.add(batchId);
 
   const sendFunction = getLenderSendFunction(lender);
+
+  let cancelled = false;
+  const shouldStop = () => cancelled || cancelledDistributionBatchIds.has(batchId);
+  const refreshCancelledFromDb = async () => {
+    if (shouldStop()) { cancelled = true; return true; }
+    try {
+      const fresh = await LeadDistributionStats.findById(batchId);
+      if (fresh && fresh.status === 'CANCELLED') cancelled = true;
+    } catch (e) {
+      console.warn(`[Batch ${batchId}] Cancel-status check failed:`, e.message);
+    }
+    return cancelled;
+  };
 
   // Per-lender rate limiter (per minute). Sending is throttled to the lender's cap.
   const rpm = getRateLimit(lender);
@@ -251,10 +271,14 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
     matchedCount += filtered.length;
 
     for (let i = 0; i < filtered.length; i += batchSize) {
+      // Admin pressed Stop — send nothing more.
+      if (shouldStop()) { cancelled = true; return; }
+
       const subBatch = filtered.slice(i, i + batchSize);
 
       // Enforce the lender's per-minute rate limit before firing this sub-batch.
-      await limiter.take(subBatch.length);
+      await limiter.take(subBatch.length, shouldStop);
+      if (shouldStop()) { cancelled = true; return; }
 
       await Promise.allSettled(
         subBatch.map(async (lead) => {
@@ -413,6 +437,8 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
         // source (or a fresh, non-resumed run) starts from the beginning.
         let lastEvaluatedKey = (srcIdx === startSourceIndex && resumeState?.lastEvaluatedKey) || null;
         do {
+          if (await refreshCancelledFromDb()) break;
+
           const queryOptions = {
             limit: 1000,
             startDate: filters.startDate,
@@ -432,6 +458,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
           }
 
           await processPage(pageLeads);
+          if (shouldStop()) { cancelled = true; break; }
 
           // ── CHECKPOINT — if the process dies here, the next boot resumes
           // this batch from exactly this source + page. Once lastEvaluatedKey
@@ -443,6 +470,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
           // pageLeads goes out of scope on next iteration → eligible for GC.
         } while (lastEvaluatedKey);
 
+        if (cancelled) break;
         console.log(`[Batch ${batchId}] Source ${source} complete.`);
       }
     } else if (useDateRangeFallback) {
@@ -455,6 +483,32 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
     // Final flush of any remaining buffered records/counters.
     await flushProcessingRecords(true);
     await flushCounters(true);
+
+    // ── Stopped by admin ─────────────────────────────────────────────────
+    // Status is already CANCELLED (set by the cancel endpoint). Record exact
+    // totals for what was actually sent and stop — never overwrite the status.
+    if (cancelled || shouldStop() || await refreshCancelledFromDb()) {
+      await LeadDistributionStats.updateBatchStats(batchId, {
+        totalLeads: processedCount,
+        processedLeads: processedCount,
+        successfulLeads: successCount,
+        failedLeads: failCount,
+        statusCategories: categoryTotals
+      });
+      console.log(`[Batch ${batchId}] ⛔ Stopped by admin after ${processedCount} leads (Success: ${successCount}, Failed: ${failCount})`);
+      if (progressCallback) {
+        progressCallback({
+          type: 'batch_cancelled',
+          batchId,
+          processed: processedCount,
+          successful: successCount,
+          failed: failCount,
+          statusCategories: categoryTotals,
+          status: 'CANCELLED'
+        });
+      }
+      return;
+    }
 
     if (matchedCount === 0) {
       await LeadDistributionStats.updateBatchStats(batchId, {
@@ -498,10 +552,12 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
   } catch (error) {
     console.error(`[Batch ${batchId}] ❌ Fatal error:`, error);
 
-    await LeadDistributionStats.updateBatchStats(batchId, {
-      status: 'FAILED',
-      completedAt: new Date().toISOString()
-    });
+    if (!shouldStop()) {
+      await LeadDistributionStats.updateBatchStats(batchId, {
+        status: 'FAILED',
+        completedAt: new Date().toISOString()
+      });
+    }
 
     await LeadDistributionStats.addError(batchId, {
       message: `Fatal error: ${error.message}`
@@ -517,6 +573,7 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
     throw error;
   } finally {
     activeDistributionBatchIds.delete(batchId);
+    cancelledDistributionBatchIds.delete(batchId);
   }
 };
 
@@ -691,6 +748,53 @@ const streamLeadsToLender = async (req, res) => {
         message: error.message
       });
     }
+  }
+};
+
+/**
+ * POST /api/v1/distribution/batch/:batchId/cancel
+ *
+ * Stop a running distribution. Requests already in flight to the lender
+ * finish (they can't be recalled), but no further leads are sent.
+ */
+const cancelDistribution = async (req, res) => {
+  try {
+    const { batchId } = req.params;
+    const batch = await LeadDistributionStats.findById(batchId);
+    if (!batch) {
+      return res.status(404).json({ success: false, message: 'Batch not found' });
+    }
+    if (batch.status !== 'PROCESSING') {
+      return res.status(409).json({
+        success: false,
+        message: `Batch is already ${batch.status} — nothing to stop.`,
+        data: batch
+      });
+    }
+
+    // In-memory flag first so the running loop stops at its very next check.
+    if (activeDistributionBatchIds.has(batchId)) cancelledDistributionBatchIds.add(batchId);
+
+    const updated = await LeadDistributionStats.markCancelled(batchId);
+    if (!updated) {
+      cancelledDistributionBatchIds.delete(batchId);
+      const latest = await LeadDistributionStats.findById(batchId);
+      return res.status(409).json({
+        success: false,
+        message: `Batch finished (${latest?.status}) before it could be stopped.`,
+        data: latest
+      });
+    }
+
+    console.log(`[Batch ${batchId}] Cancel requested by admin`);
+    res.status(200).json({
+      success: true,
+      message: 'Distribution stopped. No more leads will be sent to the lender for this batch.',
+      data: updated
+    });
+  } catch (error) {
+    console.error('Error cancelling distribution:', error);
+    res.status(500).json({ success: false, message: 'Failed to stop distribution', error: error.message });
   }
 };
 
@@ -922,6 +1026,7 @@ const resumeIncompleteDistributionBatches = async () => {
 
 module.exports = {
   streamLeadsToLender,
+  cancelDistribution,
   startBackgroundDistribution,
   getBatchStats,
   getAllBatches,

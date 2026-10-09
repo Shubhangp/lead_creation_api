@@ -12,7 +12,7 @@
  *   processLeadId : "JOB#abc-123",          ← partition key
  *   jobId         : "abc-123",
  *   type          : "PUSH_JOB",
- *   status        : "processing" | "completed" | "failed",
+ *   status        : "processing" | "completed" | "failed" | "cancelled",
  *   source        : "FREO",
  *   startDate     : "2025-01-01T00:00:00.000Z",
  *   endDate       : "2025-01-31T23:59:59.999Z",
@@ -114,8 +114,40 @@ class PushJob {
         }));
     }
 
+    // Like update(), but only applies while the job is still "processing".
+    // Used for the terminal writes so a job an admin cancelled mid-run is
+    // never flipped back to completed/failed by the loop finishing up.
+    // Returns false when the job was no longer processing.
+    static async updateIfProcessing(jobId, fields) {
+        const keys = Object.keys(fields);
+        const exprParts = [];
+        const exprNames = { '#status': 'status' };
+        const exprValues = { ':processing': 'processing' };
+
+        keys.forEach((k, i) => {
+            exprParts.push(`#f${i} = :v${i}`);
+            exprNames[`#f${i}`] = k;
+            exprValues[`:v${i}`] = fields[k];
+        });
+
+        try {
+            await docClient.send(new UpdateCommand({
+                TableName: TABLE_NAME,
+                Key: { processLeadId: jobKey(jobId) },
+                UpdateExpression: `SET ${exprParts.join(', ')}`,
+                ConditionExpression: '#status = :processing',
+                ExpressionAttributeNames: exprNames,
+                ExpressionAttributeValues: exprValues,
+            }));
+            return true;
+        } catch (err) {
+            if (err.name === 'ConditionalCheckFailedException') return false;
+            throw err;
+        }
+    }
+
     static async markCompleted(jobId, lenderResults, failedToSave = []) {
-        await this.update(jobId, {
+        return this.updateIfProcessing(jobId, {
             status: 'completed',
             completedAt: new Date().toISOString(),
             lastKey: null,
@@ -125,11 +157,24 @@ class PushJob {
     }
 
     static async markFailed(jobId, errorMessage) {
-        await this.update(jobId, {
+        return this.updateIfProcessing(jobId, {
             status: 'failed',
             completedAt: new Date().toISOString(),
             errors: [errorMessage],
         });
+    }
+
+    // Admin stop. Flips a "processing" job to "cancelled"; the background loop
+    // sees it and stops before sending the next lender batch. Returns the
+    // updated job, or null if the job wasn't processing (already finished).
+    static async markCancelled(jobId) {
+        const now = new Date().toISOString();
+        const ok = await this.updateIfProcessing(jobId, {
+            status: 'cancelled',
+            cancelledAt: now,
+            completedAt: now,
+        });
+        return ok ? this.get(jobId) : null;
     }
 
     // Save the DynamoDB pagination token so the job can resume after a restart

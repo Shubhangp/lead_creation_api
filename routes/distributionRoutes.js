@@ -6,7 +6,8 @@ const {
   getBatchStats,
   getAllBatches,
   getLenderStats,
-  getLeadsPreview
+  getLeadsPreview,
+  cancelDistribution
 } = require('../controllers/leadDistributionController');
 
 // Start distribution in background (Fire and forget - continues even if frontend closes)
@@ -20,6 +21,9 @@ router.post('/preview', getLeadsPreview);
 
 // Get specific batch statistics
 router.get('/batch/:batchId', getBatchStats);
+
+// Stop a running distribution — no further leads are sent to the lender
+router.post('/batch/:batchId/cancel', cancelDistribution);
 
 // Get all batches (paginated)
 router.get('/batches', getAllBatches);
