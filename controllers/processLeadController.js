@@ -31,6 +31,8 @@ const {
     sendToCreditPulse,
     sendToCreditSea,
     sendToCreditLinks,
+    sendToCreditLinksGold,
+    sendToKamakshiMoney,
     sendToCreditHaat,
 } = require('../services/lenderService');
 
@@ -227,6 +229,8 @@ const LENDER_MAP = {
     CreditPluse: sendToCreditPulse,
     CreditSea: sendToCreditSea,
     CreditLinks: sendToCreditLinks,
+    CreditLinksGold: sendToCreditLinksGold,
+    kamakshimoney: sendToKamakshiMoney,
     CreditHaat: sendToCreditHaat,
 };
 

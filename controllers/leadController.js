@@ -56,6 +56,8 @@ const {
   sendToCreditPulse,
   sendToCreditSea,
   sendToCreditLinks,
+  sendToCreditLinksGold,
+  sendToKamakshiMoney,
   sendToCreditHaat
 } = require('../services/lenderService');
 
@@ -339,6 +341,8 @@ async function sendToLender(lead, lender) {
     "CreditPluse": sendToCreditPulse,
     "CreditSea": sendToCreditSea,
     "CreditLinks": sendToCreditLinks,
+    "CreditLinksGold": sendToCreditLinksGold,
+    "kamakshimoney": sendToKamakshiMoney,
     "CreditHaat": sendToCreditHaat,
   };
 
@@ -763,6 +767,8 @@ const LENDER_MAP = {
   CreditPluse:   sendToCreditPulse,
   CreditSea:     sendToCreditSea,
   CreditLinks:   sendToCreditLinks,
+  CreditLinksGold: sendToCreditLinksGold,
+  kamakshimoney: sendToKamakshiMoney,
   CreditHaat:    sendToCreditHaat,
 };
 

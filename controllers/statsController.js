@@ -71,6 +71,16 @@ const LENDER_CONFIG = {
     statsType: 'status',
     displayName: 'CreditLinks'
   },
+  creditlinksgold: {
+    modelPath: '../models/creditLinksGoldResponseLog.js',
+    statsType: 'status',
+    displayName: 'CreditLinks Gold'
+  },
+  kamakshimoney: {
+    modelPath: '../models/kamakshiMoneyResponseLog.js',
+    statsType: 'status',
+    displayName: 'Kamakshi Money'
+  },
   credithaat: {
     modelPath: '../models/creditHaatResponseLog.js',
     statsType: 'status',

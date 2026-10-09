@@ -9,6 +9,8 @@
 //   the dashboard reads it straight from the history record (no recompute).
 //   Each lender has its OWN category scheme:
 //     CreditLinks → LEAD_CREATED / ALREADY_EXISTS / NOT_ELIGIBLE / FAILED
+//     CreditLinksGold → LEAD_CREATED / ALREADY_EXISTS / NOT_ELIGIBLE / FAILED
+//     kamakshimoney → ATTRIBUTABLE / NOT_ATTRIBUTABLE / FAILED
 //     ZYPE        → ACCEPT / REJECTED / Failed
 //     Mpokket     → 200 / 400 / 403
 //     CreditSea   → Success / Fail / Duplicate / null
@@ -28,6 +30,8 @@
 // Models that already expose a canonical `_extractStatus(item)` — reuse them so
 // distribution categorization can never drift from the dashboard.
 const CreditLinksResponseLog = require('../models/creditLinksResponseLog');
+const CreditLinksGoldResponseLog = require('../models/creditLinksGoldResponseLog');
+const KamakshiMoneyResponseLog = require('../models/kamakshiMoneyResponseLog');
 const CreditSeaResponseLog   = require('../models/creditSeaResponseLog');
 const CreditPulseResponseLog = require('../models/creditPulseResponseLog');
 const CreditHaatResponseLog  = require('../models/creditHaatResponseLog');
@@ -69,6 +73,18 @@ const LENDER_CATEGORIZERS = {
   CreditLinks(item) {
     const st = CreditLinksResponseLog._extractStatus(item);
     return ['LEAD_CREATED', 'ALREADY_EXISTS', 'NOT_ELIGIBLE', 'FAILED'].includes(st) ? st : 'other';
+  },
+
+  // CreditLinks Gold Loans — same buckets as CreditLinks, own table
+  CreditLinksGold(item) {
+    const st = CreditLinksGoldResponseLog._extractStatus(item);
+    return ['LEAD_CREATED', 'ALREADY_EXISTS', 'NOT_ELIGIBLE', 'FAILED'].includes(st) ? st : 'other';
+  },
+
+  // Kamakshi Money attribution check → ATTRIBUTABLE / NOT_ATTRIBUTABLE / FAILED
+  kamakshimoney(item) {
+    const st = KamakshiMoneyResponseLog._extractStatus(item);
+    return ['ATTRIBUTABLE', 'NOT_ATTRIBUTABLE', 'FAILED'].includes(st) ? st : 'other';
   },
 
   // CreditSea → Success / Fail / Duplicate / null / other

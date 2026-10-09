@@ -18,6 +18,8 @@ const {
   sendToCreditPulse,
   sendToCreditSea,
   sendToCreditLinks,
+  sendToCreditLinksGold,
+  sendToKamakshiMoney,
   sendToCreditHaat
 } = require('../services/lenderService');
 
@@ -249,6 +251,8 @@ class ContinuousLeadScheduler {
       "CreditPluse": sendToCreditPulse,
       "CreditSea": sendToCreditSea,
       "CreditLinks": sendToCreditLinks,
+      "CreditLinksGold": sendToCreditLinksGold,
+      "kamakshimoney": sendToKamakshiMoney,
       "CreditHaat": sendToCreditHaat,
     };
 

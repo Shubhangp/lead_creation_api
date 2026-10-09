@@ -29,7 +29,7 @@ const LENDER_LISTS = {
   leadSuccess: [
     'OVLY', 'FREO', 'LendingPlate', 'ZYPE', 'FINTIFI',
     'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-    'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea', 'CreditHaat', 'CreditLinks',
+    'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold',
     // MIS lenders (status updated via file upload, not immediate API response)
     'CASHVIA', 'DIGICREDIT', 'TAP4CREDIT', 'SPEEDOLOAN',
     'PAISABOXX', 'HEROFINCORP', 'PREFR', 'AryseFin', 'Mudrasewa', 'Mudraboxx', 'Rule Mudra', 'kamakshimoney'
@@ -38,23 +38,23 @@ const LENDER_LISTS = {
   upload: [
     'SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI',
     'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks'
+    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney'
   ],
   // frontend: dashboard › lead_distribution (filter UI)
   distribution: [
     'SML', 'FREO', 'ZYPE', 'LendingPlate', 'FINTIFI',
     'FATAKPAY', 'FATAKPAYPL', 'OVLY', 'RAMFINCROP', 'MPOKKET',
-    'INDIALENDS', 'CRMPaisa', 'MyMoneyMantra', 'CreditSea', 'CreditHaat', 'CreditLinks',
+    'INDIALENDS', 'CRMPaisa', 'MyMoneyMantra', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney',
   ],
   // frontend: loanform › DistributionRulesManagement
   distributionRules: [
     'SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'CreditSea',
-    'FATAKPAY',, 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'MPOKKET', 'CRMPaisa', 'CreditHaat', 'CreditLinks',
+    'FATAKPAY',, 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'MPOKKET', 'CRMPaisa', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney',
   ],
   // frontend: xlsx_upload › Home.js (status dashboard columns)
   home: [
     'ZYPE', 'LendingPlate', 'FATAKPAY', 'FATAKPAYPL', 'OVLY',
-    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks',
+    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney',
   ],
 };
 

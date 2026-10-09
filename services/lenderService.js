@@ -21,6 +21,8 @@ const CreditPulseResponseLog = require('../models/creditPulseResponseLog');
 const CreditSeaResponseLog = require('../models/creditSeaResponseLog');
 const CreditHaatResponseLog = require('../models/creditHaatResponseLog');
 const CreditLinksResponseLog = require('../models/creditLinksResponseLog');
+const CreditLinksGoldResponseLog = require('../models/creditLinksGoldResponseLog');
+const KamakshiMoneyResponseLog = require('../models/kamakshiMoneyResponseLog');
 const { decryptPII } = require('../utils/piiCrypto');
 
 // Leads are stored with phone/panNumber encrypted at rest. Every outbound lender
@@ -2032,6 +2034,210 @@ async function sendToCreditLinks(lead) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CreditLinks Gold Loans (Partner API v2.13 — #6 Gold Loans, #7 Gold Loans Status)
+// POST /api/v2/partner/gold-loans creates the lead AND returns offers in one call,
+// so no dedupe / get-offers round-trip is needed. Logs go to their own
+// credit_links_gold_response_logs table (models/creditLinksGoldResponseLog.js).
+// ─────────────────────────────────────────────────────────────────────────────
+const CREDITLINKS_GOLD_DEFAULT_LOAN_AMOUNT =
+  parseInt(process.env.CREDITLINKS_GOLD_DEFAULT_LOAN_AMOUNT, 10) || 100000;
+
+async function sendToCreditLinksGold(lead) {
+  lead = applyLenderDefaults(lead);
+  console.log('CreditLinks Gold', lead);
+
+  const {
+    leadId, fullName, firstName, lastName, phone, email, pincode, panNumber, source
+  } = lead;
+
+  // ─── Split name ─────────────────────────────────────────────────────────────
+  let fName = firstName;
+  let lName = lastName;
+  if ((!fName || !lName) && fullName) {
+    const parts = fullName.trim().split(/\s+/);
+    fName = fName || parts[0] || '';
+    lName = lName || (parts.length > 1 ? parts.slice(1).join(' ') : parts[0] || '');
+  }
+
+  const loanAmount =
+    parseInt(lead.goldLoanAmount ?? lead.loanAmount ?? lead.requiredLoanAmount, 10) ||
+    CREDITLINKS_GOLD_DEFAULT_LOAN_AMOUNT;
+
+  const payload = {
+    mobileNumber: String(phone || '').replace(/\D/g, '').slice(-10),
+    firstName: fName,
+    lastName: lName,
+    pan: panNumber,
+    email,
+    pincode: String(pincode || ''),
+    loanAmount,
+    consumerConsentDate: creditLinksConsentTimestamp(),
+    consumerConsentIp: lead.consentIp || lead.ip || '0.0.0.0'
+  };
+
+  // Optional UTM / tracking params — only sent when present on the lead
+  ['utm_id', 'utm_campaign', 'utm_source', 'utm_medium', 'utm_content', 'utm_term',
+    'pid', 'sub_id1', 'sub_id2', 'sub_id3'].forEach((k) => {
+    if (!isFieldMissing(lead[k])) payload[k] = String(lead[k]);
+  });
+
+  const headers = {
+    'Content-Type': 'application/json',
+    apikey: CREDITLINKS_API_KEY
+  };
+
+  let body;
+  let httpStatus;
+  try {
+    const res = await axios.post(
+      `${CREDITLINKS_BASE_URL}/api/v2/partner/gold-loans`,
+      payload,
+      { headers, validateStatus: () => true }
+    );
+    body = res.data;
+    httpStatus = res.status;
+    console.log('CreditLinks gold-loans response:', httpStatus, JSON.stringify(body));
+  } catch (error) {
+    console.error('CreditLinks gold-loans error:', error?.response?.data || error.message);
+    return CreditLinksGoldResponseLog.create({
+      leadId,
+      source,
+      requestPayload: payload,
+      responseStatus: 'FAILED',
+      responseBody: { step: 'gold-loans', error: error?.response?.data || error.message }
+    });
+  }
+
+  // ─── Map response → responseStatus ────────────────────────────────────────────
+  //   201 → new lead created, 200 → already exists (data updated),
+  //   422 → not eligible, 400 / other → failed
+  const clLeadId = body?.leadId || null;
+  let responseStatus;
+  if (httpStatus === 201) responseStatus = 'LEAD_CREATED';
+  else if (httpStatus === 200 && clLeadId) responseStatus = 'ALREADY_EXISTS';
+  else if (httpStatus === 422) responseStatus = 'NOT_ELIGIBLE';
+  else if (clLeadId) responseStatus = 'LEAD_CREATED';
+  else responseStatus = 'FAILED';
+
+  const offersCount = Array.isArray(body?.offers) ? body.offers.length : null;
+
+  return CreditLinksGoldResponseLog.create({
+    leadId,
+    source,
+    creditLinksLeadId: clLeadId,
+    offersCount,
+    requestPayload: payload,
+    responseStatus,
+    responseBody: { step: 'gold-loans', httpStatus, ...(body && typeof body === 'object' ? body : { raw: body }) }
+  });
+}
+
+// Gold Loans Status (#7) — lenders' statuses for a CreditLinks gold-loan leadId.
+// Returns { success, httpStatus, statuses, message }.
+async function getCreditLinksGoldLoanStatus(creditLinksLeadId) {
+  if (!creditLinksLeadId) throw new Error('creditLinksLeadId is required');
+  try {
+    const res = await axios.get(
+      `${CREDITLINKS_BASE_URL}/api/v2/partner/gold-loans-status/${encodeURIComponent(creditLinksLeadId)}`,
+      {
+        headers: { 'Content-Type': 'application/json', apikey: CREDITLINKS_API_KEY },
+        validateStatus: () => true
+      }
+    );
+    const data = res.data || {};
+    return {
+      success: String(data.success).toLowerCase() === 'true',
+      httpStatus: res.status,
+      statuses: Array.isArray(data.statuses) ? data.statuses : [],
+      message: data.message || null
+    };
+  } catch (error) {
+    console.error('CreditLinks gold-loans-status error:', error?.response?.data || error.message);
+    return { success: false, httpStatus: null, statuses: [], message: error?.response?.data || error.message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kamakshi Money (Credzo) — Check Attribution API
+// POST /api/v1/lead/can_attribute_utm  (headers: source_id, source_key)
+// Tells us whether Ratecut can be attributed for this phone (+ optional PAN).
+// Credentials/base URL come from env; base URL defaults to UAT until PROD is shared.
+// ─────────────────────────────────────────────────────────────────────────────
+const KAMAKSHI_BASE_URL = process.env.KAMAKSHI_BASE_URL || 'https://credzo.kamakshimoney.com';
+const KAMAKSHI_SOURCE_ID = 'ratecut';
+const KAMAKSHI_SOURCE_KEY = '2964b3e9-487d-4e5d-869f-bbe73fae7479';
+
+async function sendToKamakshiMoney(lead) {
+  const { leadId, phone, panNumber, source } = lead;
+  console.log('KamakshiMoney', { leadId, source });
+
+  const payload = { phone_number: String(phone || '').replace(/\D/g, '').slice(-10) };
+  // PAN is optional — only send a real one (never a generated placeholder)
+  if (!isFieldMissing(panNumber)) payload.pan = String(panNumber).trim().toUpperCase();
+
+  if (!KAMAKSHI_SOURCE_ID || !KAMAKSHI_SOURCE_KEY) {
+    console.error('KamakshiMoney: KAMAKSHI_SOURCE_ID / KAMAKSHI_SOURCE_KEY not configured');
+    return KamakshiMoneyResponseLog.create({
+      leadId,
+      source,
+      requestPayload: payload,
+      responseStatus: 'FAILED',
+      responseBody: { step: 'can_attribute_utm', message: 'Kamakshi credentials not configured' }
+    });
+  }
+
+  let body;
+  let httpStatus;
+  try {
+    const res = await axios.post(
+      `${KAMAKSHI_BASE_URL}/api/v1/lead/can_attribute_utm`,
+      payload,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          source_id: KAMAKSHI_SOURCE_ID,
+          source_key: KAMAKSHI_SOURCE_KEY
+        },
+        timeout: 15000,
+        validateStatus: () => true
+      }
+    );
+    body = res.data;
+    httpStatus = res.status;
+    console.log('KamakshiMoney can_attribute_utm response:', httpStatus, JSON.stringify(body));
+  } catch (error) {
+    console.error('KamakshiMoney can_attribute_utm error:', error?.response?.data || error.message);
+    return KamakshiMoneyResponseLog.create({
+      leadId,
+      source,
+      requestPayload: payload,
+      responseStatus: 'FAILED',
+      responseBody: { step: 'can_attribute_utm', error: error?.response?.data || error.message }
+    });
+  }
+
+  // ─── Map response → responseStatus ────────────────────────────────────────────
+  //   200 + can_attribute true  → ATTRIBUTABLE
+  //   200 + can_attribute false → NOT_ATTRIBUTABLE
+  //   400 / 401 / 500 / other   → FAILED
+  const canAttribute = typeof body?.can_attribute === 'boolean' ? body.can_attribute : null;
+  let responseStatus;
+  if (httpStatus === 200 && canAttribute === true) responseStatus = 'ATTRIBUTABLE';
+  else if (httpStatus === 200 && canAttribute === false) responseStatus = 'NOT_ATTRIBUTABLE';
+  else responseStatus = 'FAILED';
+
+  return KamakshiMoneyResponseLog.create({
+    leadId,
+    source,
+    canAttribute,
+    reason: body?.reason || null,
+    requestPayload: payload,
+    responseStatus,
+    responseBody: { step: 'can_attribute_utm', httpStatus, ...(body && typeof body === 'object' ? body : { raw: body }) }
+  });
+}
+
 module.exports = {
   sendToSML:            withDecryptedPII(sendToSML),
   sendToFreo:           withDecryptedPII(sendToFreo),
@@ -2050,4 +2256,7 @@ module.exports = {
   sendToCreditSea:      withDecryptedPII(sendToCreditSea),
   sendToCreditHaat:     withDecryptedPII(sendToCreditHaat),
   sendToCreditLinks:    withDecryptedPII(sendToCreditLinks),
+  sendToCreditLinksGold: withDecryptedPII(sendToCreditLinksGold),
+  getCreditLinksGoldLoanStatus,
+  sendToKamakshiMoney:  withDecryptedPII(sendToKamakshiMoney),
 };
