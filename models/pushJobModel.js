@@ -62,6 +62,8 @@ class PushJob {
             failedToSave: 0,
             lenderResults: {},
             lastKey: null,   // DynamoDB pagination checkpoint
+            stoppedLenders: [],      // lenders an admin stopped mid-job
+            stoppedLendersAt: {},
             errors: [],
             ttl: ttlEpoch(),
             ...meta,
@@ -175,6 +177,44 @@ class PushJob {
             completedAt: now,
         });
         return ok ? this.get(jobId) : null;
+    }
+
+    // Admin stop for ONE lender of a running job. Appends the lender to
+    // stoppedLenders (the other lenders keep receiving leads). Returns the
+    // updated job, or null if the job isn't processing / lender not in job /
+    // lender already stopped.
+    static async stopLender(jobId, lender) {
+        try {
+            const result = await docClient.send(new UpdateCommand({
+                TableName: TABLE_NAME,
+                Key: { processLeadId: jobKey(jobId) },
+                UpdateExpression: 'SET #sl = list_append(if_not_exists(#sl, :empty), :one), #sla.#ln = :now',
+                ConditionExpression: '#status = :processing AND contains(#lenders, :lender) AND (attribute_not_exists(#sl) OR NOT contains(#sl, :lender))',
+                ExpressionAttributeNames: {
+                    '#sl': 'stoppedLenders', '#sla': 'stoppedLendersAt', '#ln': lender,
+                    '#status': 'status', '#lenders': 'lenders',
+                },
+                ExpressionAttributeValues: {
+                    ':empty': [], ':one': [lender], ':lender': lender,
+                    ':processing': 'processing', ':now': new Date().toISOString(),
+                },
+                ReturnValues: 'ALL_NEW',
+            }));
+            return result.Attributes;
+        } catch (err) {
+            if (err.name === 'ConditionalCheckFailedException') return null;
+            // stoppedLendersAt map doesn't exist yet on older jobs → create it first, retry once.
+            if (err.name === 'ValidationException' && /document path/i.test(err.message)) {
+                await docClient.send(new UpdateCommand({
+                    TableName: TABLE_NAME,
+                    Key: { processLeadId: jobKey(jobId) },
+                    UpdateExpression: 'SET stoppedLendersAt = if_not_exists(stoppedLendersAt, :m)',
+                    ExpressionAttributeValues: { ':m': {} },
+                }));
+                return this.stopLender(jobId, lender);
+            }
+            throw err;
+        }
     }
 
     // Save the DynamoDB pagination token so the job can resume after a restart

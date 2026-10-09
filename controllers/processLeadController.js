@@ -486,6 +486,16 @@ const activeJobIds = new Set();
 // durable source of truth and is re-read once per page as a backstop.
 const cancelledJobIds = new Set();
 
+// Per-lender stops: jobId -> Set(lender). Same idea as cancelledJobIds but for
+// one lender only — the rest of the job keeps sending. Durable copy lives in
+// job.stoppedLenders and is re-read once per page.
+const stoppedLendersByJob = new Map();
+const isLenderStopped = (jobId, lender) => stoppedLendersByJob.get(jobId)?.has(lender) || false;
+const markLenderStoppedInMemory = (jobId, lender) => {
+    if (!stoppedLendersByJob.has(jobId)) stoppedLendersByJob.set(jobId, new Set());
+    stoppedLendersByJob.get(jobId).add(lender);
+};
+
 async function runPushInBackground(jobId, { source, startDate, endDate, lenders }) {
     if (activeJobIds.has(jobId)) {
         console.log(`[Push ${jobId}] Already running in this process — skipping duplicate launch`);
@@ -546,6 +556,11 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
         let pageNumber = 0;
         let cancelled = false;
         const shouldStop = () => cancelled || cancelledJobIds.has(jobId);
+        const lenderShouldStop = (lender) => () => shouldStop() || isLenderStopped(jobId, lender);
+        const lenderStatus = (l, running) => (isLenderStopped(jobId, l) ? 'stopped' : running);
+
+        // Lenders stopped before a restart stay stopped on resume.
+        (job.stoppedLenders || []).forEach((l) => markLenderStoppedInMemory(jobId, l));
 
         // ── Main pagination loop ───────────────────────────────────────────────
         do {
@@ -554,8 +569,18 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             if (!shouldStop()) {
                 const fresh = await PushJob.get(jobId);
                 if (fresh && fresh.status === 'cancelled') cancelled = true;
+                (fresh?.stoppedLenders || []).forEach((l) => markLenderStoppedInMemory(jobId, l));
             }
             if (shouldStop()) { cancelled = true; break; }
+
+            // Every lender stopped individually → nothing left to send.
+            const liveLenders = lenders.filter((l) => !isLenderStopped(jobId, l));
+            if (liveLenders.length === 0) {
+                console.log(`[Push ${jobId}] All lenders stopped individually — ending job`);
+                await PushJob.markCancelled(jobId);
+                cancelled = true;
+                break;
+            }
 
             pageNumber++;
             console.log(`[Push ${jobId}] Page ${pageNumber} | lastKey=${lastKey ? 'set' : 'null'}`);
@@ -587,9 +612,9 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             // Dispatch this page to every selected lender
             if (toDispatch.length > 0) {
                 const lenderResults = await Promise.allSettled(
-                    lenders.map((lender) => dispatchToLender(lender, toDispatch, lenderLimiters[lender], shouldStop))
+                    liveLenders.map((lender) => dispatchToLender(lender, toDispatch, lenderLimiters[lender], lenderShouldStop(lender)))
                 );
-                lenders.forEach((lender, i) => {
+                liveLenders.forEach((lender, i) => {
                     const r = lenderResults[i];
                     if (r.status === 'fulfilled') {
                         lenderAccumulators[lender].total += r.value.total || 0;
@@ -615,7 +640,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
             await PushJob.update(jobId, {
                 reusedLeads: totalReused,
                 lenderResults: Object.fromEntries(
-                    Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: 'running' }])
+                    Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: lenderStatus(l, 'running') }])
                 ),
             });
 
@@ -634,7 +659,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
                 savedToLeads: totalSaved,
                 failedToSave: totalFailed,
                 lenderResults: Object.fromEntries(
-                    Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: 'cancelled' }])
+                    Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: lenderStatus(l, 'cancelled') }])
                 ),
             });
             console.log(`[Push ${jobId}] ⛔ Stopped by admin. Saved=${totalSaved} Reused=${totalReused} Failed=${totalFailed}`);
@@ -643,7 +668,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
 
         // ── Mark job complete ─────────────────────────────────────────────────
         const finalLenderResults = Object.fromEntries(
-            Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: 'done' }])
+            Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: lenderStatus(l, 'done') }])
         );
 
         await PushJob.markCompleted(jobId, finalLenderResults);
@@ -661,6 +686,7 @@ async function runPushInBackground(jobId, { source, startDate, endDate, lenders 
     } finally {
         activeJobIds.delete(jobId);
         cancelledJobIds.delete(jobId);
+        stoppedLendersByJob.delete(jobId);
     }
 }
 
@@ -1060,6 +1086,59 @@ exports.cancelPushJob = async (req, res) => {
             success: true,
             message: 'Push stopped. Nothing more will be sent to lenders for this job.',
             data: updated,
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Server error', error: err.message });
+    }
+};
+
+/**
+ * POST /api/v1/process-leads/push-jobs/:jobId/lenders/:lender/stop
+ *
+ * Stop ONE lender of a running push. The other lenders keep receiving leads.
+ * The lender's batch already in flight finishes; nothing further is sent to it.
+ * Stopping the last remaining lender ends the whole job (status 'cancelled').
+ */
+exports.stopPushJobLender = async (req, res) => {
+    try {
+        const { jobId, lender } = req.params;
+        const job = await PushJob.get(jobId);
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        if (job.status !== 'processing') {
+            return res.status(409).json({ success: false, message: `Job is already ${job.status} — nothing to stop.`, data: job });
+        }
+        if (!(job.lenders || []).includes(lender)) {
+            return res.status(400).json({ success: false, message: `${lender} is not part of this job.`, data: job });
+        }
+        if ((job.stoppedLenders || []).includes(lender)) {
+            return res.status(409).json({ success: false, message: `${lender} is already stopped for this job.`, data: job });
+        }
+
+        // In-memory flag first so the running loop skips this lender at its next check.
+        if (activeJobIds.has(jobId)) markLenderStoppedInMemory(jobId, lender);
+
+        const updated = await PushJob.stopLender(jobId, lender);
+        if (!updated) {
+            const latest = await PushJob.get(jobId);
+            return res.status(409).json({ success: false, message: `Could not stop ${lender} — job is ${latest?.status}.`, data: latest });
+        }
+
+        // Last lender standing → stop the whole job.
+        const remaining = (updated.lenders || []).filter((l) => !(updated.stoppedLenders || []).includes(l));
+        let data = updated;
+        if (remaining.length === 0) {
+            if (activeJobIds.has(jobId)) cancelledJobIds.add(jobId);
+            data = (await PushJob.markCancelled(jobId)) || (await PushJob.get(jobId));
+        }
+
+        console.log(`[Push ${jobId}] Lender ${lender} stopped by admin (remaining: ${remaining.join(',') || 'none'})`);
+        res.status(200).json({
+            success: true,
+            message: remaining.length
+                ? `${lender} stopped. Still sending to: ${remaining.join(', ')}.`
+                : `${lender} stopped. That was the last lender, so the whole push is stopped.`,
+            data,
         });
     } catch (err) {
         res.status(500).json({ success: false, message: 'Server error', error: err.message });

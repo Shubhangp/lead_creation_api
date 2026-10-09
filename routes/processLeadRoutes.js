@@ -6,6 +6,7 @@ const {
   pushProcessLeads,
   getPushJobStatus,
   cancelPushJob,
+  stopPushJobLender,
   listActivePushJobs,
   getAvailableLenders,
   getLeadCount,
@@ -35,6 +36,9 @@ router.get('/push-jobs/:jobId', getPushJobStatus);
 
 // Stop a running push — nothing further is sent to lenders
 router.post('/push-jobs/:jobId/cancel', cancelPushJob);
+
+// Stop ONE lender of a running push — the other lenders keep going
+router.post('/push-jobs/:jobId/lenders/:lender/stop', stopPushJobLender);
 
 // Preview count before pushing
 router.get('/count', getLeadCount);
