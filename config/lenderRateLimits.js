@@ -18,7 +18,7 @@ const LENDER_RATE_LIMITS = {
     CreditSea: 150,
     CreditLinks: 250,
     CreditLinksGold: 250,
-    kamakshimoney: 150,
+    kamakshimoney: 75,
     CreditHaat: 150,
 };
 
