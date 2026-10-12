@@ -417,7 +417,7 @@ class Lead {
   }
 
   // Duplicate checks only look at leads created within this window (in days).
-  static DUPLICATE_LOOKBACK_DAYS = 30;
+  static DUPLICATE_LOOKBACK_DAYS = 1;
 
   static _lookbackCutoffISO() {
     return new Date(
