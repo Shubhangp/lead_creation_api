@@ -495,6 +495,18 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+
+  brightloans: {
+    code: 'brightloans',
+    name: 'BrightLoans', logo: '/brightLoans-logo.svg',
+    maxAmount: 200000, minInterest: 34,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://www.brightloans.in/apply-now?utm_source=ratecut&utm_campaign=ratecut&utm_term=ratecut&utm_medium={utm_medium}&UTM_Partner_ReferenceID={partner_ref}',
+    apr: 24, tag: 'Salaried Only',  type: 'Fintech · Quick',
+    rateRange: '15% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 };
 
 const DEFAULT_LENDER_ORDER = [
