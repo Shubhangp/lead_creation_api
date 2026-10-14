@@ -4,6 +4,7 @@ const {
   GetCommand,
   QueryCommand,
   UpdateCommand,
+  ScanCommand,
 } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
@@ -113,6 +114,25 @@ class User {
       ExpressionAttributeValues: { ':source': source },
     }));
     return result.Items || [];
+  }
+
+  /**
+   * List every user (sanitized). Full scan — the users table is small.
+   */
+  static async listAll() {
+    const items = [];
+    let ExclusiveStartKey;
+    do {
+      const result = await docClient.send(new ScanCommand({
+        TableName: TABLE_NAME,
+        ExclusiveStartKey,
+      }));
+      items.push(...(result.Items || []));
+      ExclusiveStartKey = result.LastEvaluatedKey;
+    } while (ExclusiveStartKey);
+    return items
+      .map(User.sanitize)
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
   }
 
   // ──────────────────────────────────────────────────────────────

@@ -88,7 +88,18 @@ async function register(req, res) {
       return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
     }
 
-    const newUser = await User.create({ email, password, name, lenderName, source, role });
+    // Role guard: only a superadmin may create admin accounts; everyone else
+    // can only create partner (lender) logins. Superadmins are never created via API.
+    const requestedRole = role || 'lender';
+    const allowedRoles  = req.user?.role === 'superadmin' ? ['lender', 'admin'] : ['lender'];
+    if (!allowedRoles.includes(requestedRole)) {
+      return res.status(403).json({
+        success: false,
+        message: `You are not allowed to create a user with role "${requestedRole}".`,
+      });
+    }
+
+    const newUser = await User.create({ email, password, name, lenderName, source, role: requestedRole });
 
     return res.status(201).json({
       success: true,
@@ -104,6 +115,19 @@ async function register(req, res) {
     }
     console.error('[auth/register]', err);
     return res.status(500).json({ success: false, message: 'Registration failed.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/auth/users   (admin / superadmin only)
+// ─────────────────────────────────────────────────────────────────────────────
+async function listUsers(req, res) {
+  try {
+    const users = await User.listAll();
+    return res.status(200).json({ success: true, users });
+  } catch (err) {
+    console.error('[auth/listUsers]', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch users.' });
   }
 }
 
@@ -148,4 +172,4 @@ async function updatePassword(req, res) {
   }
 }
 
-module.exports = { login, register, me, updatePassword };
+module.exports = { login, register, listUsers, me, updatePassword };

@@ -19,11 +19,18 @@ router.post('/auth/login', authController.login);
 
 /**
  * POST /api/auth/register
- * Admin only — protect in production behind requireAdmin.
+ * Admin / superadmin only.
  * Body: { email, password, name, lenderName, source, role? }
+ *   role: 'lender' (default) | 'admin' (superadmin only)
  * Response: { success, user }
  */
 router.post('/auth/register', authenticate, requireAdmin, authController.register);
+
+/**
+ * GET /api/auth/users
+ * Admin / superadmin only. Lists all portal users (no password hashes).
+ */
+router.get('/auth/users', authenticate, requireAdmin, authController.listUsers);
 
 /**
  * GET /api/auth/me
