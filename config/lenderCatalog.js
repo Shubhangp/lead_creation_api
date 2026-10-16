@@ -507,6 +507,30 @@ const LENDER_CATALOG = {
     prepayment: 'Nil', disbursal: 'Same day',
     docs: ['PAN', 'Aadhaar', 'Bank Statement'],
   },
+
+  dhancash: {
+    code: 'dhancash',
+    name: 'Dhancash', logo: '/dhancash-logo.png',
+    maxAmount: 45000, minInterest: 34,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://www.dhancash.com/short-term-loan/?utm_source=ratecut&utm_medium={utm_medium}&utm_campaign=Ratecut&UTM_Partner_ReferenceID={partner_ref}',
+    apr: 24, type: 'Fintech · Quick',
+    rateRange: '15% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
+
+  royalmoney: {
+    code: 'royalmoney',
+    name: 'Royal Money', logo: '/royalMoney-logo.png',
+    maxAmount: 45000, minInterest: 34,
+    processingTime: '0-1 Day', approval: 'GOOD',
+    website: 'https://royalmoney.in/short-term-loan/?utm_source=ratecut&utm_campaign=ratecut&utm_medium={utm_medium}&UTM_Partner_ReferenceID={partner_ref}',
+    apr: 24, tag: 'Salaried Only',  type: 'Fintech · Quick',
+    rateRange: '15% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
+    prepayment: 'Nil', disbursal: 'Same day',
+    docs: ['PAN', 'Aadhaar', 'Bank Statement'],
+  },
 };
 
 const DEFAULT_LENDER_ORDER = [
