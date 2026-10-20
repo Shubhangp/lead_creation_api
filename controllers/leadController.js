@@ -8,6 +8,7 @@ const DistributionRule = require('../models/distributionRuleModel');
 // const timeUtils = require('../utils/timeutils');
 const rcsService = require('../services/rcsService');
 const { maskPhone, maskPan, decryptPII } = require('../utils/piiCrypto');
+const { acquireLenderSlot } = require('../utils/lenderRateLimiter');
 
 // Mask PII (phone/PAN) on a lead object before returning it to the portal/API.
 // Values are stored encrypted; maskPhone/maskPan decrypt then mask, so callers
@@ -348,6 +349,8 @@ async function sendToLender(lead, lender) {
 
   // Call the appropriate handler for the lender
   if (lenderHandlers[lender]) {
+    // Respect the lender's leads-per-minute limit (config/lenderRateLimits.js)
+    await acquireLenderSlot(lender);
     return await lenderHandlers[lender](lead);
   } else {
     throw new Error(`No handler found for lender: ${lender}`);
