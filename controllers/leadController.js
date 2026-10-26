@@ -139,31 +139,31 @@ exports.createLead = async (req, res) => {
   const finalSalary = salary || '50000';
   const finalJobType = jobType || 'SALARIED';
 
-  try {
-    // Create lead data object
-    const leadData = {
-      source,
-      fullName,
-      firstName,
-      lastName,
-      phone,
-      email,
-      age,
-      dateOfBirth,
-      gender,
-      panNumber,
-      jobType: finalJobType,
-      businessType,
-      salary: finalSalary,
-      creditScore,
-      cibilScore,
-      address,
-      pincode,
-      consent,
-      // Present only for website loan-form submissions (injected by formController).
-      websiteConsentTime: websiteConsentTime || null
-    };
+  // Create lead data object
+  const leadData = {
+    source,
+    fullName,
+    firstName,
+    lastName,
+    phone,
+    email,
+    age,
+    dateOfBirth,
+    gender,
+    panNumber,
+    jobType: finalJobType,
+    businessType,
+    salary: finalSalary,
+    creditScore,
+    cibilScore,
+    address,
+    pincode,
+    consent,
+    // Present only for website loan-form submissions (injected by formController).
+    websiteConsentTime: websiteConsentTime || null
+  };
 
+  try {
     // Create lead using DynamoDB model
     const savedLead = await Lead.create(leadData);
 
@@ -183,21 +183,21 @@ exports.createLead = async (req, res) => {
     return;
 
   } catch (error) {
-    console.log(error);
-
-    // Handle duplicate phone error
-    if (error.code === 'DUPLICATE_PHONE') {
-      return res.status(409).json({ 
-        message: 'Phone number already exists' 
+    // Duplicate phone / PAN: still answer 409, then (in the background) stamp
+    // source2 + updatedAt on the existing lead and, if this source's
+    // distribution rule has "send duplicates" switched on, send it to that
+    // rule's lenders.
+    if (error.code === 'DUPLICATE_PHONE' || error.code === 'DUPLICATE_PAN') {
+      res.status(409).json({
+        message: error.code === 'DUPLICATE_PHONE' ? 'Phone number already exists' : 'Duplicate PAN number'
       });
+      handleDuplicateLead(error.existingLead, leadData).catch((err) => {
+        console.error(`[Duplicate] handling failed for source ${source}:`, err.message);
+      });
+      return;
     }
 
-    // Handle duplicate PAN error
-    if (error.code === 'DUPLICATE_PAN') {
-      return res.status(409).json({ 
-        message: 'Duplicate PAN number' 
-      });
-    }
+    console.error('createLead error:', error.message);
 
     // Handle validation errors
     if (error.errors) {
@@ -216,8 +216,8 @@ exports.createLead = async (req, res) => {
 };
 
 // Distribute a saved lead to lenders (runs after the API has responded).
-async function distributeLead(savedLead, source) {
-  const distributionRules = await getDistributionRules(source);
+async function distributeLead(savedLead, source, rules = null) {
+  const distributionRules = rules || await getDistributionRules(source);
 
   const immediateSuccessfulLenders = await processLenders(
     savedLead,
@@ -236,6 +236,42 @@ async function distributeLead(savedLead, source) {
   }
 
   scheduleDelayedLenders(savedLead, distributionRules.delayed);
+}
+
+// A partner re-sending the same lead (e.g. retries after a timeout) within this
+// window is ignored, so lenders don't receive the same lead again and again.
+const DUPLICATE_RESEND_COOLDOWN_HOURS = Number(process.env.DUPLICATE_RESEND_COOLDOWN_HOURS || 24);
+
+// Called after a 409 has been sent for a duplicate phone/PAN.
+//  1. stamp source2 = incoming source and updatedAt = now on the existing lead
+//  2. if the incoming source's active distribution rule has sendDuplicates on,
+//     send the lead (existing leadId, newly submitted details) to that rule's
+//     immediate + delayed lenders, exactly like a new lead.
+async function handleDuplicateLead(existingLead, leadData) {
+  const source = leadData && leadData.source;
+  if (!existingLead || !existingLead.leadId || !source) return;
+  const leadId = existingLead.leadId;
+
+  const current = (await Lead.findById(leadId)) || existingLead;
+  const lastTouched = Date.parse(current.updatedAt || current.createdAt || '') || 0;
+  const sameSource = current.source === source || current.source2 === source;
+  if (sameSource && Date.now() - lastTouched < DUPLICATE_RESEND_COOLDOWN_HOURS * 3600 * 1000) {
+    console.log(`[Duplicate] lead ${leadId} from ${source} already handled within ${DUPLICATE_RESEND_COOLDOWN_HOURS}h - skipped`);
+    return;
+  }
+
+  await Lead.stampSource2(leadId, source);
+  console.log(`[Duplicate] lead ${leadId}: source2 set to ${source}`);
+
+  const rule = await DistributionRule.findActiveBySource(source);
+  if (!rule || rule.sendDuplicates !== true) {
+    console.log(`[Duplicate] lead ${leadId}: sending duplicates is off for ${source}`);
+    return;
+  }
+
+  const dispatchLead = Lead.buildExistingLeadForDispatch(leadData, leadId);
+  console.log(`[Duplicate] lead ${leadId}: sending to ${source} lenders`);
+  await distributeLead(dispatchLead, source, rule.rules);
 }
 
 // Process lenders based on group (immediate or delayed)
@@ -990,6 +1026,8 @@ exports.mobileCapture = async (req, res) => {
 
 exports.issuePartnerReference = async (req, res) => {
   const phone = String(req.body?.phone || req.query?.phone || '').trim();
+  // Optional: used for the partner number only when no lead exists for this phone.
+  const source = String(req.body?.source || req.query?.source || '').trim();
 
   if (!/^[6-9][0-9]{9}$/.test(phone)) {
     return res.status(400).json({
@@ -1000,7 +1038,7 @@ exports.issuePartnerReference = async (req, res) => {
 
   try {
     const { partner_referenceID, issued, persisted } =
-      await Lead.ensurePartnerReferenceIDByPhone(phone);
+      await Lead.ensurePartnerReferenceIDByPhone(phone, source || null);
 
     return res.status(200).json({
       status: 'success',

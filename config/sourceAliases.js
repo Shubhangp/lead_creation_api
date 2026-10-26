@@ -35,9 +35,30 @@ const SOURCE_ALIASES = {
   vfc: 'VFC',
 
   HSB: 'HSB',
+  hsb: 'HSB',
 
-  ANU: 'ANU'
+  ANU: 'ANU',
+  anu: 'ANU'
 };
+
+const PARTNER_NUMBERS = {
+  Ratecut: '01',
+  RatecutPL: '02',
+  CK2: '03',
+  CashKuber: '04',
+  FREO: '05',
+  WeCredit: '06',
+  FREO2: '07',
+  Apr: '08',
+  Blostem: '09',
+  BoostScore: '10',
+  ANU: '11',
+  BatterySmart: '12',
+  VFC: '13',
+  HSB: '14',
+};
+
+const UNKNOWN_PARTNER_NUMBER = '00';
 
 function resolveSource(input) {
   if (!input) return input;
@@ -45,4 +66,16 @@ function resolveSource(input) {
   return SOURCE_ALIASES[key] || input;
 }
 
-module.exports = { SOURCE_ALIASES, resolveSource };
+function getPartnerNumber(input) {
+  if (!input) return UNKNOWN_PARTNER_NUMBER;
+  const canonical = resolveSource(input);
+  return PARTNER_NUMBERS[canonical] || PARTNER_NUMBERS[input] || UNKNOWN_PARTNER_NUMBER;
+}
+
+module.exports = {
+  SOURCE_ALIASES,
+  PARTNER_NUMBERS,
+  UNKNOWN_PARTNER_NUMBER,
+  resolveSource,
+  getPartnerNumber,
+};

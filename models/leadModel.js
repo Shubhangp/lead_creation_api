@@ -256,6 +256,7 @@ class Lead {
     if (existingPhone) {
       const error = new Error('Phone number already exists');
       error.code = 'DUPLICATE_PHONE';
+      error.existingLead = existingPhone;
       throw error;
     }
 
@@ -263,6 +264,7 @@ class Lead {
     if (existingPan) {
       const error = new Error('PAN number already exists');
       error.code = 'DUPLICATE_PAN';
+      error.existingLead = existingPan;
       throw error;
     }
 
@@ -417,7 +419,7 @@ class Lead {
   }
 
   // Duplicate checks only look at leads created within this window (in days).
-  static DUPLICATE_LOOKBACK_DAYS = 1;
+  static DUPLICATE_LOOKBACK_DAYS = 30;
 
   static _lookbackCutoffISO() {
     return new Date(
@@ -659,6 +661,21 @@ class Lead {
         : written.push(item)));
     }
     return { written, failed };
+  }
+
+  // Used by the live lead API when a duplicate (phone/PAN) arrives: always
+  // stamp the incoming source as source2 and refresh updatedAt.
+  static async stampSource2(leadId, source) {
+    if (!leadId || !source) return null;
+    const now = new Date().toISOString();
+    await docClient.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { leadId },
+      UpdateExpression: 'SET #source2 = :source2, updatedAt = :now',
+      ExpressionAttributeNames: { '#source2': 'source2' },
+      ExpressionAttributeValues: { ':source2': String(source), ':now': now },
+    }));
+    return now;
   }
 
   static async tagSource2(lead, source, lookbackDays = this.SOURCE2_LOOKBACK_DAYS) {
@@ -1023,7 +1040,8 @@ class Lead {
       return { partner_referenceID: lead.partner_referenceID, issued: false };
     }
 
-    const reference = generatePartnerReferenceID();
+    // Partner number comes from the lead's own source (RC{Partner_Number}...).
+    const reference = generatePartnerReferenceID(lead.source);
 
     try {
       const result = await docClient.send(new UpdateCommand({
@@ -1055,7 +1073,7 @@ class Lead {
     }
   }
 
-  static async ensurePartnerReferenceIDByPhone(phone) {
+  static async ensurePartnerReferenceIDByPhone(phone, source = null) {
     if (!phone) {
       const error = new Error('Phone is required');
       error.code = 'PHONE_REQUIRED';
@@ -1065,7 +1083,8 @@ class Lead {
     const lead = await this.findAnyByPhone(String(phone));
     if (!lead) {
       return {
-        partner_referenceID: generatePartnerReferenceID(),
+        // No lead yet: use the source sent by the caller, if any (else RC00...).
+        partner_referenceID: generatePartnerReferenceID(source),
         issued: true,
         persisted: false,
         leadId: null,

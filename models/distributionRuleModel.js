@@ -16,6 +16,7 @@ class DistributionRule {
       ruleId: uuidv4(),
       source: ruleData.source,
       active: ruleData.active !== undefined ? ruleData.active : true,
+      sendDuplicates: ruleData.sendDuplicates === true,
       rules: ruleData.rules,
       // webConfig is additive and independent of the S2S `rules` / `rcsConfig`.
       // It powers the public landing experience (/form + /success). Only stored

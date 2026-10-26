@@ -54,7 +54,7 @@ exports.getDistributionRuleBySource = async (req, res) => {
 // Create a new distribution rule
 exports.createDistributionRule = async (req, res) => {
   try {
-    const { source, rules, active = true, rcsConfig, webConfig } = req.body;
+    const { source, rules, active = true, rcsConfig, webConfig, sendDuplicates } = req.body;
 
     // Validate required fields
     if (!source || !rules || !rules.immediate || !rules.delayed) {
@@ -78,6 +78,7 @@ exports.createDistributionRule = async (req, res) => {
       source: source,
       rules,
       active,
+      sendDuplicates: sendDuplicates === true,
       lastUpdatedBy: req.user ? req.user.email : 'system'
     };
     
@@ -114,11 +115,12 @@ exports.createDistributionRule = async (req, res) => {
 exports.updateDistributionRule = async (req, res) => {
   try {
     const { source } = req.params;
-    const { rules, active, rcsConfig, webConfig } = req.body;
+    const { rules, active, rcsConfig, webConfig, sendDuplicates } = req.body;
 
     const updateData = {};
     if (rules) updateData.rules = rules;
     if (active !== undefined) updateData.active = active;
+    if (sendDuplicates !== undefined) updateData.sendDuplicates = sendDuplicates === true;
     if (rcsConfig) updateData.rcsConfig = rcsConfig;
     if (webConfig) updateData.webConfig = normalizeWebConfig(webConfig);
     
