@@ -167,31 +167,20 @@ exports.createLead = async (req, res) => {
     // Create lead using DynamoDB model
     const savedLead = await Lead.create(leadData);
 
-    // Get distribution rules (your existing function)
-    const distributionRules = await getDistributionRules(source);
-
-    // Process immediate lenders (your existing function)
-    const immediateSuccessfulLenders = await processLenders(
-      savedLead, 
-      distributionRules.immediate, 
-      'immediate'
-    ); 
-
-    if (immediateSuccessfulLenders.length > 0) {
-      setTimeout(async () => {
-        await scheduleRCSAfterAllLenders(savedLead.leadId);
-      }, 5000);
-    }
-
-    // Schedule delayed lenders (your existing function)
-    scheduleDelayedLenders(savedLead, distributionRules.delayed);
-
+    // Respond as soon as the lead is saved. Lender distribution (which waits on
+    // per-lender rate limits and slow lender APIs) runs in the background, so the
+    // caller never times out and retries a lead that already exists (-> 409).
     res.status(201).json({
       status: 'success',
       data: {
         lead: savedLead,
       },
     });
+
+    distributeLead(savedLead, source).catch((err) => {
+      console.error(`Background distribution failed for lead ${savedLead.leadId}:`, err);
+    });
+    return;
 
   } catch (error) {
     console.log(error);
@@ -226,30 +215,57 @@ exports.createLead = async (req, res) => {
   }
 };
 
+// Distribute a saved lead to lenders (runs after the API has responded).
+async function distributeLead(savedLead, source) {
+  const distributionRules = await getDistributionRules(source);
+
+  const immediateSuccessfulLenders = await processLenders(
+    savedLead,
+    distributionRules.immediate,
+    'immediate'
+  );
+
+  if (immediateSuccessfulLenders.length > 0) {
+    setTimeout(async () => {
+      try {
+        await scheduleRCSAfterAllLenders(savedLead.leadId);
+      } catch (err) {
+        console.error(`RCS scheduling failed for lead ${savedLead.leadId}:`, err.message);
+      }
+    }, 5000);
+  }
+
+  scheduleDelayedLenders(savedLead, distributionRules.delayed);
+}
+
 // Process lenders based on group (immediate or delayed)
 async function processLenders(lead, lenders, type) {
-  const successfulLenders = [];
-  
-  for (const lender of lenders) {
-    const lenderName = typeof lender === 'string' ? lender : lender.lender;
+  // Don't send to the same lender that created the lead
+  const lenderNames = (lenders || [])
+    .map(lender => (typeof lender === 'string' ? lender : lender.lender))
+    .filter(lenderName => lenderName && lenderName !== lead.source);
 
-    // Don't send to the same lender that created the lead
-    if (lenderName !== lead.source) {
-      try {
-        const result = await sendToLender(lead, lenderName);
-        
-        // Check if lender API was successful
-        if (isLenderSuccess(result, lenderName)) {
-          successfulLenders.push(lenderName);
-        }
-        
-        // Log successful distribution
-        console.log(`Lead ${lead.leadId} sent to ${lenderName} (${type})`);
-      } catch (error) {
-        console.error(`Error sending lead to ${lenderName}:`, error.message);
-      }
+  // Send to all lenders in parallel. Each lender still waits on its own
+  // rate-limit queue (acquireLenderSlot), so a slow / low-limit lender only
+  // delays itself instead of every lender that comes after it in the list.
+  const results = await Promise.allSettled(
+    lenderNames.map(async (lenderName) => {
+      const result = await sendToLender(lead, lenderName);
+      console.log(`Lead ${lead.leadId} sent to ${lenderName} (${type})`);
+      return isLenderSuccess(result, lenderName);
+    })
+  );
+
+  // Keep the rule order in successfulLenders
+  const successfulLenders = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      if (r.value) successfulLenders.push(lenderNames[i]);
+    } else {
+      const msg = r.reason?.message || r.reason;
+      console.error(`Error sending lead ${lead.leadId} to ${lenderNames[i]}:`, typeof msg === 'string' ? msg : JSON.stringify(msg));
     }
-  }
+  });
 
   // Store successful lenders for RCS scheduling
   if (type === 'immediate' && successfulLenders.length > 0) {
@@ -360,7 +376,7 @@ async function sendToLender(lead, lender) {
 async function getDistributionRules(source) {
   try {
     const dbRules = await DistributionRule.findActiveBySource(source);
-    console.log("Get DBrules", dbRules);
+    console.log("Get DBrules", source, dbRules ? dbRules.ruleId : "default");
     
     if (dbRules) {
       return dbRules.rules;
@@ -473,72 +489,41 @@ async function scheduleRCSAfterAllLenders(leadId) {
 // Helper function to get successful lenders from all log collections
 async function getAllSuccessfulLendersForLead(leadId, lead) {
   const successfulLenders = [];
-  console.log("LC getAllSuccessfulLendersForLead : 507 line", leadId, lead, successfulLenders);
+  console.log("LC getAllSuccessfulLendersForLead", leadId);
   
   try {
-    const smlResults = await SMLResponseLog.findByLeadId(leadId);
-    const smlResult = smlResults.find(log => log.responseBody?.message === 'Lead created successfully');
-    if (smlResult) successfulLenders.push('SML');
+    // Check every lender's response-log table in parallel. Each lookup has its
+    // own error handling: one failing table (e.g. a missing DynamoDB table or
+    // index) only skips that lender instead of aborting the whole check and
+    // the LeadSuccess / RCS steps that follow.
+    const asItems = (res) => (Array.isArray(res) ? res : (res?.items || []));
+    const successChecks = [
+      ['SML', SMLResponseLog, log => log.responseBody?.message === 'Lead created successfully'],
+      ['FREO', FreoResponseLog, log => log.responseBody?.success === true],
+      ['OVLY', OvlyResponseLog, log => log.responseStatus === 'success'],
+      ['LendingPlate', LendingPlateResponseLog, log => log.responseStatus === 'Success'],
+      ['ZYPE', ZypeResponseLog, log => log.responseStatus === 'ACCEPT' || log.responseBody?.status === 'ACCEPT'],
+      ['FINTIFI', FintifiResponseLog, log => log.responseStatus === 200],
+      ['FATAKPAY', FatakPayResponseLog, log => log.responseBody?.message === 'You are eligible.'],
+      ['FATAKPAYPL', FatakPayResponseLogPL, log => log.responseBody?.message === 'You are eligible.'],
+      ['RAMFINCROP', RamFinCropLog, log => log.responseStatus === 'success'],
+      ['MyMoneyMantra', MMMResponseLog, log => log.responseStatus === 200 || log.responseStatus === 201],
+      ['CRMPaisa', CrmPaisaResponseLog, log => log.responseBody?.Message === 'Lead generated successfully.'],
+      ['INDIALENDS', IndiaLendsResponseLog, log => log.responseBody?.info?.message === 'Verification code sent to your mobile phone'],
+      ['CreditPluse', CreditPulseResponseLog, log => log.responseStatus === 'Success'],
+      ['MPOKKET', MpokketResponseLog, log => log.responseBody?.data?.message === 'Data Accepted Successfully'],
+    ];
 
-    const freoResults = await FreoResponseLog.findByLeadId(leadId);
-    const freoResult = freoResults.find(log => log.responseBody?.success === true);
-    if (freoResult) successfulLenders.push('FREO');
-
-    const ovlyResults = await OvlyResponseLog.findByLeadId(leadId);
-    const ovlyResult = ovlyResults.items?.find(log => log.responseStatus === 'success');
-    if (ovlyResult) successfulLenders.push('OVLY');
-
-    const lpResults = await LendingPlateResponseLog.findByLeadId(leadId);
-    const lpResult = lpResults.find(log => log.responseStatus === 'Success');
-    if (lpResult) successfulLenders.push('LendingPlate');
-
-    const zypeResults = await ZypeResponseLog.findByLeadId(leadId);
-    const zypeResult = zypeResults.items?.find(log => 
-      log.responseStatus === 'ACCEPT' || log.responseBody?.status === 'ACCEPT'
-    );
-    if (zypeResult) successfulLenders.push('ZYPE');
-
-    const fintifiResults = await FintifiResponseLog.findByLeadId(leadId);
-    const fintifiResult = fintifiResults.items.find(log => log.responseStatus === 200);
-    if (fintifiResult) successfulLenders.push('FINTIFI');
-
-    const fatakResults = await FatakPayResponseLog.findByLeadId(leadId);
-    const fatakResult = fatakResults.items.find(log => log.responseBody.message === 'You are eligible.');
-    if (fatakResult) successfulLenders.push('FATAKPAY');
-
-    const fatakPLResults = await FatakPayResponseLogPL.findByLeadId(leadId);
-    const fatakPLResult = fatakPLResults.items.find(log => log.responseBody.message === 'You are eligible.');
-    if (fatakPLResult) successfulLenders.push('FATAKPAYPL');
-
-    const ramResults = await RamFinCropLog.findByLeadId(leadId);
-    const ramResult = ramResults.items.find(log => log.responseStatus === 'success');
-    if (ramResult) successfulLenders.push('RAMFINCROP');
-
-    const mmmResults = await MMMResponseLog.findByLeadId(leadId);
-    const mmmResult = mmmResults.find(log => log.responseStatus === 200 || log.responseStatus === 201);
-    if (mmmResult) successfulLenders.push('MyMoneyMantra');
-
-    const CRMPaisaResults = await CrmPaisaResponseLog.findByLeadId(leadId);
-    const CRMPaisaResult = CRMPaisaResults.items.find(log => 
-      log.responseBody?.Message === 'Lead generated successfully.'
-    );
-    if (CRMPaisaResult) successfulLenders.push('CRMPaisa');
-
-    const IndiaLendsResults = await IndiaLendsResponseLog.findByLeadId(leadId);
-    const IndiaLendsResult = IndiaLendsResults.items.find(log => 
-      log.responseBody?.info?.message === 'Verification code sent to your mobile phone'
-    );
-    if (IndiaLendsResult) successfulLenders.push('INDIALENDS');
-
-    const cpResults = await CreditPulseResponseLog.findByLeadId(leadId);
-    const cpResult = cpResults.find(log => log.responseStatus === 'Success');
-    if (cpResult) successfulLenders.push('CreditPluse');
-
-    const MpokketResults = await MpokketResponseLog.findByLeadId(leadId);
-    const MpokketResult = MpokketResults.items.find(log => 
-      log.responseBody?.data?.message === 'Data Accepted Successfully'
-    );
-    if (MpokketResult) successfulLenders.push('MPOKKET');
+    const checkResults = await Promise.all(successChecks.map(async ([name, Model, isSuccess]) => {
+      try {
+        const logs = asItems(await Model.findByLeadId(leadId));
+        return logs.some(isSuccess) ? name : null;
+      } catch (err) {
+        console.error(`Success lookup failed for ${name} (lead ${leadId}): ${err.name || ''} ${err.message}`);
+        return null;
+      }
+    }));
+    checkResults.forEach(name => { if (name) successfulLenders.push(name); });
 
     console.log("LC getAllSuccessfulLendersForLead : 573 line", successfulLenders);
 

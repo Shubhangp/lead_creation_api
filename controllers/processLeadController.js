@@ -13,6 +13,7 @@ const ProcessLead = require('../models/processLeadModel');
 const PushJob = require('../models/pushJobModel');
 const Lead = require('../models/leadModel');
 const { getRateLimit } = require('../config/lenderRateLimits');
+const { acquireLenderSlots } = require('../utils/lenderRateLimiter');
 
 const {
     sendToSML,
@@ -257,47 +258,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ============================================================================
 // PER-LENDER RATE LIMITER (token bucket)
 // ----------------------------------------------------------------------------
-// Each lender gets one bucket whose capacity == its leads-per-minute limit.
-// Tokens refill continuously; sending a lead costs 1 token. When the bucket is
-// empty, take() waits until enough tokens have refilled. This caps the send
-// rate at exactly N leads/minute and smooths bursts, so lenders stop returning
-// "rate limit exceeded" / HTTP 429.
+// Uses the shared per-lender limiter in utils/lenderRateLimiter.js (same bucket
+// as the live lead API), so all senders together stay within the lender's
+// leads-per-minute limit, with sends spread evenly across the minute.
 // ============================================================================
-
-class TokenBucket {
-    constructor(ratePerMinute) {
-        this.capacity = Math.max(1, ratePerMinute);
-        this.tokens = this.capacity;          // start full
-        this.refillPerMs = ratePerMinute / 60000;
-        this.last = Date.now();
-    }
-
-    _refill() {
-        const now = Date.now();
-        this.tokens = Math.min(this.capacity, this.tokens + (now - this.last) * this.refillPerMs);
-        this.last = now;
-    }
-
-    // Consume n tokens, waiting as needed. Handles n larger than capacity by
-    // draining across multiple refill windows.
-    async take(n, shouldAbort = null) {
-        let remaining = n;
-        while (remaining > 0) {
-            // Bail out of a long rate-limit wait as soon as the job is cancelled.
-            if (shouldAbort && shouldAbort()) return false;
-            this._refill();
-            if (this.tokens >= 1) {
-                const consume = Math.min(remaining, Math.floor(this.tokens));
-                this.tokens -= consume;
-                remaining -= consume;
-            } else {
-                const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
-                await sleep(Math.min(Math.max(waitMs, 50), 1000));
-            }
-        }
-        return true;
-    }
-}
 
 // Build one limiter per lender for a job. Persisted for the whole push so the
 // rate is honoured across every page, not reset per page.
@@ -305,7 +269,8 @@ function buildLenderLimiters(lenders) {
     const limiters = {};
     lenders.forEach((l) => {
         const rpm = getRateLimit(l);
-        limiters[l] = new TokenBucket(rpm);
+        // Shared with the live lead API, so their combined traffic stays within the cap.
+        limiters[l] = { take: (n, shouldAbort) => acquireLenderSlots(l, n, shouldAbort) };
         console.log(`[Push] Rate limit for ${l}: ${rpm} leads/min`);
     });
     return limiters;

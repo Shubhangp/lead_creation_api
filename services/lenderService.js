@@ -143,7 +143,7 @@ function formatToYYYYMMDD(dateString) {
 
 async function sendToFreo(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("FREO", lead);
+  console.log("FREO", lead?.leadId);
   const {
     leadId, fullName, phone, email, dateOfBirth,
     gender, panNumber, jobType, salary, address, pincode, source
@@ -244,7 +244,7 @@ const getRandomResidenceType = () => {
 
 async function sendToOVLY(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("OVLY", lead);
+  console.log("OVLY", lead?.leadId);
   const {
     leadId, fullName, phone, email, dateOfBirth,
     gender, panNumber, jobType, salary, pincode, source
@@ -347,7 +347,7 @@ async function sendToOVLY(lead) {
 
 async function sendToLendingPlate(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("LP", lead);
+  console.log("LP", lead?.leadId);
   const {
     leadId, fullName, phone, panNumber, dateOfBirth, pincode, salary, source
   } = lead;
@@ -398,7 +398,7 @@ const processLoanApplication = async (payload) => {
   }
   try {
     const response = await axios.post(url, payload, { headers });
-    console.log(response.data);
+    console.log("LP response:", JSON.stringify(response.data));
     return response.data;
   } catch (error) {
     console.error('Error in loan process API:', error.response?.data || error.message);
@@ -422,7 +422,7 @@ const checkMobileExists = async (phone) => {
 
     return response.data.status === 'S';
   } catch (error) {
-    console.error('Error in mobile check API:', error.response?.data || error.message);
+    console.error('Error in mobile check API:', error.response?.status || 'no-status', JSON.stringify(error.response?.data) || error.message);
     return false;
   }
 };
@@ -431,7 +431,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function sendToZYPE(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("ZYPE", lead);
+  console.log("ZYPE", lead?.leadId);
   const {
     leadId, fullName, phone, email, dateOfBirth, panNumber, jobType, businessType, salary, source
   } = lead;
@@ -526,7 +526,7 @@ const processZypeApplication = async (payload) => {
 
 async function sendToFINTIFI(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("FINTIFI", lead);
+  console.log("FINTIFI", lead?.leadId);
   const {
     leadId, fullName, phone, email, dateOfBirth, gender, panNumber, jobType, salary, pincode, source
   } = lead;
@@ -575,7 +575,7 @@ async function sendToFINTIFI(lead) {
 
 async function sendToFATAKPAY(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("FATAKPAY", lead);
+  console.log("FATAKPAY", lead?.leadId);
   const {
     leadId, fullName, firstName, lastName, phone, email, dateOfBirth,
     gender, address, pincode, jobType, panNumber, source
@@ -1008,7 +1008,7 @@ function mapJobTypeToMMM(jobType) {
 
 async function sendToIndiaLends(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("IndiaLends API Call", lead);
+  console.log("IndiaLends API Call", lead?.leadId);
 
   const {
     leadId,
@@ -1233,7 +1233,7 @@ async function sendToMpokket(lead) {
       }
     );
 
-    console.log("Mpokket Dedupe Response:", dedupeResponse.data);
+    console.log("Mpokket Dedupe Response:", JSON.stringify(dedupeResponse.data));
 
     // Check if dedupe passed
     if (!dedupeResponse.data.success) {
@@ -1599,7 +1599,7 @@ const pinCodeDataCRMPaisa = readExcelFileCRMPaisa();
 
 async function sendToCreditPulse(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("CreditPulse", lead);
+  console.log("CreditPulse", lead?.leadId);
 
   const {
     leadId, fullName, phone, email, dateOfBirth,
@@ -1666,7 +1666,7 @@ const CREATE_URL = 'https://backend.creditsea.com/api/v1/leads/create-lead-dsa';
 
 async function sendToCreditSea(lead) {
   lead = applyLenderDefaults(lead);
-  console.log("CreditSea", lead);
+  console.log("CreditSea", lead?.leadId);
 
   const {
     leadId, fullName, phone, email, dateOfBirth,
@@ -1859,7 +1859,7 @@ const registerCustomer = async (payload) => {
   };
   try {
     const response = await axios.post(url, payload, { headers });
-    console.log('CreditHaat response:', response.data);
+    console.log('CreditHaat response:', JSON.stringify(response.data));
     return response.data;
   } catch (error) {
     console.error('Error in CreditHaat register API:', error.response?.data || error.message);

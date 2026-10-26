@@ -33,10 +33,6 @@ app.use(cors({
     origin: '*'
 }));
 
-app.use((req, res, next) => {
-    console.log('Hello from the middleware 👋');
-    next();
-});
 
 // Root route to respond with "Hello from Rate Cut"
 app.get('/', (req, res) => {

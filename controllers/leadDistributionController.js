@@ -2,6 +2,7 @@
 const Lead = require('../models/leadModel');
 const LeadDistributionStats = require('../models/leadDistributionStatsModel');
 const { getRateLimit } = require('../config/lenderRateLimits');
+const { acquireLenderSlots } = require('../utils/lenderRateLimiter');
 const { categorizeLenderResult } = require('../config/lenderResultCategorizer');
 
 // Import your lender-specific sending functions
@@ -134,44 +135,6 @@ const getLenderSendFunction = (lender) => {
   return lenderMap[lender];
 };
 
-/**
- * Token-bucket rate limiter (per-minute). Same pattern used in processLeadController.js.
- * refillPerMs = ratePerMinute / 60000 → tokens trickle back continuously.
- */
-class TokenBucket {
-  constructor(ratePerMinute) {
-    this.capacity = Math.max(1, ratePerMinute);
-    this.tokens = this.capacity;
-    this.refillPerMs = ratePerMinute / 60000;
-    this.last = Date.now();
-  }
-
-  _refill() {
-    const now = Date.now();
-    const elapsed = now - this.last;
-    if (elapsed > 0) {
-      this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillPerMs);
-      this.last = now;
-    }
-  }
-
-  async take(n = 1, shouldAbort = null) {
-    // If the request is bigger than the whole bucket, cap the wait to one full refill.
-    const need = Math.min(n, this.capacity);
-    while (true) {
-      // Bail out of a long rate-limit wait as soon as the batch is cancelled.
-      if (shouldAbort && shouldAbort()) return false;
-      this._refill();
-      if (this.tokens >= need) {
-        this.tokens -= need;
-        return true;
-      }
-      const deficit = need - this.tokens;
-      const waitMs = Math.ceil(deficit / this.refillPerMs);
-      await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, 1000)));
-    }
-  }
-}
 
 // In-memory guard so the same batchId's background loop is never running
 // twice at once in this process — e.g. boot-resume racing a still-running
@@ -190,7 +153,7 @@ const cancelledDistributionBatchIds = new Set();
  * `allLeads` array (and a second `filteredLeads` copy) — which caused OOM crashes
  * on 2L+ datasets — we now process ONE DynamoDB page at a time: fetch → filter →
  * rate-limited send → discard. Peak memory stays bounded to a single page.
- * A per-lender TokenBucket enforces the lender's per-minute rate limit.
+ * The shared per-lender limiter (utils/lenderRateLimiter) enforces the lender's per-minute rate limit.
  *
  * CRASH-RESUMABLE: after every page, the current position (source index +
  * DynamoDB lastEvaluatedKey) plus enough of the original request to relaunch
@@ -222,7 +185,8 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
 
   // Per-lender rate limiter (per minute). Sending is throttled to the lender's cap.
   const rpm = getRateLimit(lender);
-  const limiter = new TokenBucket(rpm);
+  // Shared with the live lead API, so their combined traffic stays within the cap.
+  const limiter = { take: (n, shouldAbort) => acquireLenderSlots(lender, n, shouldAbort) };
   console.log(`[Batch ${batchId}] Rate limit for ${lender}: ${rpm} leads/min`);
 
   // Running totals — shared across all pages (kept as plain scalars, not arrays).
