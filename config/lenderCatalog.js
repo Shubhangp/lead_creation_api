@@ -488,7 +488,7 @@ const LENDER_CATALOG = {
     code: 'kamakshimoney',
     name: 'Kamakshi Money', logo: '/kamakshimoney-logo.svg',
     maxAmount: 50000, minInterest: 20,
-    processingTime: '0-1 Day', approval: 'GOOD',
+    processingTime: '0-1 Day', approval: 'EXCELLENT',
     website: 'https://loan.kamakshimoney.com/auth/login?utm_source=ratecut&utm_medium={partner_ref}&utm_campaign=Ratecut&UTM_Partner_ReferenceID={partner_ref}',
     apr: 24, type: 'Fintech · Quick',
     rateRange: '15% – 20% p.a.', processingFee: 'Upto 5% of loan amount',
