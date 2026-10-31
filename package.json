@@ -36,6 +36,8 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@aws-sdk/client-iam": "^3.1160.0",
+    "@aws-sdk/client-lambda": "^3.1160.0",
     "nodemon": "^3.1.9"
   }
 }

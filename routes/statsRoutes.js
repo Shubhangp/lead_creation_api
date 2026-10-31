@@ -1,6 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const UnifiedStatsController = require('../controllers/statsController');
+const StatsV2 = require('../controllers/statsV2Controller');
+
+// ─── v2: pre-computed daily counters (stats_daily) — used by /admin/stats_dashboard
+router.get('/v2/meta', StatsV2.meta);
+router.get('/v2/snapshot', StatsV2.snapshot);
+router.get('/v2/range', StatsV2.range);
+router.get('/v2/alltime', StatsV2.allTime);
 
 /**
  * @route   GET /api/unified-stats/lenders

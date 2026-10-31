@@ -2,3 +2,5 @@
 /config.env
 /scripts
 /clearTable.js
+# purge script resume files
+scripts/.purge-checkpoints/
