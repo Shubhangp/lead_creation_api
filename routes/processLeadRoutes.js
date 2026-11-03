@@ -8,6 +8,7 @@ const {
   cancelPushJob,
   stopPushJobLender,
   listActivePushJobs,
+  getHistory,
   getAvailableLenders,
   getLeadCount,
   dedupCheckLeads,
@@ -33,6 +34,9 @@ router.get('/push-jobs', listActivePushJobs);
 
 // Poll push job status
 router.get('/push-jobs/:jobId', getPushJobStatus);
+
+// Push jobs + uploads, newest first (History tab).
+router.get('/history', getHistory);
 
 // Stop a running push — nothing further is sent to lenders
 router.post('/push-jobs/:jobId/cancel', cancelPushJob);

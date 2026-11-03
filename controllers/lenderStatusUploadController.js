@@ -9,7 +9,7 @@ const Lead         = require('../models/leadModel');
 const Disbursement = require('../models/disbursementModel');
 const { docClient } = require('../dynamodb');
 const { QueryCommand } = require('@aws-sdk/lib-dynamodb');
-const { resolveSource } = require('../config/sourceAliases');
+const { resolveSource, sourceFromUtm } = require('../config/sourceAliases');
 
 const RESPONSELOG_SOURCES = require('../config/registry').RESPONSELOG_SOURCES;
 
@@ -270,11 +270,7 @@ const LENDER_CONFIGS = {
     extractDisbursalAmount: (row) => pick(row, 'disbursedAmount', 'disbursed_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursedAt', 'disbursed_at'),
     extractSource: (row) => {
-      const m = String(pick(row, 'medium', 'Medium', 'utm_medium') || '').toLowerCase();
-      if (m.startsWith('fr')) return 'FREO';
-      if (m.startsWith('ck')) return 'CashKuber';
-      if (m.startsWith('ap')) return 'Apr';
-      return 'Ratecut';
+      return sourceFromUtm(pick(row, 'medium', 'Medium', 'utm_medium')) || 'Ratecut';
     },
     extractDetails: (row) => ({
       disbursedAmount:   pick(row, 'disbursedAmount', 'disbursed_amount'),
@@ -306,7 +302,10 @@ const LENDER_CONFIGS = {
     },
     extractDisbursalAmount: (row) => pick(row, 'Loan Amount', 'loan_amount'),
     extractDisbursalDate:   (row) => pick(row, 'Disbursed Date', 'disbursed_date'),
-    extractSource: (row) => pick(row, 'UTM Source', 'utm_source', 'utmSource'),
+    extractSource: (row) => {
+      const raw = pick(row, 'UTM Source', 'utm_source', 'utmSource');
+      return sourceFromUtm(raw) || raw;
+    },
     extractDetails: (row) => ({
       loanAmount:    pick(row, 'Loan Amount', 'loan_amount'),
       disbursedDate: pick(row, 'Disbursed Date', 'disbursed_date'),
@@ -459,18 +458,13 @@ const LENDER_CONFIGS = {
     extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'Disbursed Amount', 'disbursal_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'Disbursed Date', 'disbursal_date'),
     // Real sub-source is in Actual_utmMedium (Actual_utmSource is always "RateCut").
-    // Only fr/ck/ap/cpc are recognized sub-sources; everything else
-    // (default_medium, undefined, applynow1, API, …) falls back to Ratecut.
+    // Any SOURCE_ALIASES value or RC## partner reference is recognized (plus "cpc");
+    // everything else (default_medium, undefined, applynow1, API, …) falls back to Ratecut.
     extractSource: (row) => {
-      const raw = String(pick(row, 'Actual_utmMedium', 'actual_utmMedium', 'utm_medium') || '').trim().toLowerCase();
-      // Leading alphabetic token → handles URL-encoded variants like
-      // "fr%26p13%3d…" while keeping "applynow1" distinct from "ap".
-      const m = (raw.match(/^[a-z]+/) || [''])[0];
-      if (m === 'fr')  return 'FREO';
-      if (m === 'ck')  return 'CashKuber';
-      if (m === 'ap')  return 'Apr';
+      const raw = pick(row, 'Actual_utmMedium', 'actual_utmMedium', 'utm_medium');
+      const m = (String(raw || '').trim().toLowerCase().match(/^[a-z]+/) || [''])[0];
       if (m === 'cpc') return 'cpc';
-      return 'Ratecut';
+      return sourceFromUtm(raw) || 'Ratecut';
     },
     extractUTM: (row) => ({
       utmSource:   pick(row, 'Actual_utmSource',   'actual_utmSource'),
@@ -508,11 +502,8 @@ const LENDER_CONFIGS = {
     extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'disbursal_date', 'updated_at'),
     // Sub-source lives in `medium`; utm_source is always "RateCut".
     extractSource: (row) => {
-      const m = String(pick(row, 'medium', 'Medium', 'utm_medium') || '').toLowerCase();
-      if (m === 'fr' || m === 'freo')      return 'FREO';
-      if (m === 'ck' || m === 'cashkuber') return 'CashKuber';
-      if (m === 'ap' || m === 'apr')       return 'Apr';
-      return 'Ratecut'; // rtct, existing, blank, or anything else
+      // any alias / RC## partner reference; rtct, existing, blank, etc. → Ratecut
+      return sourceFromUtm(pick(row, 'medium', 'Medium', 'utm_medium')) || 'Ratecut';
     },
     extractUTM: (row) => ({
       utmCampaign: pick(row, 'ppc_campaign', 'utm_campaign', 'campaign'),
@@ -627,12 +618,34 @@ function resolveUnmatchedSource(config, row) {
 // to canonical "YYYY-MM-DD" so date-range filtering works on the dashboard.
 function normalizeDate(val) {
   if (!val) return null;
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  // Excel date cells (cellDates: true) arrive as JS Dates at LOCAL midnight.
+  // toISOString() would convert to UTC and shift IST dates back a day
+  // (2026-10-01 00:00 IST → 2026-09-30T18:30Z), so read the local calendar date.
+  // Rounded to the minute first: SheetJS can land a few seconds before midnight.
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return null;
+    return ymd(new Date(Math.round(val.getTime() / 60000) * 60000));
+  }
   const s = String(val).trim();
+  // Full timestamp with a zone, e.g. "2026-09-30T18:30:00.000Z". This is what an
+  // Excel date cell becomes after the dashboard parses the sheet in the browser
+  // (IST midnight) and sends it as JSON. Read it back as the IST calendar date.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+    const t = Date.parse(s);
+    if (!isNaN(t)) {
+      const ist = new Date(Math.round(t / 60000) * 60000 + 330 * 60000);
+      return ist.toISOString().slice(0, 10);
+    }
+  }
+  // yyyy-mm-dd (optionally followed by a local time) → take the date part as written
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return `${iso[1]}-${iso[2].padStart(2, '0')}-${iso[3].padStart(2, '0')}`;
   // dd/mm/yyyy or dd-mm-yyyy (Indian MIS convention)
   const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
   if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
   const d = new Date(s);
-  if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+  if (!isNaN(d.getTime())) return ymd(d);
   return s; // keep raw value if unparseable
 }
 
@@ -640,6 +653,23 @@ function tryParseJSON(val) {
   if (!val) return null;
   if (typeof val === 'object') return val;
   try { return JSON.parse(val); } catch { return null; }
+}
+
+// Excel date cells → the text Excel shows, computed from the serial number
+// (no JS Date, so no time zone can shift it): "2026-10-01" or "2026-10-01 11:21:48".
+function excelDatesToText(ws) {
+  const pad = (n) => String(n).padStart(2, '0');
+  for (const addr of Object.keys(ws)) {
+    if (addr[0] === '!') continue;
+    const cell = ws[addr];
+    if (!cell || cell.t !== 'n' || !cell.z || !XLSX.SSF.is_date(cell.z)) continue;
+    const p = XLSX.SSF.parse_date_code(cell.v);
+    if (!p) continue;
+    let text = `${p.y}-${pad(p.m)}-${pad(p.d)}`;
+    if (p.H || p.M || p.S) text += ` ${pad(p.H)}:${pad(p.M)}:${pad(p.S)}`;
+    cell.t = 's'; cell.v = text; cell.w = text; delete cell.z;
+  }
+  return ws;
 }
 
 function parseFile(filePath, originalFilename, config) {
@@ -650,14 +680,16 @@ function parseFile(filePath, originalFilename, config) {
     const content = fs.readFileSync(filePath, 'utf-8');
     rows = csv.parse(content, { columns: true, skip_empty_lines: true, trim: true });
   } else {
-    const workbook = XLSX.readFile(filePath, { cellDates: true });
+    // cellNF keeps number formats so date cells can be recognised; dates are
+    // converted to text from the Excel serial (see excelDatesToText) — never via JS Date.
+    const workbook = XLSX.readFile(filePath, { cellNF: true });
     // Prefer an extension-specific sheet (e.g. RAW for .xlsb, Sheet1 for .xlsx),
     // then the config default, then the first sheet.
     let sheetName = (config.sheetByExt && config.sheetByExt[ext]) || config.sheetName;
     if (!sheetName || !workbook.SheetNames.includes(sheetName)) {
       sheetName = workbook.SheetNames[0];
     }
-    rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: null });
+    rows = XLSX.utils.sheet_to_json(excelDatesToText(workbook.Sheets[sheetName]), { defval: null });
   }
 
   return rows;
@@ -826,8 +858,11 @@ async function syncMISToLeads(rows, config, options = {}) {
             source = rawSrc ? resolveSource(rawSrc) : config.displayName;
           } else {
             // Resolve source from UTM (try utmSource → utmCampaign → utmMedium)
+            // Any field that is a known alias or an RC## partner reference wins;
+            // otherwise keep the old behaviour (first non-empty UTM, as-is).
+            const known = sourceFromUtm(utm.utmSource) || sourceFromUtm(utm.utmCampaign) || sourceFromUtm(utm.utmMedium);
             const rawUTM = utm.utmSource || utm.utmCampaign || utm.utmMedium || null;
-            source = rawUTM ? resolveSource(rawUTM) : config.displayName;
+            source = known || (rawUTM ? resolveSource(rawUTM) : config.displayName);
           }
           const phone    = config.extractPhone ? config.extractPhone(row) : null;
           // Fallback row key for MIS files without a phone column (e.g. TrueFund)

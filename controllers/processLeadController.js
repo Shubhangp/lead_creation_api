@@ -11,6 +11,8 @@ const { v4: uuidv4 } = require('uuid');
 
 const ProcessLead = require('../models/processLeadModel');
 const PushJob = require('../models/pushJobModel');
+const PushJobItem = require('../models/pushJobItemModel');
+const { categorizeLenderResult } = require('../config/lenderResultCategorizer');
 const Lead = require('../models/leadModel');
 const { getRateLimit } = require('../config/lenderRateLimits');
 const { acquireLenderSlots } = require('../utils/lenderRateLimiter');
@@ -277,39 +279,102 @@ function buildLenderLimiters(lenders) {
 }
 
 // ============================================================================
-// LENDER DISPATCH
+// LENDER DISPATCH — one independent worker per lender
 // ============================================================================
 
 const LENDER_BATCH = 50;
 
-async function dispatchToLender(lender, leads, limiter, shouldStop = () => false) {
+// Lender response → the same status category the stats dashboard uses.
+function categoryOf(lender, result, error) {
+    try { return categorizeLenderResult(lender, result, error) || (error ? 'error' : 'other'); }
+    catch (_) { return error ? 'error' : 'other'; }
+}
+
+/**
+ * Sends the job's queued leads (push_job_items) to ONE lender, from that
+ * lender's own cursor, at that lender's own rate limit. Runs alongside the
+ * other lenders' workers, so a slow lender never holds the fast ones back.
+ * Progress (cursor + counts) is checkpointed after every batch.
+ */
+async function runLenderWorker(jobId, lender, job, state, limiter, stop) {
+    const prev = (job.lenderResults && job.lenderResults[lender]) || {};
+    const r = {
+        lender,
+        status: 'running',
+        total: prev.total || 0,
+        successCount: prev.successCount || 0,
+        failCount: prev.failCount || 0,
+        categories: { ...(prev.categories || {}) },
+        startedAt: prev.startedAt || new Date().toISOString(),
+    };
+    let cursor = job.lenderCursors && job.lenderCursors[lender] !== undefined ? job.lenderCursors[lender] : -1;
+    state.cursors[lender] = cursor;
+
     const sendFn = LENDER_MAP[lender];
-    if (!sendFn) return { lender, status: 'skipped', message: 'Not configured', total: leads.length };
-
-    let successCount = 0;
-    let failCount = 0;
-    let sent = 0;
-
-    // Send in batches, gating each batch on the lender's token bucket so we
-    // never exceed its leads-per-minute limit.
-    for (let i = 0; i < leads.length; i += LENDER_BATCH) {
-        // Admin pressed Stop — don't send anything more to this lender.
-        if (shouldStop()) break;
-
-        const batch = leads.slice(i, i + LENDER_BATCH);
-
-        if (limiter) await limiter.take(batch.length, shouldStop); // throttle to rate limit
-        if (shouldStop()) break;
-
-        const batchResult = await Promise.allSettled(
-            batch.map((lead) => sendFn({ ...lead, leadId: lead.leadId }))
-        );
-        batchResult.forEach((r) => r.status === 'fulfilled' ? successCount++ : failCount++);
-        sent += batch.length;
+    if (!sendFn) {
+        r.status = 'skipped';
+        r.message = 'Not configured';
+        state.finished.add(lender);
+        await PushJob.updateLender(jobId, lender, r).catch(() => {});
+        return r;
     }
 
-    // `total` counts only leads actually sent, so a stopped job's numbers stay honest.
-    return { lender, status: 'done', total: sent, successCount, failCount };
+    let consecutiveErrors = 0;
+    while (!stop()) {
+        try {
+            const items = await PushJobItem.readAfter(jobId, cursor, LENDER_BATCH);
+            if (items.length === 0) {
+                if (state.saveDone || state.fatal) {
+                    // The save loop finished — one more read catches its last page.
+                    const tail = await PushJobItem.readAfter(jobId, cursor, 1);
+                    if (tail.length === 0) break;
+                    continue;
+                }
+                await sleep(1000); // queue empty for now; the save loop is still preparing leads
+                continue;
+            }
+
+            if (limiter) await limiter.take(items.length, stop); // lender's leads/min cap
+            if (stop()) break;
+
+            const settled = await Promise.allSettled(
+                items.map((it) => sendFn({ ...it.lead, leadId: it.lead.leadId }))
+            );
+            settled.forEach((s) => {
+                if (s.status === 'fulfilled') r.successCount++;
+                else r.failCount++;
+                const cat = categoryOf(lender, s.status === 'fulfilled' ? s.value : undefined, s.status === 'rejected' ? s.reason : null);
+                r.categories[cat] = (r.categories[cat] || 0) + 1;
+            });
+            r.total += items.length;
+            cursor = items[items.length - 1].seq;
+            state.cursors[lender] = cursor;
+            await PushJob.updateLender(jobId, lender, r, cursor);
+            consecutiveErrors = 0;
+        } catch (err) {
+            consecutiveErrors++;
+            console.error(`[Push ${jobId}] ${lender} worker error (${consecutiveErrors}):`, err.message);
+            if (consecutiveErrors >= 20) {
+                r.status = 'error';
+                r.message = err.message;
+                break;
+            }
+            await sleep(Math.min(30000, 1000 * consecutiveErrors));
+        }
+    }
+
+    if (r.status === 'running') {
+        r.status = isLenderStopped(jobId, lender) ? 'stopped'
+            : (state.cancelled || cancelledJobIds.has(jobId)) ? 'cancelled'
+            : state.fatal ? 'error'
+            : 'done';
+    }
+    r.finishedAt = new Date().toISOString();
+    state.finished.add(lender);
+    await PushJob.updateLender(jobId, lender, r, cursor).catch((e) =>
+        console.error(`[Push ${jobId}] ${lender} final update failed:`, e.message));
+    console.log(`[Push ${jobId}] ${lender} ${r.status}: sent=${r.total} ok=${r.successCount} fail=${r.failCount}`);
+    return r;
 }
 
 // ============================================================================
@@ -418,42 +483,30 @@ async function savePageToLeadsTable(leads) {
 // ============================================================================
 // BACKGROUND PUSH PROCESSOR
 //
-// Key design decisions that make this survive frontend close / EC2 restarts:
-//
-//  1. Job state lives in DynamoDB (PushJob model), NOT in process memory.
-//     If the process dies and restarts, the job record is still there.
-//
-//  2. Pagination is checkpointed after every page. ProcessLead.findBySourceAndDateRange
-//     accepts a lastKey token. After each page is saved+dispatched, the lastKey
-//     is written back to DynamoDB. A restart calls resumePushJob() which reads
-//     the lastKey and continues from exactly where it left off.
-//
-//  3. The push loop processes PAGE_SIZE leads at a time — never loads the full
-//     dataset into memory. Safe for 100k+ leads on t2.micro.
-//
-//  4. Lender dispatch happens per-page too. All lenders receive each page before
-//     moving to the next page. This means lenders are always fed in order and
-//     no lead is dispatched twice even on resume.
+//  • Save loop: pages process_leads (PAGE_SIZE rows), creates/reuses the leads-
+//    table rows and appends every dispatchable lead to push_job_items with an
+//    increasing seq. Checkpointed after every page (lastKey + nextSeq).
+//  • One worker per lender reads push_job_items from its own cursor at its own
+//    rate limit. A slow lender (e.g. 30 leads/min) no longer makes the fast
+//    ones wait page after page — the old loop moved at the slowest lender's pace.
+//  • The save loop stays at most SAVE_AHEAD leads ahead of the FASTEST lender,
+//    so stopping a job never leaves a large pile of saved-but-unsent leads.
+//  • Everything lives in DynamoDB (push_jobs + push_job_items): the page can be
+//    closed, the server can restart, and each lender resumes from its cursor.
 // ============================================================================
 
-const PAGE_SIZE = 500; // leads fetched from process_leads per loop iteration
+const PAGE_SIZE = 500;   // leads fetched from process_leads per save-loop page
+const SAVE_AHEAD = 1000; // max leads prepared beyond the fastest lender's position
 
-// In-memory guard so the same jobId's background loop is never running twice
-// in this process at once — e.g. boot-resume and a manual /resume call
-// racing each other, or resumeIncompletePushJobs() being triggered twice.
-// This is per-process only; it doesn't protect against two server instances
-// racing, but this app runs as a single instance.
+// In-memory guard so the same jobId's background loop never runs twice in this
+// process (e.g. boot-resume racing a manual /resume). Single-instance app.
 const activeJobIds = new Set();
 
-// Jobs an admin has asked to stop (POST /push-jobs/:jobId/cancel). Checked
-// before every lender batch so a stop takes effect within one batch, without
-// waiting for the next DynamoDB read. The DB status ('cancelled') is the
-// durable source of truth and is re-read once per page as a backstop.
+// Jobs an admin asked to stop; checked before every lender batch. The DB
+// status ('cancelled') is the durable copy, re-read every few seconds.
 const cancelledJobIds = new Set();
 
-// Per-lender stops: jobId -> Set(lender). Same idea as cancelledJobIds but for
-// one lender only — the rest of the job keeps sending. Durable copy lives in
-// job.stoppedLenders and is re-read once per page.
+// Per-lender stops: jobId -> Set(lender).
 const stoppedLendersByJob = new Map();
 const isLenderStopped = (jobId, lender) => stoppedLendersByJob.get(jobId)?.has(lender) || false;
 const markLenderStoppedInMemory = (jobId, lender) => {
@@ -461,194 +514,142 @@ const markLenderStoppedInMemory = (jobId, lender) => {
     stoppedLendersByJob.get(jobId).add(lender);
 };
 
+async function runSaveLoop(jobId, job, state, { source, startDate, endDate, lenders }, shouldStop) {
+    let lastKey = job.lastKey ? JSON.parse(job.lastKey) : null;
+    const totals = {
+        savedToLeads: job.savedToLeads || 0,
+        reusedLeads: job.reusedLeads || 0,
+        failedToSave: job.failedToSave || 0,
+        queuedForLenders: job.queuedForLenders || 0,
+        queueWriteFailed: job.queueWriteFailed || 0,
+    };
+    let pageNumber = 0;
+
+    // Already past the first page and nothing left → the previous run finished saving.
+    if (job.nextSeq > 0 && !job.lastKey) { state.saveDone = true; return; }
+
+    do {
+        // Wait while we're far enough ahead of the fastest live lender.
+        for (;;) {
+            if (shouldStop()) return;
+            const live = lenders.filter((l) => !isLenderStopped(jobId, l) && !state.finished.has(l));
+            if (live.length === 0) return;
+            const fastest = Math.max(...live.map((l) => state.cursors[l] ?? -1));
+            if (state.nextSeq - 1 - fastest < SAVE_AHEAD) break;
+            await sleep(500);
+        }
+
+        pageNumber++;
+        const { items: page, lastEvaluatedKey } = await ProcessLead.findBySourceAndDateRange(
+            source, startDate, endDate, { limit: PAGE_SIZE, lastKey }
+        );
+        if (page.length === 0) break;
+
+        const { saved, reused, failed } = await savePageToLeadsTable(page);
+        const toDispatch = saved.concat(reused);
+        const writeFailed = toDispatch.length ? await PushJobItem.appendMany(jobId, state.nextSeq, toDispatch) : 0;
+
+        state.nextSeq += toDispatch.length;
+        totals.savedToLeads += saved.length;
+        totals.reusedLeads += reused.length;
+        totals.failedToSave += failed.length;
+        totals.queuedForLenders += toDispatch.length - writeFailed;
+        totals.queueWriteFailed += writeFailed;
+        if (writeFailed) console.error(`[Push ${jobId}] ${writeFailed} leads could not be queued for lenders on page ${pageNumber}`);
+
+        lastKey = lastEvaluatedKey || null;
+        await PushJob.checkpoint(jobId, {
+            lastKey: lastKey ? JSON.stringify(lastKey) : null,
+            nextSeq: state.nextSeq,
+            ...totals,
+        });
+        console.log(`[Push ${jobId}] Page ${pageNumber}: saved=${saved.length} reused=${reused.length} failed=${failed.length} | queued total=${totals.queuedForLenders}`);
+    } while (lastKey);
+
+    state.saveDone = true;
+    await PushJob.update(jobId, { saveDone: true, lastKey: null });
+}
+
 async function runPushInBackground(jobId, { source, startDate, endDate, lenders }) {
     if (activeJobIds.has(jobId)) {
         console.log(`[Push ${jobId}] Already running in this process — skipping duplicate launch`);
         return;
     }
     activeJobIds.add(jobId);
+    let watcher = null;
 
-    // Everything from here down — including the initial PushJob.get() lookup
-    // — is inside one try/finally so a thrown error anywhere (not just inside
-    // the page loop) still releases the in-memory guard. Without this, a
-    // transient DynamoDB error on the very first read would leave jobId stuck
-    // in activeJobIds forever, blocking any future resume attempt for it.
     try {
-        console.log(`[Push ${jobId}] Starting | source=${source} | ${startDate} → ${endDate}`);
+        console.log(`[Push ${jobId}] Starting | source=${source} | ${startDate} → ${endDate} | lenders=${lenders.join(',')}`);
 
-        // Read existing job to check for a checkpoint (resume after restart)
-        let job = await PushJob.get(jobId);
+        const job = await PushJob.get(jobId);
         if (!job) {
-            console.error(`[Push ${jobId}] Job record not found in DynamoDB — cannot run`);
+            console.error(`[Push ${jobId}] Job record not found — cannot run`);
             return;
         }
-
-        // If already completed, failed or cancelled do not re-run
         if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
             console.log(`[Push ${jobId}] Already ${job.status} — skipping`);
             return;
         }
 
-        // Restore checkpoint if this is a resume after restart
-        let lastKey = job.lastKey ? JSON.parse(job.lastKey) : null;
-        let totalSaved = job.savedToLeads || 0;
-        let totalFailed = job.failedToSave || 0;
-        // Rows that matched an existing lead — dispatched, but not re-inserted.
-        // Tracked separately from savedToLeads so the lender totals still add up.
-        let totalReused = job.reusedLeads || 0;
-        let allSavedLeads = [];   // accumulates per-page for lender dispatch
-
-        const lenderAccumulators = {};
-        lenders.forEach((l) => {
-            lenderAccumulators[l] = { lender: l, status: 'running', total: 0, successCount: 0, failCount: 0 };
-        });
-
-        // One rate limiter per lender, created once and reused across all pages
-        // so each lender's leads/min cap holds for the entire job.
-        const lenderLimiters = buildLenderLimiters(lenders);
-
-        // Restore partial lender results if resuming
-        if (job.lenderResults && Object.keys(job.lenderResults).length > 0) {
-            Object.entries(job.lenderResults).forEach(([l, r]) => {
-                if (lenderAccumulators[l]) {
-                    lenderAccumulators[l].total = r.total || 0;
-                    lenderAccumulators[l].successCount = r.successCount || 0;
-                    lenderAccumulators[l].failCount = r.failCount || 0;
-                }
-            });
-        }
-
-        let pageNumber = 0;
-        let cancelled = false;
-        const shouldStop = () => cancelled || cancelledJobIds.has(jobId);
-        const lenderShouldStop = (lender) => () => shouldStop() || isLenderStopped(jobId, lender);
-        const lenderStatus = (l, running) => (isLenderStopped(jobId, l) ? 'stopped' : running);
-
-        // Lenders stopped before a restart stay stopped on resume.
+        const state = {
+            cancelled: false,
+            fatal: null,
+            saveDone: !!job.saveDone,
+            nextSeq: job.nextSeq || 0,
+            cursors: {},
+            finished: new Set(),
+        };
         (job.stoppedLenders || []).forEach((l) => markLenderStoppedInMemory(jobId, l));
 
-        // ── Main pagination loop ───────────────────────────────────────────────
-        do {
-            // Stop check before touching the next page (DB read covers a cancel
-            // that arrived while this process didn't have the job in memory).
-            if (!shouldStop()) {
+        const shouldStop = () => state.cancelled || !!state.fatal || cancelledJobIds.has(jobId);
+        const lenderStop = (l) => () => shouldStop() || isLenderStopped(jobId, l);
+
+        // Pick up a cancel / lender stop written by another request or before a restart.
+        watcher = setInterval(async () => {
+            try {
                 const fresh = await PushJob.get(jobId);
-                if (fresh && fresh.status === 'cancelled') cancelled = true;
+                if (fresh && fresh.status === 'cancelled') state.cancelled = true;
                 (fresh?.stoppedLenders || []).forEach((l) => markLenderStoppedInMemory(jobId, l));
-            }
-            if (shouldStop()) { cancelled = true; break; }
+            } catch (_) { /* next tick */ }
+        }, 5000);
 
-            // Every lender stopped individually → nothing left to send.
-            const liveLenders = lenders.filter((l) => !isLenderStopped(jobId, l));
-            if (liveLenders.length === 0) {
-                console.log(`[Push ${jobId}] All lenders stopped individually — ending job`);
-                await PushJob.markCancelled(jobId);
-                cancelled = true;
-                break;
-            }
+        const limiters = buildLenderLimiters(lenders);
+        const saver = state.saveDone
+            ? Promise.resolve()
+            : runSaveLoop(jobId, job, state, { source, startDate, endDate, lenders }, shouldStop)
+                .catch((err) => { state.fatal = err; console.error(`[Push ${jobId}] Save loop failed:`, err); });
+        const workers = lenders.map((l) => runLenderWorker(jobId, l, job, state, limiters[l], lenderStop(l)));
 
-            pageNumber++;
-            console.log(`[Push ${jobId}] Page ${pageNumber} | lastKey=${lastKey ? 'set' : 'null'}`);
+        await saver;
+        // If the save loop stopped early (e.g. every lender was stopped), let the
+        // workers see "no more leads are coming".
+        state.saveDone = true;
+        const results = await Promise.all(workers);
+        const finalResults = Object.fromEntries(results.map((r) => [r.lender, r]));
 
-            // Fetch one page from process_leads via GSI
-            const { items: page, lastEvaluatedKey } = await ProcessLead.findBySourceAndDateRange(
-                source, startDate, endDate,
-                { limit: PAGE_SIZE, lastKey }
-            );
-
-            if (page.length === 0) {
-                console.log(`[Push ${jobId}] Empty page — done`);
-                break;
-            }
-
-            // Save this page to the leads table
-            const { saved, reused, failed } = await savePageToLeadsTable(page);
-
-            totalSaved += saved.length;
-            totalReused += reused.length;
-            totalFailed += failed.length;
-
-            // Both new and reused leads go to the lenders — a lead matched to an
-            // existing row is dispatched under that row's leadId.
-            const toDispatch = saved.concat(reused);
-
-            console.log(`[Push ${jobId}] Page ${pageNumber}: saved=${saved.length} reused=${reused.length} failed=${failed.length} | running total saved=${totalSaved} reused=${totalReused}`);
-
-            // Dispatch this page to every selected lender
-            if (toDispatch.length > 0) {
-                const lenderResults = await Promise.allSettled(
-                    liveLenders.map((lender) => dispatchToLender(lender, toDispatch, lenderLimiters[lender], lenderShouldStop(lender)))
-                );
-                liveLenders.forEach((lender, i) => {
-                    const r = lenderResults[i];
-                    if (r.status === 'fulfilled') {
-                        lenderAccumulators[lender].total += r.value.total || 0;
-                        lenderAccumulators[lender].successCount += r.value.successCount || 0;
-                        lenderAccumulators[lender].failCount += r.value.failCount || 0;
-                    } else {
-                        lenderAccumulators[lender].failCount += toDispatch.length;
-                        console.error(`[Push ${jobId}] Lender ${lender} error on page ${pageNumber}:`, r.reason?.message);
-                    }
-                });
-            }
-
-            // ── CHECKPOINT — write progress to DynamoDB ────────────────────────
-            // If the process dies here, the next start resumes from lastEvaluatedKey.
-            lastKey = lastEvaluatedKey || null;
-            await PushJob.checkpoint(
-                jobId,
-                lastKey ? JSON.stringify(lastKey) : null,
-                totalSaved,
-                totalFailed
-            );
-            // Also persist rolling lender totals so poll response is always fresh
-            await PushJob.update(jobId, {
-                reusedLeads: totalReused,
-                lenderResults: Object.fromEntries(
-                    Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: lenderStatus(l, 'running') }])
-                ),
-            });
-
-            await sleep(0); // yield event loop between pages
-
-            if (shouldStop()) { cancelled = true; break; }
-
-        } while (lastKey); // lastKey null = no more pages
-
-        // ── Stopped by admin ──────────────────────────────────────────────────
-        // Status is already 'cancelled' in DynamoDB (set by the cancel endpoint);
-        // just record the final per-lender numbers for what was actually sent.
-        if (cancelled || shouldStop()) {
-            await PushJob.update(jobId, {
-                reusedLeads: totalReused,
-                savedToLeads: totalSaved,
-                failedToSave: totalFailed,
-                lenderResults: Object.fromEntries(
-                    Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: lenderStatus(l, 'cancelled') }])
-                ),
-            });
-            console.log(`[Push ${jobId}] ⛔ Stopped by admin. Saved=${totalSaved} Reused=${totalReused} Failed=${totalFailed}`);
+        if (state.fatal) {
+            await PushJob.update(jobId, { lenderResults: finalResults }).catch(() => {});
+            await PushJob.markFailed(jobId, state.fatal.message);
             return;
         }
 
-        // ── Mark job complete ─────────────────────────────────────────────────
-        const finalLenderResults = Object.fromEntries(
-            Object.entries(lenderAccumulators).map(([l, r]) => [l, { ...r, status: lenderStatus(l, 'done') }])
-        );
+        const allStopped = lenders.every((l) => isLenderStopped(jobId, l));
+        if (state.cancelled || cancelledJobIds.has(jobId) || allStopped) {
+            if (allStopped) await PushJob.markCancelled(jobId);
+            await PushJob.update(jobId, { lenderResults: finalResults });
+            console.log(`[Push ${jobId}] ⛔ Stopped by admin`);
+            return;
+        }
 
-        await PushJob.markCompleted(jobId, finalLenderResults);
-
-        console.log(`[Push ${jobId}] Done. Saved=${totalSaved} Reused=${totalReused} Failed=${totalFailed}`);
-
+        await PushJob.markCompleted(jobId, finalResults);
+        console.log(`[Push ${jobId}] Done.`);
     } catch (err) {
         console.error(`[Push ${jobId}] Fatal:`, err);
-        // Best-effort — if this failed before the job record was even
-        // confirmed to exist (e.g. PushJob.get itself threw), don't let a
-        // second error here mask the original one or crash the process.
         await PushJob.markFailed(jobId, err.message).catch((markErr) => {
             console.error(`[Push ${jobId}] Also failed to mark job as failed:`, markErr.message);
         });
     } finally {
+        if (watcher) clearInterval(watcher);
         activeJobIds.delete(jobId);
         cancelledJobIds.delete(jobId);
         stoppedLendersByJob.delete(jobId);
@@ -708,11 +709,12 @@ exports.resumeIncompletePushJobs = async () => {
  * row and bulk-inserts into the process_leads table. Used by both the classic
  * single-shot upload and the chunked upload flow.
  */
-async function processExcelFile(tempFilePath, source) {
+async function processExcelFile(tempFilePath, source, fileName = null) {
     const uploadBatch = `${source}-${Date.now()}`;
+    const startedAt = new Date().toISOString();
     const summary = { total: 0, succeeded: 0, failed: 0, skipped: 0 };
 
-    for await (const chunk of streamExcelChunks(tempFilePath, 500)) {
+    for await (const chunk of streamExcelChunks(tempFilePath, 2000)) {
         const leadsData = [];
         for (const { raw } of chunk) {
             summary.total++;
@@ -735,6 +737,13 @@ async function processExcelFile(tempFilePath, source) {
         );
     }
 
+    // History entry for admin/lead_upload (best-effort — never fails the upload).
+    await PushJob.recordUpload(uploadBatch, {
+        status: 'completed', source, fileName,
+        total: summary.total, succeeded: summary.succeeded, failed: summary.failed, skipped: summary.skipped,
+        startedAt, completedAt: new Date().toISOString(),
+    }).catch((e) => console.error('[ProcessLead] Upload history write failed:', e.message));
+
     return { summary, uploadBatch };
 }
 
@@ -750,7 +759,7 @@ exports.uploadProcessLeads = [
             }
 
             const source = req.body.source;
-            const { summary, uploadBatch } = await processExcelFile(tempFilePath, source);
+            const { summary, uploadBatch } = await processExcelFile(tempFilePath, source, req.body.fileName || req.file.originalname);
 
             return res.status(200).json({
                 success: true,
@@ -842,7 +851,7 @@ exports.uploadProcessLeadsChunk = [
  * then deletes it.
  */
 exports.completeProcessLeadsUpload = async (req, res) => {
-    const { uploadId, source } = req.body || {};
+    const { uploadId, source, fileName } = req.body || {};
     const filePath = uploadId ? chunkFilePath(uploadId) : null;
     try {
         if (!uploadId || !filePath) return res.status(400).json({ success: false, message: 'uploadId is required' });
@@ -851,7 +860,7 @@ exports.completeProcessLeadsUpload = async (req, res) => {
             return res.status(404).json({ success: false, message: 'No uploaded chunks found for this uploadId' });
         }
 
-        const { summary, uploadBatch } = await processExcelFile(filePath, source);
+        const { summary, uploadBatch } = await processExcelFile(filePath, source, fileName || null);
 
         return res.status(200).json({
             success: true,
@@ -1126,6 +1135,21 @@ exports.listActivePushJobs = async (_req, res) => {
 };
 
 /**
+ * GET /api/v1/process-leads/history?type=PUSH_JOB|UPLOAD&limit=200
+ * Push jobs and uploads, newest first — the History tab of admin/lead_upload.
+ */
+exports.getHistory = async (req, res) => {
+    try {
+        const type = ['PUSH_JOB', 'UPLOAD'].includes(req.query.type) ? req.query.type : undefined;
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+        const items = await PushJob.list({ type, limit });
+        res.status(200).json({ success: true, data: items });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Server error', error: err.message });
+    }
+};
+
+/**
  * GET /api/v1/process-leads/lenders
  */
 exports.getAvailableLenders = (_req, res) => {
@@ -1174,7 +1198,7 @@ exports.getLeadCount = async (req, res) => {
  * step dispatches it to lenders under the existing lead instead of creating a
  * second row in the leads table.
  */
-const DEDUP_CONCURRENCY = 25;
+const DEDUP_CONCURRENCY = 64;
 
 exports.dedupCheckLeads = async (req, res) => {
     try {

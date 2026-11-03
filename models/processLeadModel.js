@@ -13,38 +13,50 @@ const TABLE_NAME = process.env.PROCESS_LEADS_TABLE || 'process_leads';
 const DYNAMO_BATCH_LIMIT = 25;
 
 // ─── Batch writer with auto-retry on unprocessed items ────────────────────────
-async function batchWriteItems(items) {
-    const failed = [];
+// Chunks of 25 are written WRITE_CONCURRENCY at a time (they used to go one
+// after another, which made large uploads slow).
+const WRITE_CONCURRENCY = 8;
 
-    for (let i = 0; i < items.length; i += DYNAMO_BATCH_LIMIT) {
-        const chunk = items.slice(i, i + DYNAMO_BATCH_LIMIT);
-        let unprocessed = {
-            [TABLE_NAME]: chunk.map((Item) => ({ PutRequest: { Item } })),
-        };
+async function writeChunk(chunk, failed) {
+    let unprocessed = {
+        [TABLE_NAME]: chunk.map((Item) => ({ PutRequest: { Item } })),
+    };
 
-        let attempt = 0;
-        while (Object.keys(unprocessed).length > 0 && attempt < 5) {
-            if (attempt > 0) await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
-            try {
-                const result = await docClient.send(
-                    new BatchWriteCommand({ RequestItems: unprocessed })
-                );
-                unprocessed = result.UnprocessedItems || {};
-            } catch (err) {
-                console.error('[ProcessLead] BatchWrite error:', err.message);
-                chunk.forEach((item) => failed.push({ item, reason: err.message }));
-                break;
-            }
-            attempt++;
-        }
-
-        if (unprocessed[TABLE_NAME]?.length) {
-            unprocessed[TABLE_NAME].forEach(({ PutRequest }) =>
-                failed.push({ item: PutRequest.Item, reason: 'Unprocessed after retries' })
+    let attempt = 0;
+    while (Object.keys(unprocessed).length > 0 && attempt < 6) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
+        try {
+            const result = await docClient.send(
+                new BatchWriteCommand({ RequestItems: unprocessed })
             );
+            unprocessed = result.UnprocessedItems || {};
+        } catch (err) {
+            console.error('[ProcessLead] BatchWrite error:', err.message);
+            chunk.forEach((item) => failed.push({ item, reason: err.message }));
+            return;
         }
+        attempt++;
     }
 
+    if (unprocessed[TABLE_NAME]?.length) {
+        unprocessed[TABLE_NAME].forEach(({ PutRequest }) =>
+            failed.push({ item: PutRequest.Item, reason: 'Unprocessed after retries' })
+        );
+    }
+}
+
+async function batchWriteItems(items) {
+    const failed = [];
+    const chunks = [];
+    for (let i = 0; i < items.length; i += DYNAMO_BATCH_LIMIT) chunks.push(items.slice(i, i + DYNAMO_BATCH_LIMIT));
+    let next = 0;
+    const worker = async () => {
+        while (next < chunks.length) {
+            const c = chunks[next++];
+            await writeChunk(c, failed);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(WRITE_CONCURRENCY, chunks.length) }, worker));
     return failed;
 }
 
