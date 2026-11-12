@@ -6,6 +6,7 @@
 // controller (statsType: 'status') expects.
 const { docClient } = require('../dynamodb');
 const { deepEncryptFields } = require('../utils/piiCrypto');
+const { dropKeys } = require('../utils/slimLog');
 const { PutCommand, GetCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
@@ -98,7 +99,8 @@ class CreditLinksResponseLog {
       offersCount: typeof logData.offersCount === 'number' ? logData.offersCount : null,
       requestPayload: deepEncryptFields(logData.requestPayload) || null,
       responseStatus: logData.responseStatus || null,
-      responseBody: deepEncryptFields(logData.responseBody) || null,
+      // offers → only offersCount is kept; leadId is already in creditLinksLeadId
+      responseBody: deepEncryptFields(dropKeys(logData.responseBody, ['offers', 'retry_after', 'leadId'])) || null,
       createdAt: new Date().toISOString()
     };
 

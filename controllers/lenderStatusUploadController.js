@@ -138,6 +138,9 @@ const LENDER_CONFIGS = {
           || null;
     }, 
     extractId:      (row) => pick(row, 'api_request_id', 'apiRequestId', 'request_id', 'requestId'),
+    // When we pushed the lead (IST). Lets the response-log lookup read only the
+    // logs from that period instead of mpokket's whole history.
+    extractPushDate: (row) => pick(row, 'api_partner_lead_push_date', 'apiPartnerLeadPushDate'),
     extractStatus:  (row) => pick(row, 'activity', 'Activity', 'ACTIVITY') || 'Unknown',
     successStatuses: ['Disbursal'],
     extractDisbursalAmount: (row) => pick(row, 'Loan_amount', 'loan_amount', 'Loan Amount', 'LoanAmount'),
@@ -497,6 +500,8 @@ const LENDER_CONFIGS = {
     idType: 'utm',
     successStatuses: ['Disbursed'],
     extractId:     (row) => null,
+    // Only rows whose status is "Disbursed" count (Closed / Auto_Disbursal /
+    // Auto_Withdrawal are deliberately left out).
     extractStatus: (row) => pick(row, 'status', 'Status') || 'Unknown',
     extractDisbursalAmount: (row) => pick(row, 'disbursalAmount', 'disbursal_amount'),
     extractDisbursalDate:   (row) => pick(row, 'disbursalDate', 'disbursal_date', 'updated_at'),
@@ -529,6 +534,136 @@ const LENDER_CONFIGS = {
 
   // ── No match key ──────────────────────────────────────────────────────────
 
+  // ── UTM-attributed MIS lenders: source comes from the UTM medium column
+  //    (alias like ck/fr/ap or an RC## partner reference); no lead lookup.
+
+  brightloans: {
+    displayName: 'BrightLoans',
+    lenderKey: 'BRIGHTLOANS',
+    allowedExtensions: ['.csv', '.xlsx', '.xls'],
+    sheetName: null,
+    idType: 'utm',
+    successStatuses: ['DISBURSED'],
+    extractId:     (row) => null,
+    extractStatus: (row) => pick(row, 'Lead Status', 'lead_status') || 'Unknown',
+    extractDisbursalAmount: (row) => dashToNull(pick(row, 'Disbursment Amount', 'Disbursement Amount', 'disbursal_amount')),
+    extractDisbursalDate:   (row) => dashToNull(pick(row, 'Disbursment Date', 'Disbursement Date', 'disbursal_date')),
+    extractSource: (row) => mediumSource(pick(row, 'UTM Medium', 'utm_medium')),
+    extractUTM: (row) => ({
+      utmSource:   pick(row, 'UTM Source', 'utm_source'),
+      utmMedium:   pick(row, 'UTM Medium', 'utm_medium'),
+      utmCampaign: pick(row, 'UTM Campaign', 'utm_campaign'),
+    }),
+    extractName:  (row) => null,
+    extractPhone: (row) => null,
+    extractRowKey: (row) => pick(row, 'Lead ID', 'lead_id'),
+    extractDetails: (row) => ({
+      leadId:        pick(row, 'Lead ID'),
+      leadSource:    pick(row, 'Lead Source'),
+      leadEntryDate: pick(row, 'Lead Entry Date'),
+      payout:        pick(row, 'Payout'),
+      rejectReason:  pick(row, 'Rejection Reason'),
+      state:         pick(row, 'State'),
+      city:          pick(row, 'City'),
+    }),
+  },
+
+  cashmysalary: {
+    displayName: 'CashMySalary',
+    lenderKey: 'CASHMYSALARY',
+    allowedExtensions: ['.xlsx', '.xls', '.csv'],
+    sheetName: null, // "Report"
+    idType: 'utm',
+    successStatuses: ['Disbursed'],
+    extractId:     (row) => null,
+    // Disbursal report: status stays "Approved"; a row with both a disbursal
+    // amount and date is a disbursal.
+    extractStatus: (row) => {
+      const amt = parseAmount(dashToNull(pick(row, 'Disbursal Amount (₹)', 'Disbursal Amount', 'disbursal_amount')));
+      const dt  = dashToNull(pick(row, 'Disbursed At', 'disbursed_at'));
+      if (amt !== null && amt > 0 && dt) return 'Disbursed';
+      return pick(row, 'Status', 'status') || 'Unknown';
+    },
+    extractDisbursalAmount: (row) => dashToNull(pick(row, 'Disbursal Amount (₹)', 'Disbursal Amount', 'disbursal_amount')),
+    extractDisbursalDate:   (row) => dashToNull(pick(row, 'Disbursed At', 'disbursed_at')), // d/m/yyyy
+    extractSource: (row) => mediumSource(pick(row, 'Medium', 'utm_medium')),
+    extractUTM: (row) => ({
+      utmSource:   pick(row, 'Source', 'utm_source'),
+      utmMedium:   pick(row, 'Medium', 'utm_medium'),
+      utmCampaign: pick(row, 'Campaign', 'utm_campaign'),
+    }),
+    extractName:  (row) => pick(row, 'User Name', 'Name'),
+    extractPhone: (row) => normalizePhone(String(pick(row, 'Phone Number', 'phone') || '')),
+    extractRowKey: (row) => pick(row, 'Lead ID', 'lead_id'),
+    extractDetails: (row) => ({
+      leadId:         pick(row, 'Lead ID'),
+      customerId:     pick(row, 'Customer ID'),
+      approvalAmount: pick(row, 'Approval Amount (₹)'),
+      createdAt:      pick(row, 'Created At'),
+    }),
+  },
+
+  kamakshi_mis: {
+    displayName: 'Kamakshi Money (MIS)',
+    lenderKey: 'KAMAKSHIMONEY',
+    allowedExtensions: ['.csv', '.xlsx', '.xls'],
+    sheetName: null,
+    idType: 'utm',
+    // "closed" loans were disbursed earlier (they carry a disbursal amount/date).
+    successStatuses: ['disbursed', 'closed'],
+    disbursedStatuses: ['disbursed', 'closed'],
+    extractId:     (row) => null,
+    extractStatus: (row) => pick(row, 'Loan Status', 'loan_status') || pick(row, 'Lead Status') || 'Unknown',
+    extractDisbursalAmount: (row) => dashToNull(pick(row, 'Disbursal Amount', 'disbursal_amount')),
+    extractDisbursalDate:   (row) => mdyDate(pick(row, 'Disbursal Date', 'disbursal_date')), // m/d/yy
+    extractSource: (row) => mediumSource(pick(row, 'UTM Medium', 'utm_medium')),
+    extractUTM: (row) => ({
+      utmSource:   pick(row, 'UTM Source', 'utm_source'),
+      utmMedium:   pick(row, 'UTM Medium', 'utm_medium'),
+      utmCampaign: pick(row, 'UTM Campaign', 'utm_campaign'),
+    }),
+    extractName:  (row) => pick(row, 'Customer Name'),
+    extractPhone: (row) => null, // masked in the MIS
+    extractRowKey: (row) => pick(row, 'Loan ID', 'Lead ID'),
+    extractDetails: (row) => ({
+      leadId:         pick(row, 'Lead ID'),
+      loanId:         pick(row, 'Loan ID'),
+      approvalAmount: pick(row, 'Approval Amount'),
+      loanStatus:     pick(row, 'Loan Status'),
+    }),
+  },
+
+  sabkaloan: {
+    displayName: 'SabkaLoan',
+    lenderKey: 'SABKALOAN',
+    allowedExtensions: ['.csv', '.xlsx', '.xls'],
+    sheetName: null,
+    idType: 'utm',
+    successStatuses: ['Disbursed', 'Closed', 'Part Payment'],
+    disbursedStatuses: ['Disbursed', 'Closed', 'Part Payment'],
+    extractId:     (row) => null,
+    extractStatus: (row) => pick(row, 'Lead Current Status', 'status') || 'Unknown',
+    extractDisbursalAmount: (row) => dashToNull(pick(row, 'Disbursal Amount', 'disbursal_amount')),
+    extractDisbursalDate:   (row) => mdyDate(pick(row, 'Disbursal Date', 'disbursal_date')), // m/d/yy
+    // The export has no UTM medium column today (only Source = RateCut), so
+    // rows fall back to Ratecut; a "UTM Medium"/"medium" column is used if added.
+    extractSource: (row) => mediumSource(pick(row, 'UTM Medium', 'utm_medium', 'Medium', 'trackID')),
+    extractUTM: (row) => ({
+      utmSource:   pick(row, 'Source', 'utm_source'),
+      utmMedium:   dashToNull(pick(row, 'UTM Medium', 'utm_medium', 'Medium', 'trackID')),
+      utmCampaign: null,
+    }),
+    extractName:  (row) => pick(row, 'Name'),
+    extractPhone: (row) => null, // masked in the export
+    extractRowKey: (row) => dashToNull(pick(row, 'Loan id', 'Loan ID')) || pick(row, 'Lead ID'),
+    extractDetails: (row) => ({
+      leadId:      pick(row, 'Lead ID'),
+      loanId:      pick(row, 'Loan id'),
+      approvedAmt: pick(row, 'Loan Amt Approved'),
+      status:      pick(row, 'Lead Current Status'),
+    }),
+  },
+
   herofincorp: {
     displayName: 'Hero Fincorp',
     lenderKey: 'HEROFINCORP',
@@ -555,6 +690,32 @@ const LENDER_CONFIGS = {
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
+
+// "-" / "Null" placeholders in lender MIS files → null.
+function dashToNull(v) {
+  if (v === null || v === undefined) return null;
+  const t = String(v).trim();
+  return (!t || t === '-' || /^null$/i.test(t)) ? null : t;
+}
+
+// m/d/yy or m/d/yyyy (US-style MIS dates, e.g. "10/27/26") → "YYYY-MM-DD".
+// Already-ISO values pass through.
+function mdyDate(v) {
+  const s = dashToNull(v);
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})(?:\s|$)/);
+  if (!m) return s;
+  const y = m[3].length === 2 ? `20${m[3]}` : m[3];
+  return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+}
+
+// Source from a UTM medium value: "cpc" kept as-is, any alias / RC## partner
+// reference resolved, everything else (blank, numbers, "paid", …) → Ratecut.
+function mediumSource(raw) {
+  const m = (String(raw || '').trim().toLowerCase().match(/^[a-z]+/) || [''])[0];
+  if (m === 'cpc') return 'cpc';
+  return sourceFromUtm(dashToNull(raw)) || 'Ratecut';
+}
 
 function pick(row, ...keys) {
   for (const key of keys) {
@@ -706,68 +867,127 @@ function parseFile(filePath, originalFilename, config) {
 // response-log table (→ gateway 504 on large tables). The frontend sends
 // batches sequentially, so the first batch builds the map and the rest reuse
 // it. Keyed by table name; short TTL so a fresh upload later sees new logs.
-const _responseLogMapCache = new Map(); // tableName -> { map, builtAt, promise }
+const _responseLogMapCache = new Map(); // tableName -> { map, since, builtAt, promise }
 const RESPONSELOG_MAP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const PUSH_DATE_MARGIN_DAYS = 3;     // log createdAt can be a little before/after the MIS push date
+const SOURCE_QUERY_CONCURRENCY = 8;  // sources queried in parallel (was one after another)
 
-async function buildResponseLogMap(config, { useCache = false } = {}) {
-  if (useCache) {
-    const cached = _responseLogMapCache.get(config.tableName);
-    if (cached && (Date.now() - cached.builtAt) < RESPONSELOG_MAP_TTL_MS) {
-      // If a build is still in flight (first batch), await the same promise
-      // instead of kicking off a second full-table scan.
-      return cached.promise ? cached.promise : cached.map;
-    }
-    const promise = _buildResponseLogMap(config);
-    _responseLogMapCache.set(config.tableName, { map: null, builtAt: Date.now(), promise });
-    try {
-      const map = await promise;
-      _responseLogMapCache.set(config.tableName, { map, builtAt: Date.now(), promise: null });
-      return map;
-    } catch (err) {
-      _responseLogMapCache.delete(config.tableName); // don't cache a failed build
-      throw err;
-    }
+// "2026-10-10 15:25:23" (IST, as in lender MIS files) or ISO → UTC ms, else null.
+function parsePushDate(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (m) {
+    const utc = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)) - 330 * 60000;
+    return Number.isFinite(utc) ? utc : null;
   }
-  return _buildResponseLogMap(config);
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
 }
 
-async function _buildResponseLogMap(config) {
-  const map = new Map();
+/**
+ * Earliest log date these rows can match (ISO), or null = read all history.
+ * Only used when every successful row carrying an id also carries a push date,
+ * so no matchable row can fall outside the window.
+ */
+function responseLogWindowStart(rows, config) {
+  if (!config.extractPushDate) return null;
+  let min = null;
+  for (const row of rows) {
+    const status = config.extractStatus(row);
+    const ok = config.successStatuses.some((x) => x.toLowerCase() === String(status || '').toLowerCase());
+    if (!ok || !config.extractId(row)) continue;
+    const t = parsePushDate(config.extractPushDate(row));
+    if (t === null) return null;
+    if (min === null || t < min) min = t;
+  }
+  if (min === null) return null;
+  return new Date(min - PUSH_DATE_MARGIN_DAYS * 86400000).toISOString();
+}
 
-  for (const source of RESPONSELOG_SOURCES) {
+async function buildResponseLogMap(config, { useCache = false, since = null } = {}) {
+  if (!useCache) return _buildResponseLogMap(config, since, null);
+
+  const cached = _responseLogMapCache.get(config.tableName);
+  const fresh = cached && (Date.now() - cached.builtAt) < RESPONSELOG_MAP_TTL_MS;
+  if (fresh && cached.promise) await cached.promise.catch(() => {});
+  const ready = _responseLogMapCache.get(config.tableName);
+  if (fresh && ready && ready.map) {
+    // Cached map already covers this window (null = all history).
+    if (ready.since === null || (since !== null && since >= ready.since)) return ready.map;
+    // Earlier window needed: read only the missing slice and add it in.
+    const promise = _buildResponseLogMap(config, since, ready.since, ready.map);
+    _responseLogMapCache.set(config.tableName, { ...ready, promise });
+    const map = await promise;
+    _responseLogMapCache.set(config.tableName, { map, since, builtAt: ready.builtAt, promise: null });
+    return map;
+  }
+
+  const promise = _buildResponseLogMap(config, since, null);
+  _responseLogMapCache.set(config.tableName, { map: null, since, builtAt: Date.now(), promise });
+  try {
+    const map = await promise;
+    _responseLogMapCache.set(config.tableName, { map, since, builtAt: Date.now(), promise: null });
+    return map;
+  } catch (err) {
+    _responseLogMapCache.delete(config.tableName); // don't cache a failed build
+    throw err;
+  }
+}
+
+/**
+ * Map<lenderInternalId → ourLeadId> from the response-log table, reading only
+ * logs with createdAt in [since, before) when given. Sources run in parallel
+ * and only leadId + responseBody are fetched (requestPayload is large and not
+ * needed to find the lender's id).
+ */
+async function _buildResponseLogMap(config, since = null, before = null, into = null) {
+  const map = into || new Map();
+  const t0 = Date.now();
+  let scanned = 0;
+
+  const querySource = async (source) => {
     let lastKey = null;
     do {
+      const names = { '#src': 'source', ...config.successFilterExpr.ExpressionAttributeNames };
+      const values = { ':src': source, ...config.successFilterExpr.ExpressionAttributeValues };
+      let keyCond = '#src = :src';
+      if (since || before) {
+        names['#ca'] = 'createdAt';
+        if (since && before) { keyCond += ' AND #ca BETWEEN :since AND :before'; values[':since'] = since; values[':before'] = before; }
+        else if (since) { keyCond += ' AND #ca >= :since'; values[':since'] = since; }
+        else { keyCond += ' AND #ca < :before'; values[':before'] = before; }
+      }
       const params = {
         TableName: config.tableName,
         IndexName: 'source-createdAt-index',
-        KeyConditionExpression: '#src = :src',
-        ExpressionAttributeNames: {
-          '#src': 'source',
-          ...config.successFilterExpr.ExpressionAttributeNames,
-        },
-        ExpressionAttributeValues: {
-          ':src': source,
-          ...config.successFilterExpr.ExpressionAttributeValues,
-        },
+        KeyConditionExpression: keyCond,
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
         FilterExpression: config.successFilterExpr.FilterExpression,
-        ProjectionExpression: 'leadId, responseBody, requestPayload',
+        ProjectionExpression: 'leadId, responseBody',
       };
       if (lastKey) params.ExclusiveStartKey = lastKey;
 
       const res = await docClient.send(new QueryCommand(params));
-
+      scanned += res.ScannedCount || 0;
       for (const log of (res.Items || [])) {
         if (!log.leadId) continue;
         const lenderLeadId = config.extractLenderIdFromLog(log);
-        if (lenderLeadId) {
-          map.set(String(lenderLeadId), log.leadId);
-        }
+        if (lenderLeadId) map.set(String(lenderLeadId), log.leadId);
       }
-
       lastKey = res.LastEvaluatedKey;
     } while (lastKey);
-  }
+  };
 
+  let next = 0;
+  const sources = RESPONSELOG_SOURCES;
+  await Promise.all(Array.from({ length: Math.min(SOURCE_QUERY_CONCURRENCY, sources.length) }, async () => {
+    while (next < sources.length) await querySource(sources[next++]);
+  }));
+
+  console.log(`[${config.lenderKey}] Response-log map: ${map.size} ids from ${scanned} logs`
+    + `${since ? ` since ${since}` : ' (all history)'}${before ? ` before ${before}` : ''} in ${Date.now() - t0} ms`);
   return map;
 }
 
@@ -817,7 +1037,8 @@ async function syncMISToLeads(rows, config, options = {}) {
   let responseLogMap = null;
   if (config.idType === 'responselog') {
     console.log(`[${config.lenderKey}] Building response log map…`);
-    responseLogMap = await buildResponseLogMap(config, { useCache: !!options.useResponseLogCache });
+    const since = responseLogWindowStart(rows, config);
+    responseLogMap = await buildResponseLogMap(config, { useCache: !!options.useResponseLogCache, since });
     console.log(`[${config.lenderKey}] Map built: ${responseLogMap.size} entries`);
   }
 

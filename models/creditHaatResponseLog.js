@@ -1,5 +1,6 @@
 const { docClient } = require('../dynamodb');
 const { deepEncryptFields } = require('../utils/piiCrypto');
+const { slimBody, dropKeys } = require('../utils/slimLog');
 const { PutCommand, GetCommand, QueryCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
@@ -14,9 +15,11 @@ class CreditHaatResponseLog {
             logId: uuidv4(),
             leadId: logData.leadId,
             source: logData.source || null,
-            requestPayload: deepEncryptFields(logData.requestPayload) || null,
+            // customerid = leadId; agentid/agent/flags/payment_type are the same on every request
+            requestPayload: deepEncryptFields(dropKeys(logData.requestPayload, ['customerid', 'agentid', 'agent', 'consent_flag', 'explicit_consent_flag', 'payment_type'])) || null,
             responseStatus: logData.responseStatus || null,
-            responseBody: deepEncryptFields(logData.responseBody) || null,
+            // code / message / status / reason; data.lender_details (same lender link list on every row) is not stored
+            responseBody: deepEncryptFields(slimBody(logData.responseBody, { shallow: ['data', 'error', 'errors'] })) || null,
             customerId: logData.customerId || null,
             createdAt: new Date().toISOString()
         };

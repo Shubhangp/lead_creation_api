@@ -1,6 +1,7 @@
 // models/mpokketResponseLog.js
 const { docClient } = require('../dynamodb');
 const { deepEncryptFields } = require('../utils/piiCrypto');
+const { slimBody, slimError, slimMpokketRequest } = require('../utils/slimLog');
 const { PutCommand, GetCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
 const { v4: uuidv4 } = require('uuid');
 
@@ -89,10 +90,12 @@ class MpokketResponseLog {
       leadId: logData.leadId,
       source: logData.source,
       correlationId: logData.correlationId || null,
-      requestPayload: deepEncryptFields(logData.requestPayload) || null,
+      // lead payload only (dedupe payload repeats it), no blank / repeated fields
+      requestPayload: deepEncryptFields(slimMpokketRequest(logData.requestPayload)) || null,
       responseStatus: logData.responseStatus || null,
-      responseBody: deepEncryptFields(logData.responseBody) || null,
-      errorDetails: logData.errorDetails || null,
+      // top-level fields + data.* scalars (data.requestId is what status uploads match on)
+      responseBody: deepEncryptFields(slimBody(logData.responseBody, { shallow: ['data', 'error', 'errors'] })) || null,
+      errorDetails: slimError(logData.errorDetails),
       step: logData.step || null,
       status: logData.status || null,
       createdAt: new Date().toISOString()

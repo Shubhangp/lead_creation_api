@@ -1945,7 +1945,7 @@ async function sendToCreditLinks(lead) {
       source,
       requestPayload: { mobileNumber },
       responseStatus: 'ALREADY_EXISTS',
-      responseBody: { step: 'dedupe', httpStatus: dedupe.httpStatus, ...dedupe.body }
+      responseBody: { step: 'dedupe', httpStatus: dedupe.httpStatus, ...(dedupe.body && typeof dedupe.body === 'object' ? dedupe.body : { raw: String(dedupe.body ?? '').slice(0, 200) }) }
     });
   }
 
@@ -2030,7 +2030,9 @@ async function sendToCreditLinks(lead) {
     offersCount,
     requestPayload: payload,
     responseStatus,
-    responseBody: { step: 'create-lead', httpStatus, ...createResponse, offers: offersBody?.offers }
+    // offers aren't stored (offersCount has the number). A non-JSON reply (e.g. an
+    // HTML error page) used to be spread character by character into the log.
+    responseBody: { step: 'create-lead', httpStatus, ...(createResponse && typeof createResponse === 'object' ? createResponse : { raw: String(createResponse ?? '').slice(0, 200) }) }
   });
 }
 
