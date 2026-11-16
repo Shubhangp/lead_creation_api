@@ -16,7 +16,7 @@ const LENDER_RATE_LIMITS = {
     CRMPaisa: 150,
     CreditPluse: 150,
     CreditSea: 150,
-    CreditLinks: 250,
+    CreditLinks: 200,
     CreditLinksGold: 250,
     kamakshimoney: 75,
     CreditHaat: 150,
