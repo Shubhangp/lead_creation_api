@@ -10,16 +10,21 @@
 // therefore never eat the live flow's share, and the two together never go
 // over the lender's limit.
 //
+// When NO bulk job is sending to a lender (nothing from distribution / lead
+// upload for BULK_IDLE_MS), the main flow may use the lender's FULL limit.
+// As soon as a bulk job starts sending again, main flow drops back to its share.
+//
 // Every send takes its own slot right before it goes out, and each bucket only
 // holds about one second's worth of slots, so sends are spread evenly across
 // the minute. (Bulk jobs used to collect 10–50 slots and then fire that many
 // requests at the same instant — those bursts are what lenders answered with
 // "Too many requests. Please slow down".)
 
-const { getPoolRate, onRateLimitsChanged } = require('../config/lenderRateLimits');
+const { getPoolRate, getRateLimit, onRateLimitsChanged } = require('../config/lenderRateLimits');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const POOLS = ['live', 'bulk'];
+const BULK_IDLE_MS = 15 * 1000; // bulk counts as "running" until it's been quiet this long
 
 // Optional override: RATE_LIMIT_BURST=<n> (slots that may go out back-to-back)
 function burstFor(ratePerMinute) {
@@ -70,9 +75,12 @@ class TokenBucket {
   async _takeOne(shouldAbort) {
     for (;;) {
       if (shouldAbort && shouldAbort()) return false;
+      const rpm = currentRate(this.lender, this.pool);
+      if (rpm !== this.ratePerMinute) this.setRate(rpm);
       this._refill();
       if (this.tokens >= 1) {
         this.tokens -= 1;
+        this.lastActiveAt = Date.now(); // a bulk send keeps bulk "running" for BULK_IDLE_MS
         this._count();
         return true;
       }
@@ -93,6 +101,7 @@ class TokenBucket {
 
   // Resolves true when a slot is granted, false if shouldAbort() became true.
   acquire(shouldAbort = null) {
+    this.lastActiveAt = Date.now();
     this.waiting++;
     this._warnIfBacklogged();
     const turn = this.queue.then(() => this._takeOne(shouldAbort));
@@ -103,12 +112,25 @@ class TokenBucket {
 
 const buckets = new Map(); // `${lender}|${pool}` -> TokenBucket
 
+/** Is a distribution / lead-upload job currently sending to this lender? */
+function bulkActive(lender) {
+  const b = buckets.get(`${lender}|bulk`);
+  if (!b) return false;
+  return b.waiting > 0 || (b.lastActiveAt && Date.now() - b.lastActiveAt < BULK_IDLE_MS);
+}
+
+/** Leads/min this pool may use right now. */
+function currentRate(lender, pool) {
+  if (pool === 'live' && !bulkActive(lender)) return getRateLimit(lender); // no bulk job → full limit
+  return getPoolRate(lender, pool);
+}
+
 function getBucket(lender, pool = 'live') {
   const p = POOLS.includes(pool) ? pool : 'live';
   const key = `${lender}|${p}`;
   let bucket = buckets.get(key);
   if (!bucket) {
-    bucket = new TokenBucket(lender, p, getPoolRate(lender, p));
+    bucket = new TokenBucket(lender, p, currentRate(lender, p));
     buckets.set(key, bucket);
     console.log(`[RateLimiter] ${lender} ${p}: ${bucket.ratePerMinute} leads/min, burst ${bucket.capacity}`);
   }
@@ -118,7 +140,7 @@ function getBucket(lender, pool = 'live') {
 // Dashboard edits apply to running buckets straight away (no restart needed).
 onRateLimitsChanged(() => {
   for (const b of buckets.values()) {
-    const rpm = getPoolRate(b.lender, b.pool);
+    const rpm = currentRate(b.lender, b.pool);
     if (rpm !== b.ratePerMinute) {
       b.setRate(rpm);
       console.log(`[RateLimiter] ${b.lender} ${b.pool}: now ${rpm} leads/min`);
@@ -159,6 +181,7 @@ function getLimiterStats() {
       sentLastMinute: Date.now() - b.minuteStart >= 60000 ? b.sentThisMinute : b.lastMinuteSent,
       sentThisMinute: b.sentThisMinute,
     };
+    out[b.lender].bulkActive = bulkActive(b.lender);
   }
   return out;
 }
