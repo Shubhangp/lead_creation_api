@@ -1,8 +1,8 @@
 // controllers/leadDistributionController.js
 const Lead = require('../models/leadModel');
 const LeadDistributionStats = require('../models/leadDistributionStatsModel');
-const { getRateLimit } = require('../config/lenderRateLimits');
-const { acquireLenderSlots } = require('../utils/lenderRateLimiter');
+const { getRateLimit, getPoolRate } = require('../config/lenderRateLimits');
+const { acquireLenderSlot } = require('../utils/lenderRateLimiter');
 const { categorizeLenderResult } = require('../config/lenderResultCategorizer');
 
 // Import your lender-specific sending functions
@@ -184,10 +184,8 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
   };
 
   // Per-lender rate limiter (per minute). Sending is throttled to the lender's cap.
-  const rpm = getRateLimit(lender);
-  // Shared with the live lead API, so their combined traffic stays within the cap.
-  const limiter = { take: (n, shouldAbort) => acquireLenderSlots(lender, n, shouldAbort) };
-  console.log(`[Batch ${batchId}] Rate limit for ${lender}: ${rpm} leads/min`);
+  // Bulk share of the lender's limit (default 40%), shared with admin/lead_upload pushes.
+  console.log(`[Batch ${batchId}] Rate limit for ${lender}: ${getRateLimit(lender)} leads/min total, ${getPoolRate(lender, 'bulk')}/min for bulk`);
 
   // Running totals — shared across all pages (kept as plain scalars, not arrays).
   let processedCount = 0;
@@ -240,12 +238,12 @@ const processLeadsInBackground = async (batchId, lender, filters, batchSize, del
 
       const subBatch = filtered.slice(i, i + batchSize);
 
-      // Enforce the lender's per-minute rate limit before firing this sub-batch.
-      await limiter.take(subBatch.length, shouldStop);
-      if (shouldStop()) { cancelled = true; return; }
-
       await Promise.allSettled(
         subBatch.map(async (lead) => {
+          // One bulk slot per lead, taken right before it is sent, so requests
+          // are spread evenly instead of the whole sub-batch firing at once.
+          const allowed = await acquireLenderSlot(lender, shouldStop, 'bulk');
+          if (!allowed) return; // stopped while waiting — not sent, not counted
           let category;
           let sendError = null;
           try {

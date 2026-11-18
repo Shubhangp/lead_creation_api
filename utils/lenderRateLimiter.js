@@ -1,22 +1,27 @@
 'use strict';
 
-// Shared per-lender rate limiter.
+// Shared per-lender rate limiter with TWO separate budgets per lender:
 //
-// ONE token bucket per lender for the whole process, used by the live lead API
-// (leadController) AND the dashboard bulk jobs (leadDistributionController,
-// processLeadController). Before, each of those kept its own bucket, so their
-// combined traffic could exceed the lender's limit.
+//   live  — the main flow: leads arriving on the API (leadController)
+//   bulk  — admin/lead_distribution + admin/lead_upload pushes, all together
 //
-// The bucket's burst size is small (about one second's worth of tokens), so
-// sends are spread evenly across the minute instead of the whole per-minute
-// allowance going out in a single burst after a quiet period - that burst is
-// what made OVLY answer "Rate Limit Exceeded".
+// The lender's limit is split between them (default 60% live / 40% bulk, set
+// on the admin dashboard — see config/lenderRateLimits.js). A big bulk push can
+// therefore never eat the live flow's share, and the two together never go
+// over the lender's limit.
+//
+// Every send takes its own slot right before it goes out, and each bucket only
+// holds about one second's worth of slots, so sends are spread evenly across
+// the minute. (Bulk jobs used to collect 10–50 slots and then fire that many
+// requests at the same instant — those bursts are what lenders answered with
+// "Too many requests. Please slow down".)
 
-const { getRateLimit } = require('../config/lenderRateLimits');
+const { getPoolRate, onRateLimitsChanged } = require('../config/lenderRateLimits');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const POOLS = ['live', 'bulk'];
 
-// Optional override: RATE_LIMIT_BURST=<n> (tokens that may go out back-to-back)
+// Optional override: RATE_LIMIT_BURST=<n> (slots that may go out back-to-back)
 function burstFor(ratePerMinute) {
   const fromEnv = parseInt(process.env.RATE_LIMIT_BURST, 10);
   if (!Number.isNaN(fromEnv) && fromEnv > 0) return fromEnv;
@@ -24,17 +29,26 @@ function burstFor(ratePerMinute) {
 }
 
 class TokenBucket {
-  constructor(lender, ratePerMinute) {
+  constructor(lender, pool, ratePerMinute) {
     this.lender = lender;
+    this.pool = pool;
+    this.waiting = 0;          // callers currently queued for a slot
+    this.lastWarnAt = 0;
+    this.sentThisMinute = 0;
+    this.minuteStart = Date.now();
+    this.lastMinuteSent = 0;
+    this.queue = Promise.resolve(); // hands slots out in arrival order
+    this.setRate(ratePerMinute);
+    this.tokens = this.capacity;
+    this.last = Date.now();
+  }
+
+  setRate(ratePerMinute) {
+    this._refill && this.last && this._refill();
     this.ratePerMinute = Math.max(1, ratePerMinute);
     this.capacity = burstFor(this.ratePerMinute);
-    this.tokens = this.capacity;
     this.refillPerMs = this.ratePerMinute / 60000;
-    this.last = Date.now();
-    this.waiting = 0;          // callers currently queued for a token
-    this.lastWarnAt = 0;
-    // Serialises waiters so tokens are handed out in arrival order.
-    this.queue = Promise.resolve();
+    if (this.tokens > this.capacity) this.tokens = this.capacity;
   }
 
   _refill() {
@@ -43,12 +57,23 @@ class TokenBucket {
     this.last = now;
   }
 
+  _count() {
+    const now = Date.now();
+    if (now - this.minuteStart >= 60000) {
+      this.lastMinuteSent = this.sentThisMinute;
+      this.sentThisMinute = 0;
+      this.minuteStart = now;
+    }
+    this.sentThisMinute++;
+  }
+
   async _takeOne(shouldAbort) {
     for (;;) {
       if (shouldAbort && shouldAbort()) return false;
       this._refill();
       if (this.tokens >= 1) {
         this.tokens -= 1;
+        this._count();
         return true;
       }
       const waitMs = Math.ceil((1 - this.tokens) / this.refillPerMs);
@@ -57,17 +82,16 @@ class TokenBucket {
   }
 
   _warnIfBacklogged() {
-    // More than one minute of work queued for this lender -> leads are going
-    // out late. Warn at most once a minute so the log stays readable.
+    // More than one minute of work queued → leads are going out late.
     const now = Date.now();
     if (this.waiting > this.ratePerMinute && now - this.lastWarnAt > 60000) {
       this.lastWarnAt = now;
       const minutes = (this.waiting / this.ratePerMinute).toFixed(1);
-      console.warn(`[RateLimiter] ${this.lender}: ${this.waiting} sends queued (~${minutes} min behind at ${this.ratePerMinute}/min)`);
+      console.warn(`[RateLimiter] ${this.lender} (${this.pool}): ${this.waiting} sends queued (~${minutes} min behind at ${this.ratePerMinute}/min)`);
     }
   }
 
-  // Resolves true when a token is granted, false if shouldAbort() became true.
+  // Resolves true when a slot is granted, false if shouldAbort() became true.
   acquire(shouldAbort = null) {
     this.waiting++;
     this._warnIfBacklogged();
@@ -77,30 +101,46 @@ class TokenBucket {
   }
 }
 
-const buckets = new Map();
+const buckets = new Map(); // `${lender}|${pool}` -> TokenBucket
 
-function getBucket(lender) {
-  let bucket = buckets.get(lender);
+function getBucket(lender, pool = 'live') {
+  const p = POOLS.includes(pool) ? pool : 'live';
+  const key = `${lender}|${p}`;
+  let bucket = buckets.get(key);
   if (!bucket) {
-    const rpm = getRateLimit(lender);
-    bucket = new TokenBucket(lender, rpm);
-    buckets.set(lender, bucket);
-    console.log(`[RateLimiter] ${lender}: ${rpm} leads/min, burst ${bucket.capacity}`);
+    bucket = new TokenBucket(lender, p, getPoolRate(lender, p));
+    buckets.set(key, bucket);
+    console.log(`[RateLimiter] ${lender} ${p}: ${bucket.ratePerMinute} leads/min, burst ${bucket.capacity}`);
   }
   return bucket;
 }
 
-// Wait for permission to send one lead to `lender`.
-function acquireLenderSlot(lender, shouldAbort = null) {
-  return getBucket(lender).acquire(shouldAbort);
+// Dashboard edits apply to running buckets straight away (no restart needed).
+onRateLimitsChanged(() => {
+  for (const b of buckets.values()) {
+    const rpm = getPoolRate(b.lender, b.pool);
+    if (rpm !== b.ratePerMinute) {
+      b.setRate(rpm);
+      console.log(`[RateLimiter] ${b.lender} ${b.pool}: now ${rpm} leads/min`);
+    }
+  }
+});
+
+/**
+ * Wait for permission to send ONE lead to `lender`.
+ * pool 'live' = main API flow (default), 'bulk' = distribution / lead upload.
+ * Resolves false if shouldAbort() becomes true while waiting.
+ */
+function acquireLenderSlot(lender, shouldAbort = null, pool = 'live') {
+  return getBucket(lender, pool).acquire(shouldAbort);
 }
 
-// Wait for permission to send `n` leads to `lender` (used by bulk jobs before
-// firing a sub-batch). Tokens are taken one at a time through the same queue,
-// so live API leads interleave with the batch instead of waiting behind it.
-// Resolves false if shouldAbort() becomes true.
-async function acquireLenderSlots(lender, n, shouldAbort = null) {
-  const bucket = getBucket(lender);
+/**
+ * Wait for `n` slots (kept for older callers). Prefer one acquireLenderSlot()
+ * right before each send so requests don't go out in a burst.
+ */
+async function acquireLenderSlots(lender, n, shouldAbort = null, pool = 'bulk') {
+  const bucket = getBucket(lender, pool);
   for (let i = 0; i < n; i++) {
     const ok = await bucket.acquire(shouldAbort);
     if (!ok) return false;
@@ -110,8 +150,15 @@ async function acquireLenderSlots(lender, n, shouldAbort = null) {
 
 function getLimiterStats() {
   const out = {};
-  for (const [lender, b] of buckets) {
-    out[lender] = { ratePerMinute: b.ratePerMinute, burst: b.capacity, queued: b.waiting };
+  for (const b of buckets.values()) {
+    out[b.lender] = out[b.lender] || {};
+    out[b.lender][b.pool] = {
+      ratePerMinute: b.ratePerMinute,
+      burst: b.capacity,
+      queued: b.waiting,
+      sentLastMinute: Date.now() - b.minuteStart >= 60000 ? b.sentThisMinute : b.lastMinuteSent,
+      sentThisMinute: b.sentThisMinute,
+    };
   }
   return out;
 }

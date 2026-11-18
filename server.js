@@ -6,6 +6,7 @@ const app = require('./app');
 const { testConnection } = require('./dynamodb');
 const { resumeIncompletePushJobs } = require('./controllers/processLeadController');
 const { resumeIncompleteDistributionBatches } = require('./controllers/leadDistributionController');
+const { startRateLimitRefresh } = require('./config/lenderRateLimits');
 
 // Test DynamoDB connection
 testConnection()
@@ -14,6 +15,7 @@ testConnection()
 
     const server = app.listen(port, () => {
       console.log(`App running on port ${port}...`);
+      startRateLimitRefresh(); // lender limits edited on /admin/rate_limits
       resumeIncompletePushJobs();
       resumeIncompleteDistributionBatches();
     });

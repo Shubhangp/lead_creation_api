@@ -56,4 +56,38 @@ router.get('/catalog', (req, res) => {
   res.status(200).json(LENDER_CATALOG);
 });
 
+// ── Lender rate limits (edited on /admin/rate_limits) ────────────────────────
+const {
+  describeRateLimits, saveRateLimitSettings, loadRateLimitSettings,
+} = require('../config/lenderRateLimits');
+const { getLimiterStats } = require('../utils/lenderRateLimiter');
+
+// Same key the admin dashboard asks for at login (NEXT_PUBLIC_ADMIN_KEY there).
+const ADMIN_KEY = process.env.ADMIN_KEY || 'ratecut-admin';
+
+// GET /config/rate-limits -> effective limits, live/bulk split, current queues
+router.get('/rate-limits', async (req, res) => {
+  try {
+    await loadRateLimitSettings();
+    res.status(200).json({ success: true, data: { ...describeRateLimits(), usage: getLimiterStats() } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// PUT /config/rate-limits  { liveSharePercent?: 60, limits: { OVLY: 250, ZYPE: null } }
+// null / "" for a lender removes the dashboard value (env/default applies again).
+router.put('/rate-limits', express.json(), async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(401).json({ success: false, message: 'Admin key required' });
+  }
+  try {
+    const { limits, liveSharePercent, updatedBy } = req.body || {};
+    await saveRateLimitSettings({ limits, liveSharePercent }, updatedBy || null);
+    res.status(200).json({ success: true, data: { ...describeRateLimits(), usage: getLimiterStats() } });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+});
+
 module.exports = router;

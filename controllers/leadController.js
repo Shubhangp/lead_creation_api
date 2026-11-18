@@ -401,8 +401,9 @@ async function sendToLender(lead, lender) {
 
   // Call the appropriate handler for the lender
   if (lenderHandlers[lender]) {
-    // Respect the lender's leads-per-minute limit (config/lenderRateLimits.js)
-    await acquireLenderSlot(lender);
+    // Main flow: uses the lender's "live" share of its leads-per-minute limit
+    // (default 60%, editable on /admin/rate_limits).
+    await acquireLenderSlot(lender, null, 'live');
     return await lenderHandlers[lender](lead);
   } else {
     throw new Error(`No handler found for lender: ${lender}`);

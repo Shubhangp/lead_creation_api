@@ -14,8 +14,8 @@ const PushJob = require('../models/pushJobModel');
 const PushJobItem = require('../models/pushJobItemModel');
 const { categorizeLenderResult } = require('../config/lenderResultCategorizer');
 const Lead = require('../models/leadModel');
-const { getRateLimit } = require('../config/lenderRateLimits');
-const { acquireLenderSlots } = require('../utils/lenderRateLimiter');
+const { getRateLimit, getPoolRate } = require('../config/lenderRateLimits');
+const { acquireLenderSlot } = require('../utils/lenderRateLimiter');
 
 const {
     sendToSML,
@@ -270,10 +270,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function buildLenderLimiters(lenders) {
     const limiters = {};
     lenders.forEach((l) => {
-        const rpm = getRateLimit(l);
-        // Shared with the live lead API, so their combined traffic stays within the cap.
-        limiters[l] = { take: (n, shouldAbort) => acquireLenderSlots(l, n, shouldAbort) };
-        console.log(`[Push] Rate limit for ${l}: ${rpm} leads/min`);
+        // Bulk share of the lender's limit (default 40%), shared with lead distribution.
+        limiters[l] = { slot: (shouldAbort) => acquireLenderSlot(l, shouldAbort, 'bulk') };
+        console.log(`[Push] Rate limit for ${l}: ${getRateLimit(l)} leads/min total, ${getPoolRate(l, 'bulk')}/min for bulk`);
     });
     return limiters;
 }
@@ -334,20 +333,25 @@ async function runLenderWorker(jobId, lender, job, state, limiter, stop) {
                 continue;
             }
 
-            if (limiter) await limiter.take(items.length, stop); // lender's leads/min cap
-            if (stop()) break;
-
-            const settled = await Promise.allSettled(
-                items.map((it) => sendFn({ ...it.lead, leadId: it.lead.leadId }))
-            );
-            settled.forEach((s) => {
+            // One bulk slot per lead, taken right before it is sent (no bursts).
+            const NOT_SENT = Symbol('not sent');
+            const settled = await Promise.allSettled(items.map(async (it) => {
+                if (limiter && !(await limiter.slot(stop))) return NOT_SENT; // stopped while waiting
+                return sendFn({ ...it.lead, leadId: it.lead.leadId });
+            }));
+            // Slots are granted in order, so the sent leads are a prefix of `items`.
+            let sentUpTo = -1;
+            settled.forEach((s, idx) => {
+                if (s.status === 'fulfilled' && s.value === NOT_SENT) return;
+                sentUpTo = idx;
                 if (s.status === 'fulfilled') r.successCount++;
                 else r.failCount++;
                 const cat = categoryOf(lender, s.status === 'fulfilled' ? s.value : undefined, s.status === 'rejected' ? s.reason : null);
                 r.categories[cat] = (r.categories[cat] || 0) + 1;
+                r.total++;
             });
-            r.total += items.length;
-            cursor = items[items.length - 1].seq;
+            if (sentUpTo < 0) break; // stopped before anything went out
+            cursor = items[sentUpTo].seq;
             state.cursors[lender] = cursor;
             await PushJob.updateLender(jobId, lender, r, cursor);
             consecutiveErrors = 0;
