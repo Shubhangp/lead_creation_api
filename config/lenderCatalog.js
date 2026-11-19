@@ -92,7 +92,7 @@ const LENDER_CATALOG = {
     name: 'Poonawalla Fincorp', logo: '/poonawalla.svg',
     maxAmount: 500000, minInterest: 9.99,
     processingTime: '0-1 Day', approval: 'GOOD',
-    website: 'https://spectrum.gotrackier.com/click?campaign_id=1706&pub_id=930&source={partner_ref}&utm_medium={partner_ref}&utm_campaign=ratecut_website',
+    website: 'https://instant-pocket-loan.poonawallafincorp.com/?redirectto=primepl&utm_DSA_Code=PHR00893&UTM_Partner_Name=DSA_BOOSTER_SCORE_SOLUTIONS_PRIVATE_LIMITED&UTM_Partner_AgentCode=kavya@boostscore.in&UTM_SM_Name=akshit.sharma@poonawallafincorp.com&source={partner_ref}&utm_medium={partner_ref}&utm_campaign=ratecut_website',
     apr: 18, type: 'NBFC · AAA rated',
     rateRange: '9% – 18% p.a.', processingFee: 'Upto 3% of loan amount',
     prepayment: 'Nil', disbursal: 'Same day',
