@@ -23,6 +23,7 @@ const CreditHaatResponseLog = require('../models/creditHaatResponseLog');
 const CreditLinksResponseLog = require('../models/creditLinksResponseLog');
 const CreditLinksGoldResponseLog = require('../models/creditLinksGoldResponseLog');
 const KamakshiMoneyResponseLog = require('../models/kamakshiMoneyResponseLog');
+const RuleMudraOfferResponseLog = require('../models/ruleMudraOfferResponseLog');
 const { decryptPII } = require('../utils/piiCrypto');
 
 // Leads are stored with phone/panNumber encrypted at rest. Every outbound lender
@@ -2240,6 +2241,140 @@ async function sendToKamakshiMoney(lead) {
   });
 }
 
+// RuleMudra OfferAPI — POST /partner/v1/offer   (lender key: rulemudraoffer)
+const RULEMUDRA_BASE_URL = process.env.RULEMUDRA_BASE_URL || 'https://api-backend-web.rulemudra.com';
+const RULEMUDRA_API_KEY = process.env.RULEMUDRA_API_KEY || 'rm_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+const RULEMUDRA_MAX_ATTEMPTS = 3;
+const RULEMUDRA_RETRY_CODES = new Set(['RATE_LIMIT_MINUTE', 'RATE_LIMIT_UNAVAILABLE', 'BRE_UNAVAILABLE']);
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const PLACEHOLDER_EMAIL = 'email@gmail.com';
+
+function ruleMudraDob(value) {
+  if (isFieldMissing(value)) return null;
+  const s = String(value).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const d = s.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+  if (d) return `${d[3]}-${d[2]}-${d[1]}`;
+  const t = new Date(s);
+  return Number.isNaN(t.getTime()) ? null : t.toISOString().slice(0, 10);
+}
+
+function ruleMudraConsentTime(lead) {
+  for (const v of [lead.websiteConsentTime, lead.createdAt]) {
+    if (!isFieldMissing(v)) {
+      const t = new Date(v);
+      if (!Number.isNaN(t.getTime())) return t.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    }
+  }
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function buildRuleMudraOfferPayload(lead) {
+  const name = String(lead.fullName || [lead.firstName, lead.lastName].filter(Boolean).join(' ') || '').trim();
+  const mobile = String(lead.phone || '').replace(/\D/g, '').slice(-10);
+  const pan = String(lead.panNumber || '').trim().toUpperCase();
+  const dob = ruleMudraDob(lead.dateOfBirth);
+  const pincode = String(lead.pincode || '').replace(/\D/g, '');
+  const income = Math.round(Number(String(lead.salary ?? '').replace(/[^\d.]/g, '')));
+
+  const customer = { name, mobile, pan, dob, pincode, monthly_income: income };
+  const address = typeof lead.address === 'string' ? lead.address.trim()
+    : [lead.addressLine1, lead.addressLine2].filter(Boolean).join(', ').trim();
+  if (address) customer.address = address;
+  if (!isFieldMissing(lead.city)) customer.city = String(lead.city).trim();
+  if (!isFieldMissing(lead.state)) customer.state = String(lead.state).trim();
+  if (!isFieldMissing(lead.email) && lead.email !== PLACEHOLDER_EMAIL) customer.email = String(lead.email).trim();
+  const amount = Math.round(Number(lead.requiredLoanAmount ?? lead.loanAmount));
+  if (amount > 0) customer.requested_amount = amount;
+
+  const consent = { taken_at: ruleMudraConsentTime(lead) };
+  const ip = lead.consentIp || lead.ipAddress || lead.ip;
+  if (!isFieldMissing(ip)) consent.ip = String(ip).trim();
+
+  const missing = [];
+  if (!name) missing.push('name');
+  if (mobile.length !== 10) missing.push('mobile');
+  if (!(income > 0)) missing.push('monthly_income');
+  if (!PAN_RE.test(pan)) missing.push('pan');
+  if (!dob) missing.push('dob');
+  if (!/^\d{6}$/.test(pincode)) missing.push('pincode');
+
+  return { payload: { partner_offer_id: String(lead.leadId), consent, customer }, missing };
+}
+
+async function sendToRuleMudraOffer(lead) {
+  const { leadId, source } = lead;
+  console.log('RuleMudraOffer', { leadId, source });
+  const { payload, missing } = buildRuleMudraOfferPayload(lead);
+  const log = (fields) => RuleMudraOfferResponseLog.create({ leadId, source, requestPayload: payload, ...fields });
+
+  if (missing.length) {
+    return log({
+      responseStatus: 'SKIPPED',
+      errorCode: 'MISSING_FIELDS',
+      responseBody: { status: 'SKIPPED', code: 'MISSING_FIELDS', message: `Missing/invalid: ${missing.join(', ')}` },
+    });
+  }
+  if (!RULEMUDRA_API_KEY) {
+    console.error('RuleMudraOffer: RULEMUDRA_API_KEY not configured');
+    return log({
+      responseStatus: 'ERROR',
+      errorCode: 'NOT_CONFIGURED',
+      responseBody: { status: 'ERROR', code: 'NOT_CONFIGURED', message: 'RULEMUDRA_API_KEY not set in config.env' },
+    });
+  }
+
+  let httpStatus = null;
+  let body = null;
+  for (let attempt = 1; attempt <= RULEMUDRA_MAX_ATTEMPTS; attempt++) {
+    let waitMs = 0;
+    try {
+      const res = await axios.post(`${RULEMUDRA_BASE_URL}/partner/v1/offer`, payload, {
+        headers: { 'Content-Type': 'application/json', 'x-api-key': RULEMUDRA_API_KEY },
+        timeout: 60000,
+        validateStatus: () => true,
+      });
+      httpStatus = res.status;
+      body = res.data;
+      const code = body && body.code;
+      const offersOff = code === 'RATE_LIMIT_MINUTE' && /\b0\s*\/\s*minute/i.test(String(body.message || ''));
+      if (httpStatus === 200 || offersOff || !RULEMUDRA_RETRY_CODES.has(code)) break;
+      waitMs = Math.min(30, Math.max(1, Number(body.retry_after_sec) || attempt * 2)) * 1000;
+    } catch (error) {
+      httpStatus = null;
+      body = { status: 'ERROR', code: error.code === 'ECONNABORTED' ? 'TIMEOUT' : 'NETWORK_ERROR', message: error.message };
+      waitMs = attempt * 2000;
+    }
+    if (attempt < RULEMUDRA_MAX_ATTEMPTS) {
+      console.warn(`RuleMudraOffer ${leadId}: ${body && body.code} — retry ${attempt}/${RULEMUDRA_MAX_ATTEMPTS - 1} in ${waitMs / 1000}s`);
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+  console.log('RuleMudraOffer response:', httpStatus, JSON.stringify(body));
+
+  const decided = httpStatus === 200 && body && (body.status === 'APPROVED' || body.status === 'REJECTED');
+  const responseStatus = decided ? body.status : 'ERROR';
+  const isObj = body && typeof body === 'object';
+  return log({
+    httpStatus,
+    responseStatus,
+    offerRef: isObj ? body.offer_ref : null,
+    offerAmount: decided && body.offer_amount != null ? Number(body.offer_amount) : null,
+    validUntil: decided ? body.valid_until || null : null,
+    bureauDecision: isObj ? body.bureau_decision : null,
+    errorCode: decided ? null : (isObj && body.code) || (httpStatus ? `HTTP_${httpStatus}` : 'NO_RESPONSE'),
+    responseBody: isObj ? body : { raw: String(body ?? '').slice(0, 200) },
+  });
+}
+
+async function getRuleMudraOffer(offerRef) {
+  const res = await axios.get(`${RULEMUDRA_BASE_URL}/partner/v1/offer/${encodeURIComponent(offerRef)}`, {
+    headers: { 'x-api-key': RULEMUDRA_API_KEY }, timeout: 15000, validateStatus: () => true,
+  });
+  return { httpStatus: res.status, ...(res.data && typeof res.data === 'object' ? res.data : { raw: res.data }) };
+}
+
 module.exports = {
   sendToSML:            withDecryptedPII(sendToSML),
   sendToFreo:           withDecryptedPII(sendToFreo),
@@ -2261,4 +2396,7 @@ module.exports = {
   sendToCreditLinksGold: withDecryptedPII(sendToCreditLinksGold),
   getCreditLinksGoldLoanStatus,
   sendToKamakshiMoney:  withDecryptedPII(sendToKamakshiMoney),
+  sendToRuleMudraOffer: withDecryptedPII(sendToRuleMudraOffer),
+  getRuleMudraOffer,
+  buildRuleMudraOfferPayload,
 };

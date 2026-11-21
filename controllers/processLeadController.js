@@ -36,6 +36,7 @@ const {
     sendToCreditLinks,
     sendToCreditLinksGold,
     sendToKamakshiMoney,
+    sendToRuleMudraOffer,
     sendToCreditHaat,
 } = require('../services/lenderService');
 
@@ -234,6 +235,7 @@ const LENDER_MAP = {
     CreditLinks: sendToCreditLinks,
     CreditLinksGold: sendToCreditLinksGold,
     kamakshimoney: sendToKamakshiMoney,
+    rulemudraoffer: sendToRuleMudraOffer,
     CreditHaat: sendToCreditHaat,
 };
 

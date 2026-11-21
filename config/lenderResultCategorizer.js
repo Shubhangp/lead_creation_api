@@ -1,37 +1,7 @@
-// config/lenderResultCategorizer.js
-// ---------------------------------------------------------------------------
-// Maps a single lender send-result (the response-log item returned by each
-// services/lenderService.js `sendTo*` function) into the SAME status category
-// that the stats dashboard shows for that lender.
-//
-// Why this exists:
-//   The distribution flow stores a per-batch `statusCategories` breakdown so
-//   the dashboard reads it straight from the history record (no recompute).
-//   Each lender has its OWN category scheme:
-//     CreditLinks → LEAD_CREATED / ALREADY_EXISTS / NOT_ELIGIBLE / FAILED
-//     CreditLinksGold → LEAD_CREATED / ALREADY_EXISTS / NOT_ELIGIBLE / FAILED
-//     kamakshimoney → ATTRIBUTABLE / NOT_ATTRIBUTABLE / FAILED
-//     ZYPE        → ACCEPT / REJECTED / Failed
-//     Mpokket     → 200 / 400 / 403
-//     CreditSea   → Success / Fail / Duplicate / null
-//     FatakPay    → eligible / notEligible / leadExists / loanExists
-//     ...
-//   A single fixed {ACCEPT,REJECTED,Failed,other} map (the old behaviour) threw
-//   everything into "other" for non-Zype lenders. This module mirrors each
-//   lender's own getStats() bucketing so the stored keys match the dashboard.
-//
-// Where the send-function result comes from:
-//   Each sendTo*() returns the persisted response-log item, which carries
-//   `responseStatus` and `responseBody`. Those are exactly the fields the
-//   response-log models categorize on, so we reuse the model `_extractStatus`
-//   helpers where they exist to stay in lock-step with the dashboard.
-// ---------------------------------------------------------------------------
-
-// Models that already expose a canonical `_extractStatus(item)` — reuse them so
-// distribution categorization can never drift from the dashboard.
 const CreditLinksResponseLog = require('../models/creditLinksResponseLog');
 const CreditLinksGoldResponseLog = require('../models/creditLinksGoldResponseLog');
 const KamakshiMoneyResponseLog = require('../models/kamakshiMoneyResponseLog');
+const RuleMudraOfferResponseLog = require('../models/ruleMudraOfferResponseLog');
 const CreditSeaResponseLog   = require('../models/creditSeaResponseLog');
 const CreditPulseResponseLog = require('../models/creditPulseResponseLog');
 const CreditHaatResponseLog  = require('../models/creditHaatResponseLog');
@@ -85,6 +55,12 @@ const LENDER_CATEGORIZERS = {
   kamakshimoney(item) {
     const st = KamakshiMoneyResponseLog._extractStatus(item);
     return ['ATTRIBUTABLE', 'NOT_ATTRIBUTABLE', 'FAILED'].includes(st) ? st : 'other';
+  },
+
+  // RuleMudra OfferAPI → APPROVED / REJECTED / ERROR / SKIPPED
+  rulemudraoffer(item) {
+    const st = RuleMudraOfferResponseLog._extractStatus(item);
+    return ['APPROVED', 'REJECTED', 'ERROR', 'SKIPPED'].includes(st) ? st : 'other';
   },
 
   // CreditSea → Success / Fail / Duplicate / null / other
@@ -148,10 +124,6 @@ function fatakPayCategorizer(item) {
   return 'other';
 }
 
-// Generic fallback: category == the lender's raw responseStatus, else the
-// responseBody.status, else 'other'. Covers lenders whose dashboard uses a
-// dynamic responseStatus breakdown (CrmPaisa, FINTIFI, FREO, SML, IndiaLends,
-// MyMoneyMantra, etc.). Keeps keys human-readable and lender-native.
 function genericCategorizer(item) {
   const rs = item && item.responseStatus;
   if (rs !== undefined && rs !== null && String(rs).trim() !== '') return String(rs);

@@ -32,29 +32,29 @@ const LENDER_LISTS = {
     'INDIALENDS', 'CRMPaisa', 'SML', 'MPOKKET', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold',
     // MIS lenders (status updated via file upload, not immediate API response)
     'CASHVIA', 'DIGICREDIT', 'TAP4CREDIT', 'SPEEDOLOAN',
-    'PAISABOXX', 'HEROFINCORP', 'PREFR', 'AryseFin', 'Mudrasewa', 'Mudraboxx', 'Rule Mudra', 'kamakshimoney'
+    'PAISABOXX', 'HEROFINCORP', 'PREFR', 'AryseFin', 'Mudrasewa', 'Mudraboxx', 'Rule Mudra', 'kamakshimoney', 'rulemudraoffer'
   ],
   // frontend: xlsx_upload › lead_upload (push-to-lenders selection)
   upload: [
     'SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI',
     'FATAKPAY', 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra',
-    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney'
+    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney', 'rulemudraoffer'
   ],
   // frontend: dashboard › lead_distribution (filter UI)
   distribution: [
     'SML', 'FREO', 'ZYPE', 'LendingPlate', 'FINTIFI',
     'FATAKPAY', 'FATAKPAYPL', 'OVLY', 'RAMFINCROP', 'MPOKKET',
-    'INDIALENDS', 'CRMPaisa', 'MyMoneyMantra', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney',
+    'INDIALENDS', 'CRMPaisa', 'MyMoneyMantra', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney', 'rulemudraoffer',
   ],
   // frontend: loanform › DistributionRulesManagement
   distributionRules: [
     'SML', 'FREO', 'OVLY', 'LendingPlate', 'ZYPE', 'FINTIFI', 'CreditSea',
-    'FATAKPAY',, 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'MPOKKET', 'CRMPaisa', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney',
+    'FATAKPAY',, 'FATAKPAYPL', 'RAMFINCROP', 'MyMoneyMantra', 'INDIALENDS', 'MPOKKET', 'CRMPaisa', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney', 'rulemudraoffer',
   ],
   // frontend: xlsx_upload › Home.js (status dashboard columns)
   home: [
     'ZYPE', 'LendingPlate', 'FATAKPAY', 'FATAKPAYPL', 'OVLY',
-    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney',
+    'MPOKKET', 'INDIALENDS', 'CRMPaisa', 'CreditPluse', 'CreditSea', 'CreditHaat', 'CreditLinks', 'CreditLinksGold', 'kamakshimoney', 'rulemudraoffer',
   ],
 };
 

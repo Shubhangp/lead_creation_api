@@ -59,6 +59,7 @@ const {
   sendToCreditLinks,
   sendToCreditLinksGold,
   sendToKamakshiMoney,
+  sendToRuleMudraOffer,
   sendToCreditHaat
 } = require('../services/lenderService');
 
@@ -396,6 +397,7 @@ async function sendToLender(lead, lender) {
     "CreditLinks": sendToCreditLinks,
     "CreditLinksGold": sendToCreditLinksGold,
     "kamakshimoney": sendToKamakshiMoney,
+    "rulemudraoffer": sendToRuleMudraOffer,
     "CreditHaat": sendToCreditHaat,
   };
 
@@ -497,6 +499,7 @@ function isLenderSuccess(result, lenderName) {
     'MyMoneyMantra': (result) => result.responseStatus === 200 || result.responseStatus === 201,
     'CreditSea': (result) => result.responseStatus === 'LEAD_CREATED',
     'CreditPluse': (result) => result.responseStatus === 'Success',
+    'rulemudraoffer': (result) => result.responseStatus === 'APPROVED',
   };
  
   const checkSuccess = successCriteria[lenderName];
@@ -794,6 +797,7 @@ const LENDER_MAP = {
   CreditLinks:   sendToCreditLinks,
   CreditLinksGold: sendToCreditLinksGold,
   kamakshimoney: sendToKamakshiMoney,
+  rulemudraoffer: sendToRuleMudraOffer,
   CreditHaat:    sendToCreditHaat,
 };
 

@@ -81,6 +81,11 @@ const LENDER_CONFIG = {
     statsType: 'status',
     displayName: 'Kamakshi Money'
   },
+  rulemudraoffer: {
+    modelPath: '../models/ruleMudraOfferResponseLog.js',
+    statsType: 'status',
+    displayName: 'RuleMudra Offer'
+  },
   credithaat: {
     modelPath: '../models/creditHaatResponseLog.js',
     statsType: 'status',

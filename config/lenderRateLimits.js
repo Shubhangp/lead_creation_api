@@ -19,6 +19,7 @@ const LENDER_RATE_LIMITS = {
     CreditLinks: 200,
     CreditLinksGold: 250,
     kamakshimoney: 75,
+    rulemudraoffer: 60,
     CreditHaat: 150,
 };
 

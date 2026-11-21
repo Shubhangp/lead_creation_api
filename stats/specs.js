@@ -1,22 +1,8 @@
 'use strict';
-/**
- * One spec per table shown on /admin/stats_dashboard.
- *
- * Each spec says how a single row of that table is counted:
- *   classify(item) → { category, dims: { name: value | [values] }, metrics: { name: number } }
- *
- * The category rules below are copied from the old per-model getStats /
- * getStatsByDate code so the numbers mean the same thing as before.
- *
- * Pure JS, no imports besides ./core — bundled into the stream Lambda.
- *
- * To add a table: add a spec here, run `node scripts/stats/setup.js --only <key>`
- * and `node scripts/stats/backfill.js --only <key>`.
- */
 
 const { cleanMessage } = require('./core');
 
-// ─── shared helpers ──────────────────────────────────────────────────────────
+// ─── shared helpers ───
 
 function parseBody(item) {
   let b = item && item.responseBody;
@@ -691,6 +677,42 @@ const kamakshimoney = {
   },
 };
 
+// ─── RuleMudra OfferAPI ──────────────────────────────────────────────────────
+
+const rulemudraoffer = {
+  key: 'rulemudraoffer', table: 'rule_mudra_offer_response_logs', displayName: 'RuleMudra Offer', group: 'lender',
+  categories: [
+    cat('APPROVED', 'Approved', tone.good), cat('REJECTED', 'Rejected', tone.bad),
+    cat('ERROR', 'Error', tone.bad), cat('SKIPPED', 'Skipped (missing PAN/DOB/pincode)', tone.warn),
+    cat('other', 'Other', tone.neutral),
+  ],
+  successKeys: ['APPROVED'],
+  dimensions: [
+    ...LOG_DIMS,
+    { key: 'errorCode', label: 'Error codes', kind: 'table' },
+    { key: 'offerBand', label: 'Offer size (approved rows)', order: OFFER_BAND_ORDER },
+  ],
+  metrics: [{ key: 'offerAmount', label: 'Offer amount', format: 'inr' }],
+  uniques: [{ key: 'lead', label: 'Unique leads', value: (i) => i.leadId }],
+  classify(i) {
+    const body = parseBody(i);
+    let s;
+    if (i.responseStatus) s = String(i.responseStatus);
+    else s = !body ? 'other' : (body.status === 'APPROVED' || body.status === 'REJECTED') ? body.status : 'ERROR';
+    const category = ['APPROVED', 'REJECTED', 'ERROR', 'SKIPPED'].includes(s) ? s : 'other';
+    const offer = category === 'APPROVED' ? toNum(i.offerAmount ?? (body && body.offer_amount)) : null;
+    return {
+      category,
+      dims: {
+        responseStatus: s, message: cleanMessage(bodyMessage(body)),
+        errorCode: i.errorCode || (body && body.code) || null,
+        offerBand: category === 'APPROVED' ? offerBand(offer) : null,
+      },
+      metrics: { offerAmount: offer },
+    };
+  },
+};
+
 // ─── RCS queue ───────────────────────────────────────────────────────────────
 
 const rcs_queue = {
@@ -728,7 +750,7 @@ const rcs_queue = {
 
 const SPECS = [
   leads, fatakpay, fatakpaypl, ovly, lendingplate, mpokket, ramfincrop, indialends, zype,
-  creditsea, credithaat, creditlinks, creditlinksgold, creditpulse, crmpaisa, kamakshimoney, rcs_queue,
+  creditsea, credithaat, creditlinks, creditlinksgold, creditpulse, crmpaisa, kamakshimoney, rulemudraoffer, rcs_queue,
 ];
 
 const BY_KEY = Object.fromEntries(SPECS.map((s) => [s.key, s]));

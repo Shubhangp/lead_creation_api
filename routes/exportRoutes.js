@@ -133,6 +133,13 @@ const TABLE_CONFIG = {
     sources: require('../config/registry').RESPONSELOG_SOURCES,
     fallbackGSI: 'leadId-index'
   },
+  'rule_mudra_offer_response_logs': {
+    type: 'response_log',
+    primaryGSI: 'source-createdAt-index',
+    sortKey: 'createdAt',
+    sources: require('../config/registry').RESPONSELOG_SOURCES,
+    fallbackGSI: 'leadId-index'
+  },
 
   // ── Leads tables ───────────────────────────────────────────────────────────
   'leads': {
@@ -453,6 +460,7 @@ const TABLE_LABELS = {
   credit_links_response_logs: 'CreditLinks',
   credit_links_gold_response_logs: 'CreditLinks Gold',
   kamakshi_money_response_logs: 'Kamakshi Money',
+  rule_mudra_offer_response_logs: 'RuleMudra Offer',
 };
 
 // Human-friendly label from a table name (fallback when not in TABLE_LABELS).

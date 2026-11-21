@@ -24,6 +24,7 @@ const {
   sendToCreditLinks,
   sendToCreditLinksGold,
   sendToKamakshiMoney,
+  sendToRuleMudraOffer,
   sendToCreditHaat
 } = require('../services/lenderService');
 
@@ -129,6 +130,7 @@ const getLenderSendFunction = (lender) => {
     "CreditLinks": sendToCreditLinks,
     "CreditLinksGold": sendToCreditLinksGold,
     "kamakshimoney": sendToKamakshiMoney,
+    "rulemudraoffer": sendToRuleMudraOffer,
     "CreditHaat": sendToCreditHaat,
   };
 
